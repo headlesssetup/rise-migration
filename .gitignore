@@ -1,0 +1,57 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Dependencies
+node_modules/
+
+# Build output (WXT / Vite)
+.output/
+dist/
+*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Cursor (local agent state)
+.cursor/
+
+# OS / tooling caches
+.cache/
+.turbo/
+.eslintcache
+.prettiercache
+
+# Optional package manager locks (uncomment one if you standardize on a single manager)
+# package-lock.json
+# pnpm-lock.yaml
+# yarn.lock
