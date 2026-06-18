@@ -1,0 +1,116 @@
+{
+  "course": {
+    "id": "course-abc123",
+    "title": "Sample Course",
+    "version": "2024.1",
+    "theme": {
+      "themeId": "blank",
+      "coverImage": "https://cdn.articulate.com/assets/rise/themes/cover.jpg"
+    }
+  },
+  "lessons": [
+    {
+      "id": "lesson-1",
+      "type": "section",
+      "position": 0,
+      "title": "Module header"
+    },
+    {
+      "id": "lesson-2",
+      "type": "blocks",
+      "position": 1,
+      "title": "Content",
+      "items": [
+        {
+          "id": "block-1",
+          "type": "text",
+          "family": "text",
+          "variant": "paragraph",
+          "items": [{ "id": "i1", "paragraph": "<p>Hello world</p>" }]
+        },
+        {
+          "id": "block-2",
+          "type": "image",
+          "family": "image",
+          "variant": "hero",
+          "items": [
+            {
+              "id": "i2",
+              "media": {
+                "image": {
+                  "key": "rise/courses/course-abc123/abc-original.jpg",
+                  "src": "https://articulateusercontent.com/rise/courses/course-abc123/abc.jpg"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "block-3",
+          "type": "multimedia",
+          "family": "multimedia",
+          "variant": "embed",
+          "items": [
+            { "id": "i3", "embed": { "url": "https://www.youtube.com/watch?v=xyz" } }
+          ]
+        },
+        {
+          "id": "block-4",
+          "type": "interactive",
+          "family": "360",
+          "variant": "storyline",
+          "items": [
+            {
+              "id": "i4",
+              "media": {
+                "storyline": {
+                  "contentPrefix": "rise/courses/course-abc123/pkg-key",
+                  "src": "rise/courses/course-abc123/pkg-key/story.html",
+                  "meta": { "title": "SL", "course_id": "course-abc123" }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "block-5",
+          "type": "knowledgeCheck",
+          "family": "knowledgeCheck",
+          "variant": "draw from question bank",
+          "items": [
+            {
+              "id": "i5",
+              "type": "DRAW_FROM_QUESTION_BANK",
+              "questionBankId": "bank-999"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lesson-3",
+      "type": "quiz",
+      "position": 2,
+      "title": "Quiz",
+      "items": [
+        {
+          "id": "q1",
+          "type": "MULTIPLE_CHOICE",
+          "title": "Pick one",
+          "answers": [
+            { "id": "a1", "title": "A", "correct": true },
+            { "id": "a2", "title": "B", "correct": false }
+          ],
+          "feedback": {}
+        },
+        {
+          "id": "q2",
+          "type": "MATCHING",
+          "title": "Match them",
+          "answers": [{ "id": "m1", "title": "X", "matchTitle": "Y" }],
+          "feedback": {}
+        }
+      ]
+    }
+  ]
+}

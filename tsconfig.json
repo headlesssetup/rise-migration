@@ -1,0 +1,18 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "jsx": "react-jsx",
+    "types": ["chrome"]
+  },
+  "include": [
+    "wxt.config.ts",
+    "entrypoints",
+    "core",
+    "shared",
+    "tests",
+    ".wxt/wxt.d.ts"
+  ]
+}
