@@ -121,20 +121,21 @@ export async function listAllCourses(
 }
 
 export interface ExportResult {
-  scans: CourseScan[];
   saved: number;
   skipped: number;
   failed: string[];
 }
 
-/** Paced, strictly-sequential GET_COURSE export of the selected courses. */
+/** Paced, strictly-sequential GET_COURSE fetch of the selected courses. Only
+ *  performs the network fetch + save; census/catalog/novelty are built
+ *  afterwards from EVERY saved course (scanSavedCourses), so a partial or
+ *  multi-attempt run still yields a complete report. */
 export async function exportCourses(
   courses: SearchResultItem[],
   storage: Storage,
   onEvent: (e: ProgressEvent) => void,
   pacing: PacingConfig = DEFAULT_PACING,
 ): Promise<ExportResult> {
-  const scans: CourseScan[] = [];
   const failed: string[] = [];
   let saved = 0;
   let skipped = 0;
@@ -143,18 +144,14 @@ export async function exportCourses(
   for (const [i, c] of courses.entries()) {
     onEvent({ kind: 'course', index: i, total: courses.length, courseId: c.id });
 
-    // Resume: if already saved, scan from disk — no network, no pacing gap.
+    // Resume: already on disk → skip the network (no pacing gap).
     if (await storage.hasCourse(c.id)) {
-      const raw = await storage.readCourse(c.id);
-      if (raw) {
-        scans.push(scanCourse(unwrap(raw)));
-        skipped += 1;
-        onEvent({
-          kind: 'log',
-          message: `Skipped (already saved): ${c.title ?? c.id}`,
-        });
-        continue;
-      }
+      skipped += 1;
+      onEvent({
+        kind: 'log',
+        message: `Skipped (already saved): ${c.title ?? c.id}`,
+      });
+      continue;
     }
 
     if (didNetwork) await pacedDelay(pacing); // human-paced gap between fetches
@@ -172,10 +169,31 @@ export async function exportCourses(
     }
 
     await storage.writeCourse(c.id, resp.result.data.raw);
-    scans.push(scanCourse(resp.result.data.doc));
     saved += 1;
     onEvent({ kind: 'log', message: `Saved: ${c.title ?? c.id}` });
   }
 
-  return { scans, saved, skipped, failed };
+  return { saved, skipped, failed };
+}
+
+/** Scan EVERY course saved in the folder (from disk, no network) — the basis
+ *  for census/catalog/novelty, so the report always covers the whole folder
+ *  regardless of what was selected this run. */
+export async function scanSavedCourses(
+  storage: Storage,
+  onEvent: (e: ProgressEvent) => void,
+): Promise<CourseScan[]> {
+  const ids = await storage.listSaved();
+  onEvent({ kind: 'log', message: `Scanning ${ids.length} saved course(s)…` });
+  const scans: CourseScan[] = [];
+  for (const id of ids) {
+    const raw = await storage.readCourse(id);
+    if (!raw) continue;
+    try {
+      scans.push(scanCourse(unwrap(raw)));
+    } catch {
+      onEvent({ kind: 'log', message: `Skipped unreadable course: ${id}` });
+    }
+  }
+  return scans;
 }

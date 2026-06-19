@@ -31,6 +31,7 @@ import {
   countCourses,
   exportCourses,
   listAllCourses,
+  scanSavedCourses,
   type ProgressEvent,
 } from './orchestrator';
 import { rpc } from './rpc';
@@ -226,12 +227,15 @@ export function App() {
     setNovelty(null);
     setProgress({ done: 0, total: selectedCourses.length });
 
-    const { scans, saved, skipped, failed } = await exportCourses(
+    const { saved, skipped, failed } = await exportCourses(
       selectedCourses,
       storage,
       onEvent,
     );
 
+    // Build the report from EVERY saved course in the folder (not just this
+    // run's selection) — so partial / multi-attempt scrapes stay complete.
+    const scans = await scanSavedCourses(storage, onEvent);
     const built = buildCensus(scans);
     await storage.writeCensus(censusToJson(built), censusToCsv(built));
 

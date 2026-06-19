@@ -54,9 +54,15 @@ Output folder layout:
   field baseline, **new fields**. Copy-faithful migration still round-trips unknown
   blocks — this just ensures nothing migrates unseen/undocumented.
 
-The accept→remember loop: review a scrape's `catalog.json`, fold confirmed
-variants/fields into `core/census/catalog.ts` (+ the doc), and subsequent runs go
-quiet for them — surfacing only the next genuinely-new shapes.
+Reports cover the **whole folder**: after fetching, the census/catalog/novelty are
+rebuilt from **every saved course** (`scanSavedCourses` over `listSaved()`), not
+just the current selection — so partial or multi-attempt scrapes stay complete.
+
+The accept→remember loop: review a scrape's `catalog.json`, fold the accepted
+per-variant fields into `core/census/catalog.fields.json` (the field baseline) and
+new variant names into `core/census/catalog.ts` (+ the doc). Subsequent runs then
+go quiet for them and surface only the next genuinely-new variants/fields. The
+579-course scrape's 32 variants are already seeded in `catalog.fields.json`.
 
 ## Architecture
 

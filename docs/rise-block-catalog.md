@@ -38,6 +38,47 @@ The documented understanding of Rise block types and their options. **Seeded fro
 | `multimedia/embed` | Embed (YouTube/Vimeo) | `items[].embed.url` | — (embed URL kept as-is) | — | _TODO_ | seen |
 | `knowledgeCheck/multiple response` | Multiple-response KC block | `answers[]` carry `correct` | — | — | _TODO_ | seen |
 
+## Confirmed via 579-course scrape (2026-06-19)
+
+Accepted from novelty review; the full per-variant field profiles (core/optional)
+are recorded in `core/census/catalog.fields.json`. "Frequency" = block instances /
+courses across that library.
+
+| family/variant | Frequency | Fields (core) | Media | Cross-refs | Versions | Status |
+|---|---|---|---|---|---|---|
+| `image/full` | 2989 blk / 325 crs | 102 (18 core) | image | — | _TODO_ | seen |
+| `impact/note` | 1618 blk / 369 crs | 96 (11 core) | — | — | _TODO_ | seen |
+| `knowledgeCheck/multiple choice` | 1258 blk / 214 crs | 135 (16 core) | — | — | _TODO_ | seen |
+| `impact/d` | 1174 blk / 141 crs | 49 (11 core) | — | — | _TODO_ | seen |
+| `interactive/tabs` | 835 blk / 214 crs | 345 (13 core) | per-tab media | — | _TODO_ | seen |
+| `divider/divider` | 496 blk / 123 crs | 37 (11 core) | — | — | _TODO_ | seen |
+| `divider/spacing divider` | 429 blk / 196 crs | 36 (9 core) | — | — | _TODO_ | seen |
+| `interactive-fullscreen/timeline` | 308 blk / 193 crs | 135 (15 core) | per-item media | — | _TODO_ | seen |
+| `interactive-fullscreen/scenario` | 267 blk / 79 crs | 542 (148 core) | image (characters, bg) | — | _TODO_ | seen |
+| `gallery/four column` | 181 blk / 86 crs | 90 (19 core) | image | — | _TODO_ | seen |
+| `gallery/two column` | 169 blk / 87 crs | 73 (17 core) | image | — | _TODO_ | seen |
+| `mondrian/mondrian` | 148 blk / 30 crs | 39 (7 core) | image (collage) | — | _TODO_ | seen |
+| `knowledgeCheck/matching` | 141 blk / 55 crs | 84 (17 core) | — | — | _TODO_ | seen |
+| `multimedia/attachment` | 135 blk / 80 crs | 65 (15 core) | attachment | — | _TODO_ | seen |
+| `impact/c` | 95 blk / 48 crs | 49 (11 core) | — | — | _TODO_ | seen |
+| `quote/a` | 83 blk / 31 crs | 78 (22 core) | image (bg, avatar) | — | _TODO_ | seen |
+| `quote/carousel` | 75 blk / 30 crs | 71 (22 core) | image (bg, avatar) | — | _TODO_ | seen |
+| `multimedia/audio` | 68 blk / 25 crs | 66 (14 core) | audio | — | _TODO_ | seen |
+| `multimedia/code` | 65 blk / 5 crs | 36 (14 core) | — | — | _TODO_ | seen |
+| `impact/a` | 60 blk / 21 crs | 32 (11 core) | — | — | _TODO_ | seen |
+| `quote/d` | 53 blk / 19 crs | 76 (19 core) | image (avatar) | — | _TODO_ | seen |
+| `gallery/centered` | 49 blk / 32 crs | 68 (17 core) | image | — | _TODO_ | seen |
+| `image/banner` | 35 blk / 13 crs | 47 (23 core) | image | — | _TODO_ | seen |
+| `flashcard/stack` | 34 blk / 27 crs | 81 (24 core) | image (front/back) | — | _TODO_ | seen |
+| `quote/b` | 25 blk / 12 crs | 66 (24 core) | image (bg, avatar) | — | _TODO_ | seen |
+| `quote/c` | 18 blk / 10 crs | 68 (23 core) | image (bg, avatar) | — | _TODO_ | seen |
+| `chart/pie` | 16 blk / 11 crs | 43 (19 core) | — (data) | — | _TODO_ | seen |
+| `quote/background` | 16 blk / 8 crs | 88 (21 core) | image (bg, avatar) | — | _TODO_ | seen |
+| `chart/bar` | 5 blk / 4 crs | 35 (21 core) | — (data) | — | _TODO_ | seen |
+| `knowledge/knowledge` | 5 blk / 1 crs | 28 (28 core) | image | — | _TODO_ | seen |
+| `knowledgeCheck/fillin` | 4 blk / 4 crs | 55 (16 core) | — | — | _TODO_ | seen |
+| `chart/line` | 3 blk / 3 crs | 40 (22 core) | — (data) | — | _TODO_ | seen |
+
 ## Question types (inline quiz / knowledge-check blocks)
 
 | type | Answer shape | Notes | Status |
