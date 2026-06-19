@@ -89,4 +89,9 @@ export class FileSystemStorage implements Storage {
     await this.writeFile(this.root, 'census.json', json);
     await this.writeFile(this.root, 'census.csv', csv);
   }
+
+  async writeNovelty(json: string, csv: string): Promise<void> {
+    await this.writeFile(this.root, 'novelty.json', json);
+    await this.writeFile(this.root, 'novelty.csv', csv);
+  }
 }

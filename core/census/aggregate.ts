@@ -23,6 +23,16 @@ export interface RefShapeEntry {
   exampleValues: string[];
 }
 
+export interface ShapeEntry {
+  key: string; // family/variant
+  signature: string;
+  count: number; // total occurrences across all courses
+  courseCount: number; // distinct courses
+  courseIds: string[];
+  examplePaths: string[];
+  paths: string[]; // the structural key-paths
+}
+
 export interface CountEntry {
   name: string;
   count: number;
@@ -38,6 +48,8 @@ export interface Census {
   courseIds: string[];
   variants: VariantEntry[];
   refs: RefShapeEntry[];
+  /** Distinct block shapes across the library (Tier-2 novelty input). */
+  shapes: ShapeEntry[];
   lessonTypes: CountEntry[];
   questionTypes: CountEntry[];
   versions: VersionEntry[];
@@ -51,6 +63,7 @@ export function buildCensus(scans: CourseScan[]): Census {
   const courseIds = new Set<string>();
   const variants = new Map<string, VariantEntry>();
   const refs = new Map<RefKind, RefShapeEntry>();
+  const shapes = new Map<string, ShapeEntry>();
   const lessonTypes = new Map<string, Set<string>>();
   const questionTypes = new Map<string, Set<string>>();
   const versions = new Map<string, Set<string>>();
@@ -103,6 +116,29 @@ export function buildCensus(scans: CourseScan[]): Census {
       pushCapped(entry.exampleValues, r.value);
     }
 
+    for (const sh of scan.shapes) {
+      const id = `${sh.key}#${sh.signature}`;
+      let entry = shapes.get(id);
+      if (!entry) {
+        entry = {
+          key: sh.key,
+          signature: sh.signature,
+          count: 0,
+          courseCount: 0,
+          courseIds: [],
+          examplePaths: [],
+          paths: sh.paths,
+        };
+        shapes.set(id, entry);
+      }
+      entry.count += sh.count;
+      if (!entry.courseIds.includes(cid)) {
+        entry.courseIds.push(cid);
+        entry.courseCount += 1;
+      }
+      pushCapped(entry.examplePaths, sh.examplePath);
+    }
+
     for (const t of scan.lessonTypes) {
       (lessonTypes.get(t) ?? lessonTypes.set(t, new Set()).get(t)!).add(cid);
     }
@@ -127,6 +163,9 @@ export function buildCensus(scans: CourseScan[]): Census {
       (a, b) => b.count - a.count || a.key.localeCompare(b.key),
     ),
     refs: [...refs.values()].sort((a, b) => b.count - a.count),
+    shapes: [...shapes.values()].sort(
+      (a, b) => b.count - a.count || a.key.localeCompare(b.key),
+    ),
     lessonTypes: toCounts(lessonTypes),
     questionTypes: toCounts(questionTypes),
     versions: [...versions.entries()]

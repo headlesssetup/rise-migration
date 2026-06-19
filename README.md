@@ -35,8 +35,18 @@ Output folder layout:
   courses/<courseId>.json   raw GET_COURSE bodies (immutable)
   inventory.json|csv        list-level catalog (written at listing time)
   census.json|csv           content-level census (written after fetch)
+  novelty.json|csv          Tier-2 novelty: distinct block shapes + classification
   manifest.json             run index
 ```
+
+**Novelty (Tier-2, PRD §8).** Every block gets a structural *shape signature*
+(`family/variant` + recursive key-paths, array indices collapsed to `[]` and
+id-shaped map keys to `*`). The novelty report classifies each distinct shape as
+a **new-variant** (family/variant absent from `docs/rise-block-catalog.md`) or a
+**known-variant**, and flags **variation** when a variant has more than one shape
+(a likely version difference), listing the extra key-paths. Copy-faithful
+migration still round-trips unknown blocks — this just ensures nothing migrates
+unseen/undocumented.
 
 ## Architecture
 

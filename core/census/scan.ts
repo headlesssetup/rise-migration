@@ -6,6 +6,7 @@
 // block catalog and the scanner's known media/cross-ref shapes.
 
 import type { GetCourseDocument } from '@/shared/types/rise';
+import { blockShape } from './signature';
 
 export type RefKind =
   // Uploaded media (must be re-uploaded + remapped on import), split by type:
@@ -37,12 +38,23 @@ export interface BlockOccurrence {
   courseId?: string;
 }
 
+/** A distinct block shape seen in a course (deduped by family/variant + signature). */
+export interface ShapeOccurrence {
+  key: string;
+  signature: string;
+  paths: string[];
+  examplePath: string;
+  count: number;
+}
+
 export interface CourseScan {
   courseId?: string;
   /** Best-effort version signal (course.version or first `version` field). */
   versionSignal?: string | number;
   blocks: BlockOccurrence[];
   refs: RefOccurrence[];
+  /** Distinct block shapes (for Tier-2 novelty review). */
+  shapes: ShapeOccurrence[];
   lessonTypes: string[];
   questionTypes: string[];
 }
@@ -98,6 +110,7 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
 
   const blocks: BlockOccurrence[] = [];
   const refs: RefOccurrence[] = [];
+  const shapeMap = new Map<string, ShapeOccurrence>();
   const lessonTypes = new Set<string>();
   const questionTypes = new Set<string>();
 
@@ -133,6 +146,22 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
         path,
         courseId,
       });
+
+      // Structural shape, deduped within the course (Tier-2 novelty review).
+      const sh = blockShape(obj);
+      if (sh) {
+        const id = `${sh.key}#${sh.signature}`;
+        const existing = shapeMap.get(id);
+        if (existing) existing.count += 1;
+        else
+          shapeMap.set(id, {
+            key: sh.key,
+            signature: sh.signature,
+            paths: sh.paths,
+            examplePath: path,
+            count: 1,
+          });
+      }
     }
 
     // Question block: has a string `type` and an `answers` array.
@@ -191,6 +220,7 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     versionSignal,
     blocks,
     refs,
+    shapes: [...shapeMap.values()],
     lessonTypes: [...lessonTypes].sort(),
     questionTypes: [...questionTypes].sort(),
   };

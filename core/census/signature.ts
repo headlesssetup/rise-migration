@@ -33,3 +33,31 @@ export function keyPaths(value: unknown): string[] {
   walk(value, '');
   return [...out].sort();
 }
+
+export interface BlockShape {
+  /** `family/variant` — the catalog key. */
+  key: string;
+  /** Stable short hash of the structural key-paths. */
+  signature: string;
+  /** The structural key-paths (sorted). */
+  paths: string[];
+}
+
+/** FNV-1a 32-bit hash of the key-path set → 8-hex string. Stable across runs. */
+export function hashPaths(paths: string[]): string {
+  let h = 0x811c9dc5;
+  const s = paths.join('\n');
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/** Structural shape of a block node, or null if it isn't a family/variant block. */
+export function blockShape(block: Record<string, unknown>): BlockShape | null {
+  const { family, variant } = block;
+  if (typeof family !== 'string' || typeof variant !== 'string') return null;
+  const paths = keyPaths(block);
+  return { key: `${family}/${variant}`, signature: hashPaths(paths), paths };
+}

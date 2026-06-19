@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildCensus, type Census } from '@/core/census/aggregate';
 import { censusToCsv, censusToJson } from '@/core/census/export';
 import {
+  buildNovelty,
+  noveltyToCsv,
+  noveltyToJson,
+  type NoveltyReport,
+} from '@/core/census/novelty';
+import {
   buildInventory,
   inventoryToCsv,
   inventoryToJson,
@@ -48,6 +54,7 @@ export function App() {
     null,
   );
   const [census, setCensus] = useState<Census | null>(null);
+  const [novelty, setNovelty] = useState<NoveltyReport | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((message: string) => {
@@ -211,6 +218,7 @@ export function App() {
     if (!storage) return;
     setPhase('exporting');
     setCensus(null);
+    setNovelty(null);
     setProgress({ done: 0, total: selectedCourses.length });
 
     const { scans, saved, skipped, failed } = await exportCourses(
@@ -221,18 +229,30 @@ export function App() {
 
     const built = buildCensus(scans);
     await storage.writeCensus(censusToJson(built), censusToCsv(built));
+
+    // Tier-2 novelty: surface distinct block shapes new to / varying from catalog.
+    const nov = buildNovelty(built.shapes);
+    await storage.writeNovelty(noveltyToJson(nov), noveltyToCsv(nov));
+
     await storage.writeManifest({
       generatedAt: new Date().toISOString(),
       courseCount: scans.length,
       saved,
       skipped,
       failed,
+      distinctShapes: nov.totalShapes,
+      newVariants: nov.newVariants,
+      variantsWithVariation: nov.variantsWithVariation,
       courses: selectedCourses.map((c) => ({ id: c.id, title: c.title })),
     });
     setCensus(built);
+    setNovelty(nov);
     setPhase('done');
     addLog(
-      `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census written.`,
+      `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + novelty written.`,
+    );
+    addLog(
+      `Novelty: ${nov.totalShapes} distinct shape(s); ${nov.newVariants.length} new variant(s); ${nov.variantsWithVariation.length} with shape variation.`,
     );
   }, [storage, selectedCourses, onEvent, addLog]);
 
@@ -358,6 +378,13 @@ export function App() {
         </section>
       )}
 
+      {novelty && (
+        <section className="card">
+          <h2>Novelty</h2>
+          <NoveltyView novelty={novelty} />
+        </section>
+      )}
+
       {census && (
         <section className="card">
           <h2>Census</h2>
@@ -403,6 +430,44 @@ function SessionView({
         Courses: <b>{totalCount ?? '—'}</b>
       </li>
     </ul>
+  );
+}
+
+function NoveltyView({ novelty }: { novelty: NoveltyReport }) {
+  const flagged = novelty.entries.filter(
+    (e) => e.status === 'new-variant' || e.newPaths.length > 0,
+  );
+  return (
+    <div className="census">
+      <p>
+        {novelty.totalShapes} distinct shape(s) · {novelty.newVariants.length} new
+        variant(s) · {novelty.variantsWithVariation.length} with variation
+      </p>
+      {flagged.length === 0 ? (
+        <p className="hint">Nothing new — all shapes match the catalog.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>family/variant</th>
+              <th>status</th>
+              <th>new fields</th>
+              <th>count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {flagged.map((e) => (
+              <tr key={`${e.key}#${e.signature}`}>
+                <td>{e.key}</td>
+                <td>{e.status === 'new-variant' ? 'new' : 'variation'}</td>
+                <td>{e.newPaths.length || (e.status === 'new-variant' ? 'all' : 0)}</td>
+                <td>{e.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
