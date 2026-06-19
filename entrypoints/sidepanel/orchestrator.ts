@@ -68,11 +68,13 @@ function describeShape(data: unknown): string {
 }
 
 /** Paced pagination through the whole library. Pages are 0-indexed; the loop
- *  is driven by `totalCount` so it's robust to server-side pageSize capping. */
+ *  is driven by `totalCount` so it's robust to server-side pageSize capping.
+ *  pageSize=16 mirrors the Rise UI (16/page) so we page like a person, per the
+ *  human-pacing invariant — e.g. 579 items => 37 paced pages. */
 export async function listAllCourses(
   onEvent: (e: ProgressEvent) => void,
   pacing: PacingConfig = DEFAULT_PACING,
-  pageSize = 100,
+  pageSize = 16,
 ): Promise<SearchResultItem[]> {
   const all: SearchResultItem[] = [];
   let total = Infinity;
