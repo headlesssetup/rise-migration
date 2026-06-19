@@ -8,6 +8,11 @@ import {
   type NoveltyReport,
 } from '@/core/census/novelty';
 import {
+  buildProfiles,
+  profileToCsv,
+  profileToJson,
+} from '@/core/census/profile';
+import {
   buildInventory,
   inventoryToCsv,
   inventoryToJson,
@@ -230,8 +235,10 @@ export function App() {
     const built = buildCensus(scans);
     await storage.writeCensus(censusToJson(built), censusToCsv(built));
 
-    // Tier-2 novelty: surface distinct block shapes new to / varying from catalog.
-    const nov = buildNovelty(built.shapes);
+    // Per-variant field profiles (the catalog knowledge base) + Tier-2 novelty.
+    const profiles = buildProfiles(scans);
+    await storage.writeCatalog(profileToJson(profiles), profileToCsv(profiles));
+    const nov = buildNovelty(profiles);
     await storage.writeNovelty(noveltyToJson(nov), noveltyToCsv(nov));
 
     await storage.writeManifest({
@@ -240,19 +247,19 @@ export function App() {
       saved,
       skipped,
       failed,
-      distinctShapes: nov.totalShapes,
-      newVariants: nov.newVariants,
-      variantsWithVariation: nov.variantsWithVariation,
+      variantCount: nov.variantCount,
+      newVariants: nov.newVariants.map((v) => v.key),
+      newFields: nov.newFields.length,
       courses: selectedCourses.map((c) => ({ id: c.id, title: c.title })),
     });
     setCensus(built);
     setNovelty(nov);
     setPhase('done');
     addLog(
-      `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + novelty written.`,
+      `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
     );
     addLog(
-      `Novelty: ${nov.totalShapes} distinct shape(s); ${nov.newVariants.length} new variant(s); ${nov.variantsWithVariation.length} with shape variation.`,
+      `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s).`,
     );
   }, [storage, selectedCourses, onEvent, addLog]);
 
@@ -434,38 +441,66 @@ function SessionView({
 }
 
 function NoveltyView({ novelty }: { novelty: NoveltyReport }) {
-  const flagged = novelty.entries.filter(
-    (e) => e.status === 'new-variant' || e.newPaths.length > 0,
-  );
+  const nothingNew =
+    novelty.newVariants.length === 0 && novelty.newFields.length === 0;
   return (
     <div className="census">
       <p>
-        {novelty.totalShapes} distinct shape(s) · {novelty.newVariants.length} new
-        variant(s) · {novelty.variantsWithVariation.length} with variation
+        {novelty.variantCount} variant(s) · {novelty.newVariants.length} new ·{' '}
+        {novelty.newFields.length} new field(s)
       </p>
-      {flagged.length === 0 ? (
-        <p className="hint">Nothing new — all shapes match the catalog.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>family/variant</th>
-              <th>status</th>
-              <th>new fields</th>
-              <th>count</th>
-            </tr>
-          </thead>
-          <tbody>
-            {flagged.map((e) => (
-              <tr key={`${e.key}#${e.signature}`}>
-                <td>{e.key}</td>
-                <td>{e.status === 'new-variant' ? 'new' : 'variation'}</td>
-                <td>{e.newPaths.length || (e.status === 'new-variant' ? 'all' : 0)}</td>
-                <td>{e.count}</td>
+      {nothingNew && (
+        <p className="hint">
+          Nothing new vs the catalog. Field profiles written to catalog.csv/json.
+        </p>
+      )}
+      {novelty.newVariants.length > 0 && (
+        <>
+          <h3>new variants</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>family/variant</th>
+                <th>instances</th>
+                <th>courses</th>
+                <th>fields</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {novelty.newVariants.map((v) => (
+                <tr key={v.key}>
+                  <td>{v.key}</td>
+                  <td>{v.instances}</td>
+                  <td>{v.courseCount}</td>
+                  <td>{v.fieldCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {novelty.newFields.length > 0 && (
+        <>
+          <h3>new fields (known variants)</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>family/variant</th>
+                <th>field</th>
+                <th>presence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {novelty.newFields.slice(0, 50).map((f) => (
+                <tr key={`${f.key}:${f.path}`}>
+                  <td>{f.key}</td>
+                  <td>{f.path}</td>
+                  <td>{Math.round(f.presence * 100)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   );

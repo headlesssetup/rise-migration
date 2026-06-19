@@ -17,6 +17,8 @@ export interface Storage {
   writeInventory(json: string, csv: string): Promise<void>;
   /** Write the content-level census deliverables (after GET_COURSE fetch). */
   writeCensus(json: string, csv: string): Promise<void>;
-  /** Write the Tier-2 novelty report (distinct block shapes + classification). */
+  /** Write the per-variant field-profile catalog (the block knowledge base). */
+  writeCatalog(json: string, csv: string): Promise<void>;
+  /** Write the Tier-2 novelty report (new variants + new fields vs catalog). */
   writeNovelty(json: string, csv: string): Promise<void>;
 }

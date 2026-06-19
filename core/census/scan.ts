@@ -38,13 +38,14 @@ export interface BlockOccurrence {
   courseId?: string;
 }
 
-/** A distinct block shape seen in a course (deduped by family/variant + signature). */
-export interface ShapeOccurrence {
-  key: string;
-  signature: string;
-  paths: string[];
+/** Per-variant field tally within one course — input to the field-profile
+ *  aggregation used by Tier-2 novelty review. */
+export interface VariantFieldScan {
+  key: string; // family/variant
+  instances: number; // blocks of this variant in the course
   examplePath: string;
-  count: number;
+  signatures: string[]; // distinct block shape signatures (a variation metric)
+  fieldCounts: Record<string, number>; // field-path -> #instances containing it
 }
 
 export interface CourseScan {
@@ -53,10 +54,18 @@ export interface CourseScan {
   versionSignal?: string | number;
   blocks: BlockOccurrence[];
   refs: RefOccurrence[];
-  /** Distinct block shapes (for Tier-2 novelty review). */
-  shapes: ShapeOccurrence[];
+  /** Per-variant field tallies (for Tier-2 novelty / catalog profiles). */
+  variantFields: VariantFieldScan[];
   lessonTypes: string[];
   questionTypes: string[];
+}
+
+interface VariantFieldAcc {
+  key: string;
+  instances: number;
+  examplePath: string;
+  signatures: Set<string>;
+  fieldCounts: Record<string, number>;
 }
 
 const MAX_SNIPPET = 200;
@@ -110,7 +119,7 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
 
   const blocks: BlockOccurrence[] = [];
   const refs: RefOccurrence[] = [];
-  const shapeMap = new Map<string, ShapeOccurrence>();
+  const variantFieldMap = new Map<string, VariantFieldAcc>();
   const lessonTypes = new Set<string>();
   const questionTypes = new Set<string>();
 
@@ -147,20 +156,25 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
         courseId,
       });
 
-      // Structural shape, deduped within the course (Tier-2 novelty review).
+      // Tally fields per variant (Tier-2 field profiles + novelty review).
       const sh = blockShape(obj);
       if (sh) {
-        const id = `${sh.key}#${sh.signature}`;
-        const existing = shapeMap.get(id);
-        if (existing) existing.count += 1;
-        else
-          shapeMap.set(id, {
+        let vf = variantFieldMap.get(sh.key);
+        if (!vf) {
+          vf = {
             key: sh.key,
-            signature: sh.signature,
-            paths: sh.paths,
+            instances: 0,
             examplePath: path,
-            count: 1,
-          });
+            signatures: new Set(),
+            fieldCounts: {},
+          };
+          variantFieldMap.set(sh.key, vf);
+        }
+        vf.instances += 1;
+        vf.signatures.add(sh.signature);
+        for (const p of sh.paths) {
+          vf.fieldCounts[p] = (vf.fieldCounts[p] ?? 0) + 1;
+        }
       }
     }
 
@@ -220,7 +234,13 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     versionSignal,
     blocks,
     refs,
-    shapes: [...shapeMap.values()],
+    variantFields: [...variantFieldMap.values()].map((v) => ({
+      key: v.key,
+      instances: v.instances,
+      examplePath: v.examplePath,
+      signatures: [...v.signatures],
+      fieldCounts: v.fieldCounts,
+    })),
     lessonTypes: [...lessonTypes].sort(),
     questionTypes: [...questionTypes].sort(),
   };

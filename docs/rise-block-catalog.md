@@ -24,6 +24,19 @@ The documented understanding of Rise block types and their options. **Seeded fro
 | `html/cdn` | Embedded code (CDN) | reference | possibly CDN | — | _TODO_ | seen |
 | `360/storyline` | Storyline block | `items[0].media.storyline{contentPrefix,src,meta}` | bundle under contentPrefix | **Review 360 item** (project_id/title) | _TODO_ | documented |
 | `knowledgeCheck/draw from question bank` | Draw from bank | `items[].type:DRAW_FROM_QUESTION_BANK` | — | **question-bank id** | _TODO_ | documented |
+| `text/heading` | Heading text | rich HTML; optional `background`, `settings.customPadding*` | — | — | _TODO_ | seen |
+| `text/heading paragraph` | Heading + paragraph | as `text/*`; optional `background`, padding settings | — | — | _TODO_ | seen |
+| `list/bulleted` | Bulleted list | list items (HTML) | — | — | _TODO_ | seen |
+| `list/checkboxes` | Checkbox list | list items (HTML) | — | — | _TODO_ | seen |
+| `image/text aside` | Image beside text | media ref + text | image key | — | _TODO_ | seen |
+| `image/text overlay` | Text over image | media ref + text | image key | — | _TODO_ | seen |
+| `gallery/three column` | 3-column gallery | image items | per-image keys | — | _TODO_ | seen |
+| `buttons/button` | Single button | `items[]` button (title, link/href) | — | — | _TODO_ | seen |
+| `buttons/button stack` | Button stack | multiple button items | — | — | _TODO_ | seen |
+| `impact/b` | Impact block (style b) | `items[].heading`; optional `settings.customPadding*`, `settings.v` | optional bg image | — | _TODO_ | seen |
+| `interactive/accordion` | Accordion | `items[]` panels; optional `items[].media.image{dimensions,…}` | per-panel image | — | _TODO_ | seen |
+| `multimedia/embed` | Embed (YouTube/Vimeo) | `items[].embed.url` | — (embed URL kept as-is) | — | _TODO_ | seen |
+| `knowledgeCheck/multiple response` | Multiple-response KC block | `answers[]` carry `correct` | — | — | _TODO_ | seen |
 
 ## Question types (inline quiz / knowledge-check blocks)
 
@@ -44,7 +57,9 @@ The documented understanding of Rise block types and their options. **Seeded fro
 
 ## Pending capture (expected, not individually confirmed)
 
-These are known Rise block types not yet captured in our traffic. Copy-faithful handles them on sight, but each should be promoted to `documented` once a real example is scanned: `statement`, `quote`, `gallery`, `accordion`, `tabs`, `scenario`, `timeline`, `chart`, `table`, `attachment`, `audio` (and any others surfaced by novelty review).
+These are known Rise block types not yet captured in our traffic. Copy-faithful handles them on sight, but each should be promoted to `documented` once a real example is scanned: `statement`, `quote`, `tabs`, `scenario`, `timeline`, `chart`, `table`, `attachment`, `audio` (and any others surfaced by novelty review). (`gallery` and `accordion` were captured in the 2026-06-19 scrape — see Confirmed.)
+
+> **Field profiles.** A scrape writes `catalog.json`/`catalog.csv` — per-variant field profiles (each field tagged **core**/**optional** with presence %). That is the scalable knowledge base this table summarizes; `novelty.csv` surfaces only **new variants** and (once a variant has a recorded field baseline) **new fields**.
 
 ## Review queue (auto-captured, awaiting classification)
 

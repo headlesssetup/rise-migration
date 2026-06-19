@@ -1,118 +1,100 @@
-// Tier-2 novelty review (PRD §8): compare each distinct block shape against the
-// documented block catalog and surface what's new, so nothing migrates unseen.
+// Tier-2 novelty review (PRD §8): diff the per-variant field profiles against
+// the known catalog and surface only what's genuinely new — so nothing migrates
+// unseen, without the optional-field noise of per-shape signatures.
 //
-// Copy-faithful migration means an unknown block still round-trips fine — but it
-// must be *surfaced and documented*. This produces a per-shape report classifying
-// each distinct `family/variant` + structural signature as:
-//   - new-variant   : family/variant absent from the documented catalog
-//   - known-variant : documented family/variant
-// and flags `variation` when a known/seen variant has >1 distinct shape (a likely
-// version difference / new field shape), listing the extra key-paths.
+//   - new-variant : family/variant absent from the catalog (high-value signal).
+//   - new-field   : a field-path not in the catalog's known set for a known
+//                   variant. Only emitted for variants that HAVE a recorded
+//                   field baseline; until then the field profile (catalog.json)
+//                   is the thing to review, so we don't spam unknown fields.
 
 import { toCsv } from '@/core/util/csv';
-import type { ShapeEntry } from './aggregate';
+import { isKnownVariant, knownFieldsFor } from './catalog';
+import type { VariantProfile } from './profile';
 
-// Seed: documented family/variant from docs/rise-block-catalog.md §Confirmed.
-const KNOWN_VARIANTS = new Set<string>([
-  'list/numbered',
-  'image/hero',
-  'multimedia/video',
-  'flashcard/flashcard',
-  'interactive-fullscreen/labeledgraphic',
-  'interactive-fullscreen/process',
-  'interactive-fullscreen/sorting',
-  'continue/continue',
-  'divider/numbered divider',
-  'html/inline',
-  'html/cdn',
-  '360/storyline',
-  'knowledgeCheck/draw from question bank',
-]);
-// Families documented as a wildcard (e.g. `text/*`) — any variant is known.
-const KNOWN_FAMILIES = new Set<string>(['text']);
-
-export function isKnownVariant(key: string): boolean {
-  if (KNOWN_VARIANTS.has(key)) return true;
-  const family = key.slice(0, key.indexOf('/'));
-  return KNOWN_FAMILIES.has(family);
+export interface NewVariant {
+  key: string;
+  instances: number;
+  courseCount: number;
+  fieldCount: number;
+  coreFields: string[];
+  examplePath: string;
+  courseIds: string[];
 }
 
-export type NoveltyStatus = 'new-variant' | 'known-variant';
-
-export interface NoveltyEntry {
-  key: string; // family/variant
-  signature: string;
-  status: NoveltyStatus;
-  /** This family/variant has more than one distinct shape across the library. */
-  variation: boolean;
+export interface NewField {
+  key: string;
+  path: string;
+  presence: number;
   count: number;
   courseCount: number;
-  examplePaths: string[];
-  courseIds: string[];
-  /** Key-paths present in this shape but not in the variant's most-common shape. */
-  newPaths: string[];
 }
 
 export interface NoveltyReport {
   generatedAt: string;
-  totalShapes: number;
-  newVariants: string[];
-  variantsWithVariation: string[];
-  entries: NoveltyEntry[];
+  variantCount: number;
+  newVariants: NewVariant[];
+  newFields: NewField[];
+  /** Known variants with no recorded field baseline yet → see catalog.json. */
+  knownWithoutFieldCatalog: string[];
 }
 
-/** Build the novelty report from the census's distinct block shapes. */
-export function buildNovelty(shapes: ShapeEntry[], now: Date = new Date()): NoveltyReport {
-  const byKey = new Map<string, ShapeEntry[]>();
-  for (const s of shapes) {
-    (byKey.get(s.key) ?? byKey.set(s.key, []).get(s.key)!).push(s);
-  }
+export interface NoveltyCatalog {
+  isKnownVariant(key: string): boolean;
+  knownFieldsFor(key: string): Set<string> | null;
+}
 
-  const entries: NoveltyEntry[] = [];
-  const newVariants = new Set<string>();
-  const variantsWithVariation = new Set<string>();
+const DEFAULT_CATALOG: NoveltyCatalog = { isKnownVariant, knownFieldsFor };
 
-  for (const [key, group] of byKey) {
-    const known = isKnownVariant(key);
-    if (!known) newVariants.add(key);
-    const variation = group.length > 1;
-    if (variation) variantsWithVariation.add(key);
+export function buildNovelty(
+  profiles: VariantProfile[],
+  catalog: NoveltyCatalog = DEFAULT_CATALOG,
+  now: Date = new Date(),
+): NoveltyReport {
+  const newVariants: NewVariant[] = [];
+  const newFields: NewField[] = [];
+  const knownWithoutFieldCatalog: string[] = [];
 
-    // Base = the most common shape for this variant; others diff against it.
-    const sorted = [...group].sort((a, b) => b.count - a.count);
-    const base = sorted[0];
-    if (!base) continue;
-    const baseSet = new Set(base.paths);
-
-    for (const s of sorted) {
-      entries.push({
-        key,
-        signature: s.signature,
-        status: known ? 'known-variant' : 'new-variant',
-        variation,
-        count: s.count,
-        courseCount: s.courseCount,
-        examplePaths: s.examplePaths,
-        courseIds: s.courseIds.slice(0, 5),
-        newPaths: s === base ? [] : s.paths.filter((p) => !baseSet.has(p)),
+  for (const p of profiles) {
+    if (!catalog.isKnownVariant(p.key)) {
+      newVariants.push({
+        key: p.key,
+        instances: p.instances,
+        courseCount: p.courseCount,
+        fieldCount: p.fields.length,
+        coreFields: p.fields.filter((f) => f.core).map((f) => f.path),
+        examplePath: p.examplePath,
+        courseIds: p.courseIds.slice(0, 5),
       });
+      continue;
+    }
+    const known = catalog.knownFieldsFor(p.key);
+    if (!known) {
+      knownWithoutFieldCatalog.push(p.key);
+      continue;
+    }
+    for (const f of p.fields) {
+      if (!known.has(f.path)) {
+        newFields.push({
+          key: p.key,
+          path: f.path,
+          presence: f.presence,
+          count: f.count,
+          courseCount: f.courseCount,
+        });
+      }
     }
   }
 
-  // New variants first, then most-frequent.
-  entries.sort(
-    (a, b) =>
-      Number(a.status === 'known-variant') - Number(b.status === 'known-variant') ||
-      b.count - a.count ||
-      a.key.localeCompare(b.key),
-  );
+  newVariants.sort((a, b) => b.instances - a.instances || a.key.localeCompare(b.key));
+  newFields.sort((a, b) => a.key.localeCompare(b.key) || b.count - a.count);
 
   return {
     generatedAt: now.toISOString(),
-    totalShapes: shapes.length,
-    newVariants: [...newVariants].sort(),
-    variantsWithVariation: [...variantsWithVariation].sort(),
-    entries,
+    variantCount: profiles.length,
+    newVariants,
+    newFields,
+    knownWithoutFieldCatalog: knownWithoutFieldCatalog.sort(),
   };
 }
 
@@ -121,27 +103,27 @@ export function noveltyToJson(r: NoveltyReport): string {
 }
 
 export function noveltyToCsv(r: NoveltyReport): string {
-  const headers = [
-    'key',
-    'signature',
-    'status',
-    'variation',
-    'count',
-    'courseCount',
-    'newPaths',
-    'examplePaths',
-    'courseIds',
-  ];
-  const rows = r.entries.map((e) => [
-    e.key,
-    e.signature,
-    e.status,
-    e.variation ? 'yes' : 'no',
-    e.count,
-    e.courseCount,
-    e.newPaths.join(' | '),
-    e.examplePaths.join(' | '),
-    e.courseIds.join(' | '),
-  ]);
+  const headers = ['kind', 'key', 'detail', 'metric', 'courseCount', 'example'];
+  const rows: (string | number)[][] = [];
+  for (const v of r.newVariants) {
+    rows.push([
+      'new-variant',
+      v.key,
+      `${v.fieldCount} fields`,
+      `${v.instances} instances`,
+      v.courseCount,
+      v.examplePath,
+    ]);
+  }
+  for (const f of r.newFields) {
+    rows.push([
+      'new-field',
+      f.key,
+      f.path,
+      `${Math.round(f.presence * 100)}%`,
+      f.courseCount,
+      '',
+    ]);
+  }
   return toCsv(headers, rows);
 }

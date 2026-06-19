@@ -35,18 +35,28 @@ Output folder layout:
   courses/<courseId>.json   raw GET_COURSE bodies (immutable)
   inventory.json|csv        list-level catalog (written at listing time)
   census.json|csv           content-level census (written after fetch)
-  novelty.json|csv          Tier-2 novelty: distinct block shapes + classification
+  catalog.json|csv          per-variant field profiles (block knowledge base)
+  novelty.json|csv          Tier-2 novelty: new variants + new fields vs catalog
   manifest.json             run index
 ```
 
-**Novelty (Tier-2, PRD §8).** Every block gets a structural *shape signature*
-(`family/variant` + recursive key-paths, array indices collapsed to `[]` and
-id-shaped map keys to `*`). The novelty report classifies each distinct shape as
-a **new-variant** (family/variant absent from `docs/rise-block-catalog.md`) or a
-**known-variant**, and flags **variation** when a variant has more than one shape
-(a likely version difference), listing the extra key-paths. Copy-faithful
-migration still round-trips unknown blocks — this just ensures nothing migrates
-unseen/undocumented.
+**Catalog + novelty (Tier-2, PRD §8).** For each block, a structural signature
+(`family/variant` + recursive key-paths; array indices → `[]`, id-shaped map keys
+→ `*`) feeds two outputs:
+
+- **`catalog.json/csv`** — per-variant **field profiles**: the union of field-paths
+  for each `family/variant`, each tagged **core** (present in every instance) vs
+  **optional** (sometimes), with presence %. This is the scalable knowledge base
+  (one row per variant×field, not per optional-field permutation) that seeds
+  `docs/rise-block-catalog.md`.
+- **`novelty.json/csv`** — only what's genuinely new: **new variants** (absent from
+  the catalog seed in `core/census/catalog.ts`) and, once a variant has a recorded
+  field baseline, **new fields**. Copy-faithful migration still round-trips unknown
+  blocks — this just ensures nothing migrates unseen/undocumented.
+
+The accept→remember loop: review a scrape's `catalog.json`, fold confirmed
+variants/fields into `core/census/catalog.ts` (+ the doc), and subsequent runs go
+quiet for them — surfacing only the next genuinely-new shapes.
 
 ## Architecture
 
