@@ -20,26 +20,31 @@ function unwrap(raw: string): GetCourseDocument {
   return (parsed.payload ?? parsed) as GetCourseDocument;
 }
 
-// The search response shape isn't fully captured yet — be tolerant: accept a
-// bare array, common wrapper keys, or (last resort) the first array of objects
-// that look like content items.
+function isItem(x: unknown): x is SearchResultItem {
+  return !!x && typeof x === 'object' && 'id' in (x as object);
+}
+
+// Coerce a value into a list of content items, accepting either an array or —
+// as Rise's `content` field actually is — an object MAP keyed by content id.
+function asItemArray(v: unknown): SearchResultItem[] {
+  if (Array.isArray(v)) return v.filter(isItem);
+  if (v && typeof v === 'object') return Object.values(v).filter(isItem);
+  return [];
+}
+
+// Rise returns search hits under `content` as an id-keyed object map. Be
+// tolerant of other shapes too (array, alternate wrapper keys).
 function extractItems(data: unknown): SearchResultItem[] {
-  if (Array.isArray(data)) return data as SearchResultItem[];
+  if (Array.isArray(data)) return data.filter(isItem);
   if (!data || typeof data !== 'object') return [];
   const obj = data as Record<string, unknown>;
-  for (const key of ['items', 'results', 'data', 'content', 'courses', 'collection']) {
-    if (Array.isArray(obj[key])) return obj[key] as SearchResultItem[];
+  for (const key of ['content', 'items', 'results', 'data', 'courses', 'collection']) {
+    const items = asItemArray(obj[key]);
+    if (items.length) return items;
   }
   for (const v of Object.values(obj)) {
-    if (
-      Array.isArray(v) &&
-      v.length > 0 &&
-      typeof v[0] === 'object' &&
-      v[0] !== null &&
-      'id' in (v[0] as object)
-    ) {
-      return v as SearchResultItem[];
-    }
+    const items = asItemArray(v);
+    if (items.length) return items;
   }
   return [];
 }
@@ -62,13 +67,15 @@ function describeShape(data: unknown): string {
   return typeof data;
 }
 
-/** Paced pagination through the whole course list. Pages are 0-indexed. */
+/** Paced pagination through the whole library. Pages are 0-indexed; the loop
+ *  is driven by `totalCount` so it's robust to server-side pageSize capping. */
 export async function listAllCourses(
   onEvent: (e: ProgressEvent) => void,
   pacing: PacingConfig = DEFAULT_PACING,
-  pageSize = 16,
+  pageSize = 100,
 ): Promise<SearchResultItem[]> {
   const all: SearchResultItem[] = [];
+  let total = Infinity;
   for (let page = 0; page < MAX_PAGES; page++) {
     if (page > 0) await pacedDelay(pacing); // pace between pages
     onEvent({ kind: 'log', message: `Fetching course list — page ${page}…` });
@@ -79,19 +86,22 @@ export async function listAllCourses(
       onEvent({ kind: 'log', message: `List error: ${resp.result.error}` });
       break;
     }
-    const items = extractItems(resp.result.data);
+    const data = resp.result.data;
+    const items = extractItems(data);
+    const totalCount = (data as Record<string, unknown>)?.totalCount;
     if (page === 0) {
-      // One-time diagnostic so an unexpected response shape is visible.
+      if (typeof totalCount === 'number') total = totalCount;
       onEvent({
         kind: 'log',
         message: `Search OK (HTTP ${resp.result.status}); ${describeShape(
-          resp.result.data,
+          data,
         )}; extracted ${items.length} item(s).`,
       });
     }
     all.push(...items);
     onEvent({ kind: 'page', page, total: all.length });
-    if (items.length < pageSize) break; // reached the last page
+    if (items.length === 0) break; // safety: nothing more to read
+    if (all.length >= total) break; // collected the whole library
   }
   return all;
 }
