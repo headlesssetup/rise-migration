@@ -1,0 +1,13 @@
+# pnpm settings live here (newer pnpm no longer reads the `pnpm` field in
+# package.json). No `packages:` key — this repo is a single package, not a
+# workspace; the file is used only for these settings.
+
+# Allow esbuild's postinstall (needed by WXT/Vite/Vitest) to run.
+onlyBuiltDependencies:
+  - esbuild
+
+# Pin nanoid to an aged release. The latest 3.3.x (3.3.13, published
+# 2026-06-18) is too new for strict `minimumReleaseAge` supply-chain policies;
+# 3.3.11 (2025-03-18) satisfies the `^3.3` range postcss requires.
+overrides:
+  nanoid: 3.3.11
