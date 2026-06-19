@@ -34,16 +34,20 @@ function findArrayByKey(root: unknown, key: string): unknown[] | null {
   return null;
 }
 
-export interface BankRef {
+export interface Bank {
   id: string;
   title?: string;
+  /** The full bank object from the list (carries `questions` inline). */
+  doc: Record<string, unknown>;
 }
 
-/** Bank refs from the list response (array, id-map, or common wrappers). */
-export function extractBankRefs(listDoc: unknown): BankRef[] {
+/** Full bank objects from the list response. The captured shape is
+ *  `{ question_banks: [ {id, title, questions:[…], …} ], … }` — questions are
+ *  INLINE, so no per-bank fetch is needed. Tolerant of other wrappers. */
+export function extractBanks(listDoc: unknown): Bank[] {
   let arr: Record<string, unknown>[] = [];
   if (isObj(listDoc)) {
-    for (const k of ['questionBanks', 'question_banks', 'banks', 'content', 'items', 'results', 'data']) {
+    for (const k of ['question_banks', 'questionBanks', 'banks', 'content', 'items', 'results', 'data']) {
       const got = asObjArray(listDoc[k]);
       if (got.length) {
         arr = got;
@@ -57,7 +61,13 @@ export function extractBankRefs(listDoc: unknown): BankRef[] {
     .map((o) => ({
       id: o.id as string,
       title: typeof o.title === 'string' ? o.title : undefined,
+      doc: o,
     }));
+}
+
+/** Does this bank carry its questions inline (no per-bank fetch needed)? */
+export function hasInlineQuestions(doc: Record<string, unknown>): boolean {
+  return Array.isArray(doc.questions);
 }
 
 /** Question objects from one bank doc (prefer a `questions` array). */

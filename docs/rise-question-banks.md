@@ -20,29 +20,49 @@ inside the course and need no bank.)
 All run **inside the live Rise tab** (first-party cookies), like every other call;
 URLs are relative so they work on the US and EU planes.
 
-## Question schema (from API ref + inline-question captures)
+## List response (captured)
+
+`GET /api/rise-authoring/question_banks` returns **the banks with their questions
+inline** — there is **no need to fetch each bank by id** (the single-bank
+`GET …/question_banks/{id}` returned non-2xx in testing). Shape:
+
+```
+{ question_banks: [ { id, title, questions: [ … ], author_id, folder_id,
+                      last_edited_by, updated_at, version, deleted } ],
+  profiles, private_folders, shared_folders, folder_state }
+```
+
+The tool saves each bank object (from this list) to `question-banks/{id}.json`
+and only falls back to a per-bank fetch if a bank lacks an inline `questions`
+array.
+
+## Question schema (captured)
 
 A question:
 
 ```
-{ id, type, title (HTML), answers: [{ id, title, correct, matchTitle? }],
-  feedback, correct? }
+{ id, type, title (HTML),
+  answers: [ { id, title, correct, matchTitle? } ],
+  correct, corrects, feedback, media? }
 ```
 
-Question `type`s seen across the 581-course library (as inline blocks; banks
-reuse the same shapes): `MULTIPLE_CHOICE` (291), `MULTIPLE_RESPONSE` (209),
-`MATCHING` (67, answers carry `matchTitle`), `FILL_IN_THE_BLANK` (6).
+Question `type`s seen across the 581-course library (as inline course blocks;
+banks reuse the same shapes): `MULTIPLE_CHOICE` (291), `MULTIPLE_RESPONSE` (209),
+`MATCHING` (67, answers carry `matchTitle`), `FILL_IN_THE_BLANK` (6). Bank
+questions can also carry `media` (e.g. an image) and a `corrects` array
+alongside the per-answer `correct` flag.
 
 ## What the tool does (Phase 0 — read-only)
 
 "Fetch question banks" in the side panel:
 
 1. `GET /api/rise-authoring/question_banks` → save raw to
-   `question-banks/_index.json`; extract bank refs (`{id, title}`), tolerant of
-   array / id-map / `{questionBanks|banks|content|…}` wrappers.
-2. For each bank, **strictly sequential + paced** (~2s + jitter),
-   `GET …/question_banks/{id}` → save raw to `question-banks/{id}.json`
-   (skips already-saved). Source bytes are never mutated.
+   `question-banks/_index.json`; extract the bank objects from `question_banks`
+   (tolerant of array / id-map / alternate wrappers).
+2. Banks carry their `questions` **inline**, so each bank object is saved
+   directly to `question-banks/{id}.json` (no per-bank network call). A bank
+   missing inline questions falls back to a **paced** `GET …/question_banks/{id}`.
+   Source bytes are never mutated.
 3. Profile: walk every bank's questions, group by question `type`, and tally
    field-paths (core = present in every question of that type, vs optional) →
    `question-banks-catalog.json` / `.csv`.

@@ -2,7 +2,7 @@
 // CLAUDE.md invariant — every list page and every GET_COURSE finishes before
 // the next starts, with a ~2s + jitter gap. No parallelism anywhere.
 
-import { extractBankRefs } from '@/core/census/question-banks';
+import { extractBanks, hasInlineQuestions } from '@/core/census/question-banks';
 import { scanCourse, type CourseScan } from '@/core/census/scan';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
@@ -204,25 +204,29 @@ export async function fetchQuestionBanks(
   }
 
   await storage.writeBankIndex(listResp.result.data.raw);
-  const refs = extractBankRefs(listResp.result.data.doc);
+  const banks = extractBanks(listResp.result.data.doc);
   onEvent({
     kind: 'log',
-    message: `Found ${refs.length} question bank(s)${
-      refs.length === 0 ? ` (response shape: ${describeShape(listResp.result.data.doc)})` : ''
+    message: `Found ${banks.length} question bank(s)${
+      banks.length === 0 ? ` (response shape: ${describeShape(listResp.result.data.doc)})` : ''
     }.`,
   });
 
   const failed: string[] = [];
   let saved = 0;
-  let skipped = 0;
   let didNetwork = false;
 
-  for (const [i, b] of refs.entries()) {
-    onEvent({ kind: 'course', index: i, total: refs.length, courseId: b.id });
-    if (await storage.hasQuestionBank(b.id)) {
-      skipped += 1;
+  for (const [i, b] of banks.entries()) {
+    onEvent({ kind: 'course', index: i, total: banks.length, courseId: b.id });
+
+    // The list already carries questions inline — save directly, no fetch.
+    if (hasInlineQuestions(b.doc)) {
+      await storage.writeQuestionBank(b.id, JSON.stringify(b.doc));
+      saved += 1;
       continue;
     }
+
+    // Fallback: a bank without inline questions → fetch it by id.
     if (didNetwork) await pacedDelay(pacing);
     didNetwork = true;
     const resp = await rpc({ type: 'GET_QUESTION_BANK', bankId: b.id });
@@ -235,7 +239,7 @@ export async function fetchQuestionBanks(
     saved += 1;
     onEvent({ kind: 'log', message: `Saved bank: ${b.title ?? b.id}` });
   }
-  return { bankCount: refs.length, saved, skipped, failed };
+  return { bankCount: banks.length, saved, skipped: 0, failed };
 }
 
 /** Load every saved question bank from disk for profiling. */

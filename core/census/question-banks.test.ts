@@ -1,21 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildBankCatalog,
-  extractBankRefs,
+  extractBanks,
   extractQuestions,
+  hasInlineQuestions,
 } from './question-banks';
 
-describe('extractBankRefs', () => {
-  it('reads array, wrapper, and id-map shapes', () => {
-    expect(extractBankRefs([{ id: 'a', title: 'A' }]).map((b) => b.id)).toEqual([
-      'a',
-    ]);
-    expect(extractBankRefs({ questionBanks: [{ id: 'b' }] }).map((b) => b.id)).toEqual(
-      ['b'],
-    );
-    expect(extractBankRefs({ content: { x: { id: 'c' } } }).map((b) => b.id)).toEqual(
-      ['c'],
-    );
+describe('extractBanks', () => {
+  it('reads the captured question_banks wrapper (with inline questions)', () => {
+    const banks = extractBanks({
+      question_banks: [{ id: 'a', title: 'A', questions: [{ id: 'q', type: 'MATCHING' }] }],
+      profiles: [],
+    });
+    expect(banks.map((b) => b.id)).toEqual(['a']);
+    expect(hasInlineQuestions(banks[0]!.doc)).toBe(true);
+  });
+
+  it('tolerates array, alternate wrappers, and id-maps', () => {
+    expect(extractBanks([{ id: 'a' }]).map((b) => b.id)).toEqual(['a']);
+    expect(extractBanks({ banks: [{ id: 'b' }] }).map((b) => b.id)).toEqual(['b']);
+    expect(extractBanks({ content: { x: { id: 'c' } } }).map((b) => b.id)).toEqual(['c']);
   });
 });
 
