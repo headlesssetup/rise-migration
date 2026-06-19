@@ -13,7 +13,12 @@ export default defineConfig({
     // Covers both Rise planes (rise.articulate.com / rise.eu.articulate.com),
     // the auth host (id[.eu].articulate.com), and any other Articulate subdomain
     // — needed for in-tab fetch injection, token capture, and refresh.
-    host_permissions: ['https://*.articulate.com/*'],
+    // articulateusercontent.com is a separate apex domain that serves uploaded
+    // media (public-read by key) — Phase 2 downloads asset bytes from it.
+    host_permissions: [
+      'https://*.articulate.com/*',
+      'https://articulateusercontent.com/*',
+    ],
     // Clicking the toolbar icon opens the side panel.
     action: {},
     side_panel: {

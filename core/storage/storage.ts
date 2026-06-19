@@ -43,4 +43,23 @@ export interface Storage {
   readFolders(): Promise<string | null>;
   /** Write the combined folder inventory (course + bank, with name-paths). */
   writeFolderInventory(json: string, csv: string): Promise<void>;
+
+  // --- Phase 2: assets (content-addressed binaries + per-owner manifests) ---
+  /** Write a content-addressed asset blob: `assets/<name>` (name=`<sha256>.<ext>`). */
+  writeAsset(name: string, bytes: Uint8Array): Promise<void>;
+  /** Is this content-addressed asset already stored? (cross-owner dedup). */
+  hasAsset(name: string): Promise<boolean>;
+  /** Write a course/bank's asset manifest → `<scope>/<id>.assets.json`. */
+  writeAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+    json: string,
+  ): Promise<void>;
+  /** Has this owner's asset manifest already been written? (resume). */
+  hasAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+  ): Promise<boolean>;
+  /** Write the run-wide assets summary (totals + un-downloaded-key assertion). */
+  writeAssetsSummary(json: string): Promise<void>;
 }

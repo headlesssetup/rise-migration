@@ -27,6 +27,7 @@ import { FileSystemStorage } from '@/core/storage/fs';
 import type { Storage } from '@/core/storage/storage';
 import type { SessionState } from '@/shared/messaging';
 import type { SearchResultItem } from '@/shared/types/rise';
+import { AssetsView } from './components/AssetsView';
 import { BanksView } from './components/BanksView';
 import { CensusView } from './components/CensusView';
 import { NoveltyView } from './components/NoveltyView';
@@ -40,12 +41,14 @@ import {
 import {
   buildFolders,
   countCourses,
+  downloadAllAssets,
   exportCourses,
   fetchFolders,
   fetchQuestionBanks,
   listAllCourses,
   scanSavedBanks,
   scanSavedCourses,
+  type AssetsSummary,
   type ProgressEvent,
 } from './orchestrator';
 import { rpc } from './rpc';
@@ -76,6 +79,7 @@ export function App() {
   const [census, setCensus] = useState<Census | null>(null);
   const [novelty, setNovelty] = useState<NoveltyReport | null>(null);
   const [banks, setBanks] = useState<BankCatalog | null>(null);
+  const [assets, setAssets] = useState<AssetsSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((message: string) => {
@@ -324,6 +328,26 @@ export function App() {
     }
   }, [storage, onEvent, addLog]);
 
+  const runAssets = useCallback(async () => {
+    if (!storage) return;
+    setPhase('exporting');
+    setAssets(null);
+    setProgress(null);
+    addLog('Downloading assets from articulateusercontent.com (parallel)…');
+    const summary = await downloadAllAssets(storage, onEvent);
+    setAssets(summary);
+    setPhase('done');
+    addLog(
+      `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.failed} failed across ${summary.owners} owner(s)${
+        summary.skipped ? ` (${summary.skipped} already done)` : ''
+      }. → assets/, *.assets.json, assets-summary.json.`,
+    );
+    if (!summary.complete) {
+      const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
+      addLog(`⚠ ${n} uploaded key(s) did NOT download — see assets-summary.json.`);
+    }
+  }, [storage, onEvent, addLog]);
+
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
 
@@ -450,6 +474,20 @@ export function App() {
           question-banks/, profiled in question-banks-catalog.csv/json.
         </p>
         {banks && <BanksView banks={banks} />}
+      </section>
+
+      <section className="card">
+        <h2>Assets (Phase 2)</h2>
+        <button onClick={runAssets} disabled={busy || !storage}>
+          {phase === 'exporting' ? 'Working…' : 'Download assets'}
+        </button>
+        <p className="hint">
+          Downloads uploaded media (image/video/audio) for every saved course +
+          bank from the public CDN (parallel — no pacing). Stored content-addressed
+          in assets/ with per-owner *.assets.json. Storyline bundles, cdn.articulate.com,
+          and YouTube/Vimeo embeds are kept as references. No Rise tab required.
+        </p>
+        {assets && <AssetsView summary={assets} />}
       </section>
 
       {progress && (

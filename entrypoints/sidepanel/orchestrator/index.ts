@@ -19,3 +19,4 @@ export {
   scanSavedBanks,
   type BankFetchResult,
 } from './banks';
+export { cdnDownload, downloadAllAssets, type AssetsSummary } from './assets';

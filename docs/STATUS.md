@@ -31,8 +31,12 @@ catalog), `question-banks/*` + `question-banks-catalog.*`, `manifest.json`.
 catalog curation is done **by hand** (send a run's `catalog.json`; we regenerate
 `core/census/catalog.fields.json`). This works well; no automation needed.
 
-Stats: 54 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
-Validated against a live 579-course account + mitm captures.
+**Phase 2 (asset extraction): DONE** — see below. The export side is complete:
+courses + banks + folders + uploaded media all captured into a self-sufficient
+archive.
+
+Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
+Phase 0 validated against a live 579-course account + mitm captures.
 
 ## Known schema (captured)
 
@@ -46,30 +50,39 @@ Validated against a live 579-course account + mitm captures.
   `rise/questionBanks/{id}/…` (snake_case). CDN (`cdn.articulate.com`) + embeds
   kept as references.
 
-## Next: Phase 2 — asset extraction (finish the export side)
+## Phase 2 — asset extraction (finish the export side): DONE
 
-Goal: download the uploaded binaries so an archive is self-sufficient for import.
+The archive is now self-sufficient for import: uploaded binaries are downloaded
+from the public CDN and stored content-addressed.
 
-- From the census, collect **distinct uploaded-media keys** per course + per bank
-  (`media-image/video/audio/other`). Download from
-  `https://articulateusercontent.com/{key}` (public-read).
-- **Skip** (kept as references): `cdn.articulate.com`, YouTube/Vimeo embeds, and
-  **Storyline bundles** (recreated via Review 360, not re-uploaded).
-- Write an **asset manifest** per course/bank + verify **no uploaded key is left
-  un-downloaded** (CLAUDE.md invariant).
+- `core/assets/keys.ts` — reuses `scanRefs` (untruncated) to enumerate media
+  occurrences, then `extractUploadedKeys` pulls clean keys out of each value
+  (handles bare keys, usercontent URLs, and HTML-embedded URLs).
+  `collectAssetKeys` keeps `media-image/video/audio/other`, deduped by key.
+- `core/assets/download.ts` — `downloadAssetsFor` runs a bounded parallel pool
+  (`runPool`, default 4) of CDN downloads, hashes bytes (`sha256Hex`), writes
+  each blob once via an injected `AssetSink`, and builds the manifest.
+- `core/assets/manifest.ts` — per-owner `AssetManifest` + `findUndownloadedKeys`
+  (the loud-fail assertion: every collected key must resolve to a stored asset).
+- Panel: `orchestrator/assets.ts` (`cdnDownload`, `downloadAllAssets`) +
+  the "Assets (Phase 2)" card in `App.tsx`.
 
-**Locked decisions:**
-1. **Layout — content-addressed + dedup.** Store bytes once at
-   `assets/<sha256>.<ext>`; each course/bank gets an `assets-manifest.json`
-   mapping its media keys → hash/size/checksum. (Mirrors import's upload-once.)
-2. **Concurrency — parallel (~4), no human-pacing.** The 2s pacing invariant is
-   scoped to the Rise **authoring API** (course fetch/pagination), not the public
-   `articulateusercontent.com` CDN.
-3. **Storyline — do not download** bundle bytes.
+**Archive layout (new):**
+- `assets/<sha256>.<ext>` — content-addressed media bytes, deduped across the run.
+- `courses/<id>.assets.json` / `question-banks/<id>.assets.json` — per-owner
+  manifest mapping keys → `{hash, ext, file, size}` (sha256 = checksum).
+- `assets-summary.json` — run-wide totals (written/deduped/failed) + the
+  un-downloaded-key assertion result.
 
-Implementation notes: add `https://articulateusercontent.com/*` to
-`host_permissions`; add a binary write path to `FileSystemStorage`
-(`createWritable().write(Blob)`); reuse the existing `scanRefs` to enumerate keys.
+**Locked decisions (as built):** content-addressed dedup; parallel pool (~4), no
+human-pacing (CDN is public-read, outside the authoring-API pacing invariant);
+Storyline bundles, `cdn.articulate.com`, and YouTube/Vimeo embeds kept as
+references (not downloaded). Downloads run panel-side (extension page +
+`articulateusercontent.com` host permission), so no Rise tab / background relay
+is needed. Owners with an existing `*.assets.json` are resume-skipped (delete to
+force re-download).
+
+Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
 
 ## Then: Phase 3 — import / recreation (the write side)
 
