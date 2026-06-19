@@ -295,6 +295,11 @@ export function App() {
         cat.byType.map((t) => `${t.type}:${t.count}`).join(', ') || 'none'
       }. → question-banks-catalog.csv/json.`,
     );
+    if (cat.mediaRefs.length) {
+      addLog(
+        `Bank media: ${cat.mediaRefs.map((m) => `${m.kind}:${m.count}`).join(', ')}.`,
+      );
+    }
   }, [storage, onEvent, addLog]);
 
   const busy = phase === 'listing' || phase === 'exporting';
@@ -496,6 +501,11 @@ function BanksView({ banks }: { banks: BankCatalog }) {
         {banks.bankCount} bank(s) · {banks.questionCount} question(s) ·{' '}
         {banks.profiles.length} type(s)
       </p>
+      {banks.mediaRefs.length > 0 && (
+        <p className="hint">
+          media: {banks.mediaRefs.map((m) => `${m.kind} ${m.count}`).join(' · ')}
+        </p>
+      )}
       {banks.profiles.length > 0 && (
         <table>
           <thead>

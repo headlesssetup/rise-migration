@@ -77,4 +77,29 @@ describe('buildBankCatalog', () => {
     expect(core).toContain('title');
     expect(mc?.fields.find((f) => f.path === 'feedback')?.core).toBe(false);
   });
+
+  it('detects question-bank media (rise/questionBanks/… snake_case keys)', () => {
+    const withMedia = buildBankCatalog([
+      {
+        id: 'b1',
+        doc: {
+          questions: [
+            {
+              id: 'q1',
+              type: 'FILL_IN_THE_BLANK',
+              media: {
+                image: {
+                  key: 'rise/questionBanks/b1/ApJD32tYzib30O3N.jpg',
+                  crushed_key: 'rise/questionBanks/b1/KCMbO6.jpg',
+                },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    const img = withMedia.mediaRefs.find((m) => m.kind === 'media-image');
+    expect(img?.count).toBe(2); // key + crushed_key
+    expect(img?.bankCount).toBe(1);
+  });
 });

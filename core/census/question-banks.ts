@@ -6,6 +6,7 @@
 // question `type`, and let a live run's diagnostics confirm the schema.
 
 import { toCsv } from '@/core/util/csv';
+import { scanRefs } from './scan';
 import { keyPaths } from './signature';
 
 function isObj(x: unknown): x is Record<string, unknown> {
@@ -104,12 +105,22 @@ export interface QuestionTypeProfile {
   fields: QField[];
 }
 
+export interface BankMediaRef {
+  kind: string;
+  count: number;
+  bankCount: number;
+  examples: string[];
+}
+
 export interface BankCatalog {
   generatedAt: string;
   bankCount: number;
   questionCount: number;
   byType: { type: string; count: number }[];
   profiles: QuestionTypeProfile[];
+  /** Media / cross-refs found in bank questions (e.g. images under
+   *  rise/questionBanks/{id}/…) — banks carry their own assets, like courses. */
+  mediaRefs: BankMediaRef[];
 }
 
 interface Acc {
@@ -125,9 +136,22 @@ export function buildBankCatalog(
   now: Date = new Date(),
 ): BankCatalog {
   const map = new Map<string, Acc>();
+  const media = new Map<string, { count: number; banks: Set<string>; examples: string[] }>();
   let questionCount = 0;
 
   for (const bank of banks) {
+    // Media / cross-refs carried by this bank (snake_case keys under
+    // rise/questionBanks/{id}/… are detected by the shared scanner).
+    for (const ref of scanRefs(bank.doc, bank.id)) {
+      const m = media.get(ref.kind) ?? { count: 0, banks: new Set(), examples: [] };
+      m.count += 1;
+      m.banks.add(bank.id);
+      if (m.examples.length < 3 && !m.examples.includes(ref.value)) {
+        m.examples.push(ref.value);
+      }
+      media.set(ref.kind, m);
+    }
+
     const questions = extractQuestions(bank.doc);
     questions.forEach((q, i) => {
       questionCount += 1;
@@ -175,12 +199,22 @@ export function buildBankCatalog(
     }))
     .sort((x, y) => y.count - x.count || x.type.localeCompare(y.type));
 
+  const mediaRefs: BankMediaRef[] = [...media.entries()]
+    .map(([kind, m]) => ({
+      kind,
+      count: m.count,
+      bankCount: m.banks.size,
+      examples: m.examples,
+    }))
+    .sort((a, b) => b.count - a.count);
+
   return {
     generatedAt: now.toISOString(),
     bankCount: banks.length,
     questionCount,
     byType: profiles.map((p) => ({ type: p.type, count: p.count })),
     profiles,
+    mediaRefs,
   };
 }
 

@@ -65,7 +65,38 @@ alongside the per-answer `correct` flag.
    Source bytes are never mutated.
 3. Profile: walk every bank's questions, group by question `type`, and tally
    field-paths (core = present in every question of that type, vs optional) →
-   `question-banks-catalog.json` / `.csv`.
+   `question-banks-catalog.json` / `.csv`. The catalog also includes a
+   `mediaRefs` summary (see below).
+
+## Media (banks carry their own assets)
+
+Question media is **snake_case** and lives under **`rise/questionBanks/{bankId}/…`**
+(distinct from course media's camelCase `rise/courses/{id}/…`):
+
+```
+media: { image: { key, crushed_key, original_url, use_crushed_key, type,
+                  align, alt, tracking_context, tracking_id } }
+```
+
+The shared media scanner (`scanRefs`) detects both `rise/courses/…` and
+`rise/questionBanks/…`, so bank assets are inventoried alongside course assets —
+banks are treated like courses (export → mutate → re-import, media kept next to
+them). The bank catalog's `mediaRefs` reports media by kind (e.g. `media-image`)
+with counts. (Phase 2 downloads + re-uploads + remaps these keys, same as course
+media.)
+
+## Feedback model (captured)
+
+`feedback_type` selects which feedback texts apply:
+
+- **`ANY`** — one `feedback` (HTML), shown regardless.
+- **`CORRECT_INCORRECT`** — `feedback_correct` + `feedback_incorrect` (HTML).
+- **`CHOICE`** — per-answer `answers[].feedback` (HTML).
+- **absent** — legacy questions (just `feedback`, or none).
+
+`MULTIPLE_RESPONSE` carries all correct ids in `corrects[]` (plus `correct` = the
+first); `FILL_IN_THE_BLANK` uses `settings.is_case_sensitive` and multiple
+acceptable `answers` (each `correct:true`).
 
 > **Schema not yet mitm-captured.** The bank endpoints' exact response shapes are
 > parsed tolerantly and the tool logs the shape on a live run (e.g. "Found N

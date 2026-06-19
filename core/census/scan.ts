@@ -75,7 +75,10 @@ const MAX_SNIPPET = 200;
 const RE_USERCONTENT = /articulateusercontent\.com\//i;
 const RE_CDN = /cdn\.articulate\.com\//i;
 const RE_EMBED = /(?:youtube\.com|youtu\.be|vimeo\.com)/i;
-const RE_RISE_KEY = /(?:^|[/"'\s])rise\/courses\/[^/\s"']+\//i;
+// Uploaded-media keys live under rise/courses/{id}/… (course assets) and
+// rise/questionBanks/{id}/… (question-bank assets) — both are re-uploaded on
+// migration. (rise/assets/… are CDN theme assets, kept as-is, so not matched.)
+const RE_RISE_KEY = /(?:^|[/"'\s])rise\/(?:courses|questionBanks)\/[^/\s"']+\//i;
 
 const RE_IMG = /\.(?:jpe?g|png|gif|svg|webp|bmp|avif|tiff?)(?:[?#]|$)/i;
 const RE_VID = /\.(?:mp4|webm|mov|m4v|ogv|avi|mkv)(?:[?#]|$)/i;
@@ -109,6 +112,52 @@ function truncate(s: string): string {
 }
 
 /**
+ * Generic recursive media/cross-ref scan of any document — courses OR question
+ * banks. Returns every media-key (image/video/audio/storyline/other), CDN URL,
+ * embed, and cross-ref (Storyline media, draw-from-bank). `ownerId` tags each
+ * occurrence with its source doc (course id or bank id).
+ */
+export function scanRefs(doc: unknown, ownerId?: string): RefOccurrence[] {
+  const refs: RefOccurrence[] = [];
+  const walk = (node: unknown, path: string): void => {
+    if (node === null || node === undefined) return;
+    if (typeof node === 'string') {
+      const kind = classifyString(node, path);
+      if (kind) refs.push({ kind, path, value: truncate(node), courseId: ownerId });
+      return;
+    }
+    if (typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((child, i) => walk(child, `${path}[${i}]`));
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    if (obj.type === 'DRAW_FROM_QUESTION_BANK') {
+      refs.push({
+        kind: 'draw-from-bank-crossref',
+        path,
+        value: truncate(JSON.stringify(obj)),
+        courseId: ownerId,
+      });
+    }
+    for (const [k, v] of Object.entries(obj)) {
+      const childPath = `${path}.${k}`;
+      if (k === 'storyline' && v && typeof v === 'object') {
+        refs.push({
+          kind: 'storyline-crossref',
+          path: childPath,
+          value: truncate(JSON.stringify(v)),
+          courseId: ownerId,
+        });
+      }
+      walk(v, childPath);
+    }
+  };
+  walk(doc, '$');
+  return refs;
+}
+
+/**
  * Scan a single GET_COURSE payload. Accepts either the `payload` object
  * (`{course, lessons}`) or a full ducks envelope (`{payload: …}`) — it walks
  * whatever it's given recursively, so both work.
@@ -118,7 +167,7 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     typeof doc?.course?.id === 'string' ? doc.course.id : undefined;
 
   const blocks: BlockOccurrence[] = [];
-  const refs: RefOccurrence[] = [];
+  const refs = scanRefs(doc, courseId);
   const variantFieldMap = new Map<string, VariantFieldAcc>();
   const lessonTypes = new Set<string>();
   const questionTypes = new Set<string>();
@@ -129,14 +178,9 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
       ? doc.course.version
       : undefined;
 
+  // Walk for blocks / shapes / question types / version (refs done by scanRefs).
   const walk = (node: unknown, path: string): void => {
     if (node === null || node === undefined) return;
-
-    if (typeof node === 'string') {
-      const kind = classifyString(node, path);
-      if (kind) refs.push({ kind, path, value: truncate(node), courseId });
-      return;
-    }
     if (typeof node !== 'object') return;
 
     if (Array.isArray(node)) {
@@ -183,28 +227,8 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
       questionTypes.add(obj.type);
     }
 
-    // Cross-ref: draw-from-bank item.
-    if (obj.type === 'DRAW_FROM_QUESTION_BANK') {
-      refs.push({
-        kind: 'draw-from-bank-crossref',
-        path,
-        value: truncate(JSON.stringify(obj)),
-        courseId,
-      });
-    }
-
     for (const [k, v] of Object.entries(obj)) {
       const childPath = `${path}.${k}`;
-
-      // Cross-ref: Storyline media block → Review 360 item.
-      if (k === 'storyline' && v && typeof v === 'object') {
-        refs.push({
-          kind: 'storyline-crossref',
-          path: childPath,
-          value: truncate(JSON.stringify(v)),
-          courseId,
-        });
-      }
 
       // Version signal fallback (shallowest wins).
       if (

@@ -10,6 +10,8 @@ describe('classifyString', () => {
     );
     expect(classifyString('rise/courses/abc/file.mp4')).toBe('media-video');
     expect(classifyString('rise/courses/abc/clip.mp3')).toBe('media-audio');
+    // Question-bank assets live under rise/questionBanks/{id}/…
+    expect(classifyString('rise/questionBanks/bnk/img.jpg')).toBe('media-image');
     // No extension hint, but the JSON path says it's a video.
     expect(
       classifyString('rise/courses/abc/transcoded-xyz', '$.media.video.key'),
