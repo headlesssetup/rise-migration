@@ -34,6 +34,8 @@ Output folder layout:
 <folder>/
   courses/<courseId>.json        raw GET_COURSE bodies (immutable)
   inventory.json|csv             list-level catalog (written at listing time)
+  folders.json                   raw folder tree (GET /manage/api/folders)
+  folders-inventory.json|csv     course + bank folders, name-paths, counts
   census.json|csv                content-level census (written after fetch)
   catalog.json|csv               per-variant field profiles (block knowledge base)
   novelty.json|csv               Tier-2 novelty: new variants + new fields vs catalog

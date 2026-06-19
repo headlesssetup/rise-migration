@@ -86,6 +86,15 @@ export class FileSystemStorage implements Storage {
     await this.writeFile(this.root, 'inventory.csv', csv);
   }
 
+  async readInventory(): Promise<string | null> {
+    try {
+      const handle = await this.root.getFileHandle('inventory.json');
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
   async writeCensus(json: string, csv: string): Promise<void> {
     await this.writeFile(this.root, 'census.json', json);
     await this.writeFile(this.root, 'census.csv', csv);
@@ -151,8 +160,36 @@ export class FileSystemStorage implements Storage {
     return ids;
   }
 
+  async readBankIndex(): Promise<string | null> {
+    try {
+      const dir = await this.banksDir();
+      const handle = await dir.getFileHandle('_index.json');
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
   async writeBankCatalog(json: string, csv: string): Promise<void> {
     await this.writeFile(this.root, 'question-banks-catalog.json', json);
     await this.writeFile(this.root, 'question-banks-catalog.csv', csv);
+  }
+
+  async writeFolders(raw: string): Promise<void> {
+    await this.writeFile(this.root, 'folders.json', raw);
+  }
+
+  async readFolders(): Promise<string | null> {
+    try {
+      const handle = await this.root.getFileHandle('folders.json');
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
+  async writeFolderInventory(json: string, csv: string): Promise<void> {
+    await this.writeFile(this.root, 'folders-inventory.json', json);
+    await this.writeFile(this.root, 'folders-inventory.csv', csv);
   }
 }

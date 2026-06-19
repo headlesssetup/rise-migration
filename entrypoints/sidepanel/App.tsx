@@ -34,8 +34,10 @@ import {
   verifyPermission,
 } from './folder-store';
 import {
+  buildFolders,
   countCourses,
   exportCourses,
+  fetchFolders,
   fetchQuestionBanks,
   listAllCourses,
   scanSavedBanks,
@@ -201,6 +203,17 @@ export function App() {
     if (storage) {
       await storage.writeInventory(inventoryToJson(rows), inventoryToCsv(rows));
       addLog(`Inventory written (${rows.length} rows) → inventory.csv/json.`);
+
+      // Folder structure (course folders now; bank folders after a bank fetch).
+      await fetchFolders(storage, onEvent);
+      const folders = await buildFolders(storage);
+      if (folders.length) {
+        const course = folders.filter((f) => f.source === 'course').length;
+        const bank = folders.filter((f) => f.source === 'bank').length;
+        addLog(
+          `Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`,
+        );
+      }
     } else {
       addLog(
         `Inventory built (${rows.length} rows) — connect a folder to save it.`,
@@ -299,6 +312,11 @@ export function App() {
       addLog(
         `Bank media: ${cat.mediaRefs.map((m) => `${m.kind}:${m.count}`).join(', ')}.`,
       );
+    }
+    // Merge bank folders (from the saved index) into the folder inventory.
+    const folders = await buildFolders(storage);
+    if (folders.length) {
+      addLog(`Folders updated: ${folders.length} total (incl. bank folders).`);
     }
   }, [storage, onEvent, addLog]);
 

@@ -22,6 +22,7 @@ export type BackgroundRequest =
   | { type: 'GET_SESSION_STATE' }
   | { type: 'SEARCH_COURSES'; page: number; pageSize?: number }
   | { type: 'GET_COURSE'; courseId: string }
+  | { type: 'LIST_FOLDERS' }
   | { type: 'LIST_QUESTION_BANKS' }
   | { type: 'GET_QUESTION_BANK'; bankId: string };
 
@@ -39,5 +40,6 @@ export type BackgroundResponse =
       type: 'COURSE_RESULT';
       result: FetchResult<{ raw: string; doc: GetCourseDocument }>;
     }
+  | { type: 'FOLDERS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
   | { type: 'BANKS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
   | { type: 'BANK_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> };

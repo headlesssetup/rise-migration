@@ -10,6 +10,7 @@ import { identityFromToken, type Identity } from '@/core/auth/jwt';
 import {
   buildGetCourseRequest,
   buildGetQuestionBankRequest,
+  buildListFoldersRequest,
   buildListQuestionBanksRequest,
   buildSearchRequest,
   REFRESH_URL,
@@ -256,6 +257,30 @@ export default defineBackground(() => {
               ok: false,
               status: r.status,
               error: 'GET_COURSE response was not valid JSON.',
+            },
+          };
+        }
+      }
+
+      case 'LIST_FOLDERS': {
+        const r = await rawFetch(buildListFoldersRequest());
+        if (!r.ok) return { type: 'FOLDERS_RESULT', result: r };
+        try {
+          return {
+            type: 'FOLDERS_RESULT',
+            result: {
+              ok: true,
+              status: r.status,
+              data: { raw: r.data, doc: JSON.parse(r.data) },
+            },
+          };
+        } catch {
+          return {
+            type: 'FOLDERS_RESULT',
+            result: {
+              ok: false,
+              status: r.status,
+              error: 'Folders list was not valid JSON.',
             },
           };
         }

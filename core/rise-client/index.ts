@@ -60,6 +60,15 @@ export function buildGetCourseRequest(courseId: string): RequestSpec {
 }
 
 /**
+ * GET /manage/api/folders — the folder tree for courses (id, name,
+ * parentFolderId, folderType…). Needed to preserve folder structure on
+ * migration. (Bank folders come inline in the question-banks list.)
+ */
+export function buildListFoldersRequest(): RequestSpec {
+  return { url: '/manage/api/folders', method: 'GET' };
+}
+
+/**
  * GET /api/rise-authoring/question_banks — list reusable question banks
  * (API ref §9). These are separate from course content; draw-from-bank blocks
  * reference a bank id. Needed for migration of draw-from-bank blocks.

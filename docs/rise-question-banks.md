@@ -36,21 +36,49 @@ The tool saves each bank object (from this list) to `question-banks/{id}.json`
 and only falls back to a per-bank fetch if a bank lacks an inline `questions`
 array.
 
-## Question schema (captured)
+## Question schema (full, captured)
 
-A question:
+Every field observed across the captured banks. Enough to construct a question
+from scratch (the remaining unknown for *pushing* is the write envelope below).
 
-```
-{ id, type, title (HTML),
-  answers: [ { id, title, correct, matchTitle? } ],
-  correct, corrects, feedback, media? }
-```
+**Question object**
 
-Question `type`s seen across the 581-course library (as inline course blocks;
-banks reuse the same shapes): `MULTIPLE_CHOICE` (291), `MULTIPLE_RESPONSE` (209),
-`MATCHING` (67, answers carry `matchTitle`), `FILL_IN_THE_BLANK` (6). Bank
-questions can also carry `media` (e.g. an image) and a `corrects` array
-alongside the per-answer `correct` flag.
+| field | type | notes |
+|---|---|---|
+| `id` | string (cuid) | client-generated; regenerate on recreate |
+| `type` | string | `MULTIPLE_CHOICE` \| `MULTIPLE_RESPONSE` \| `MATCHING` \| `FILL_IN_THE_BLANK` |
+| `title` | HTML string | the prompt; wrapped in `<div data-editor-id="…">…</div>` |
+| `answers` | array | see below |
+| `correct` | string | the single correct answer id (MC); first correct id (MR) |
+| `corrects` | string[] | all correct answer ids (MR); `[]` for single-answer |
+| `feedback` | HTML string | shown when `feedback_type=ANY` (or legacy) |
+| `feedback_correct` | HTML string | shown when `feedback_type=CORRECT_INCORRECT` |
+| `feedback_incorrect` | HTML string | shown when `feedback_type=CORRECT_INCORRECT` |
+| `feedback_type` | string | `ANY` \| `CORRECT_INCORRECT` \| `CHOICE` \| absent (legacy) |
+| `settings` | object | e.g. `{ is_case_sensitive }` (FILL_IN_THE_BLANK) |
+| `media` | object | optional `{ image: {…} }` — see Media section (snake_case) |
+
+**Answer object** (`answers[]`)
+
+| field | type | notes |
+|---|---|---|
+| `id` | string (cuid) | client-generated |
+| `title` | string | HTML for MC/MR/MATCHING; plain text for FILL_IN_THE_BLANK |
+| `correct` | bool | FILL_IN_THE_BLANK lists multiple acceptable answers, each `correct:true` |
+| `matchTitle` | string | MATCHING only — the right-hand match for this left item |
+| `feedback` | HTML string | per-answer feedback, used when `feedback_type=CHOICE` |
+
+**Per type**
+- `MULTIPLE_CHOICE` — one `correct` id; `corrects:[]`.
+- `MULTIPLE_RESPONSE` — `corrects:[…]` (all correct), `correct` = first of them.
+- `MATCHING` — answers carry `matchTitle`; left `title` ↔ right `matchTitle`.
+- `FILL_IN_THE_BLANK` — answers are accepted strings (`correct:true`);
+  `settings.is_case_sensitive`; `feedback_type` typically `CORRECT_INCORRECT`.
+
+Counts across the 581-course library (as inline course blocks; banks reuse the
+same shapes): `MULTIPLE_CHOICE` (291), `MULTIPLE_RESPONSE` (209), `MATCHING`
+(67), `FILL_IN_THE_BLANK` (6). HTML `title`/`feedback` carry `data-editor-id`
+attributes — preserve verbatim.
 
 ## What the tool does (Phase 0 — read-only)
 

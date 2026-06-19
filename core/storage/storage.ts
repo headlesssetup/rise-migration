@@ -15,6 +15,8 @@ export interface Storage {
   writeManifest(manifest: unknown): Promise<void>;
   /** Write the list-level inventory (catalog from the search listing). */
   writeInventory(json: string, csv: string): Promise<void>;
+  /** Read the list-level inventory JSON (for folder counts), or null. */
+  readInventory(): Promise<string | null>;
   /** Write the content-level census deliverables (after GET_COURSE fetch). */
   writeCensus(json: string, csv: string): Promise<void>;
   /** Write the per-variant field-profile catalog (the block knowledge base). */
@@ -31,6 +33,14 @@ export interface Storage {
   readQuestionBank(bankId: string): Promise<string | null>;
   /** Bank ids already saved. */
   listSavedBanks(): Promise<string[]>;
+  /** Read the raw question-banks index (for bank-folder + bank parsing), or null. */
+  readBankIndex(): Promise<string | null>;
   /** Write the question-bank catalog (per-question-type field profiles). */
   writeBankCatalog(json: string, csv: string): Promise<void>;
+  /** Write the raw folders list response. */
+  writeFolders(raw: string): Promise<void>;
+  /** Read the raw folders list response, or null. */
+  readFolders(): Promise<string | null>;
+  /** Write the combined folder inventory (course + bank, with name-paths). */
+  writeFolderInventory(json: string, csv: string): Promise<void>;
 }
