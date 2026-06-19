@@ -9,6 +9,8 @@
 import { identityFromToken, type Identity } from '@/core/auth/jwt';
 import {
   buildGetCourseRequest,
+  buildGetQuestionBankRequest,
+  buildListQuestionBanksRequest,
   buildSearchRequest,
   REFRESH_URL,
   type RequestSpec,
@@ -254,6 +256,54 @@ export default defineBackground(() => {
               ok: false,
               status: r.status,
               error: 'GET_COURSE response was not valid JSON.',
+            },
+          };
+        }
+      }
+
+      case 'LIST_QUESTION_BANKS': {
+        const r = await rawFetch(buildListQuestionBanksRequest());
+        if (!r.ok) return { type: 'BANKS_RESULT', result: r };
+        try {
+          return {
+            type: 'BANKS_RESULT',
+            result: {
+              ok: true,
+              status: r.status,
+              data: { raw: r.data, doc: JSON.parse(r.data) },
+            },
+          };
+        } catch {
+          return {
+            type: 'BANKS_RESULT',
+            result: {
+              ok: false,
+              status: r.status,
+              error: 'Question-banks list was not valid JSON.',
+            },
+          };
+        }
+      }
+
+      case 'GET_QUESTION_BANK': {
+        const r = await rawFetch(buildGetQuestionBankRequest(msg.bankId));
+        if (!r.ok) return { type: 'BANK_RESULT', result: r };
+        try {
+          return {
+            type: 'BANK_RESULT',
+            result: {
+              ok: true,
+              status: r.status,
+              data: { raw: r.data, doc: JSON.parse(r.data) },
+            },
+          };
+        } catch {
+          return {
+            type: 'BANK_RESULT',
+            result: {
+              ok: false,
+              status: r.status,
+              error: 'Question-bank response was not valid JSON.',
             },
           };
         }

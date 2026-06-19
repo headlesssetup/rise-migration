@@ -13,6 +13,12 @@ import {
   profileToJson,
 } from '@/core/census/profile';
 import {
+  bankCatalogToCsv,
+  bankCatalogToJson,
+  buildBankCatalog,
+  type BankCatalog,
+} from '@/core/census/question-banks';
+import {
   buildInventory,
   inventoryToCsv,
   inventoryToJson,
@@ -30,7 +36,9 @@ import {
 import {
   countCourses,
   exportCourses,
+  fetchQuestionBanks,
   listAllCourses,
+  scanSavedBanks,
   scanSavedCourses,
   type ProgressEvent,
 } from './orchestrator';
@@ -61,6 +69,7 @@ export function App() {
   );
   const [census, setCensus] = useState<Census | null>(null);
   const [novelty, setNovelty] = useState<NoveltyReport | null>(null);
+  const [banks, setBanks] = useState<BankCatalog | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((message: string) => {
@@ -267,6 +276,27 @@ export function App() {
     );
   }, [storage, selectedCourses, onEvent, addLog]);
 
+  const runBanks = useCallback(async () => {
+    if (!storage) return;
+    setPhase('exporting');
+    setBanks(null);
+    setProgress(null);
+    const res = await fetchQuestionBanks(storage, onEvent);
+    const saved = await scanSavedBanks(storage, onEvent);
+    const cat = buildBankCatalog(saved);
+    await storage.writeBankCatalog(bankCatalogToJson(cat), bankCatalogToCsv(cat));
+    setBanks(cat);
+    setPhase('done');
+    if (res.failed.length) {
+      addLog(`Question banks: ${res.failed.length} failed to fetch.`);
+    }
+    addLog(
+      `Question banks: ${cat.bankCount} bank(s), ${cat.questionCount} question(s); types: ${
+        cat.byType.map((t) => `${t.type}:${t.count}`).join(', ') || 'none'
+      }. → question-banks-catalog.csv/json.`,
+    );
+  }, [storage, onEvent, addLog]);
+
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
 
@@ -380,6 +410,21 @@ export function App() {
         )}
       </section>
 
+      <section className="card">
+        <h2>Question banks</h2>
+        <button
+          onClick={runBanks}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Fetch question banks (paced)'}
+        </button>
+        <p className="hint">
+          Reusable banks referenced by draw-from-bank blocks — saved to
+          question-banks/, profiled in question-banks-catalog.csv/json.
+        </p>
+        {banks && <BanksView banks={banks} />}
+      </section>
+
       {progress && (
         <section className="card">
           <h2>Progress</h2>
@@ -441,6 +486,39 @@ function SessionView({
         Courses: <b>{totalCount ?? '—'}</b>
       </li>
     </ul>
+  );
+}
+
+function BanksView({ banks }: { banks: BankCatalog }) {
+  return (
+    <div className="census">
+      <p>
+        {banks.bankCount} bank(s) · {banks.questionCount} question(s) ·{' '}
+        {banks.profiles.length} type(s)
+      </p>
+      {banks.profiles.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>question type</th>
+              <th>count</th>
+              <th>banks</th>
+              <th>fields</th>
+            </tr>
+          </thead>
+          <tbody>
+            {banks.profiles.map((p) => (
+              <tr key={p.type}>
+                <td>{p.type}</td>
+                <td>{p.count}</td>
+                <td>{p.bankCount}</td>
+                <td>{p.fields.length}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 

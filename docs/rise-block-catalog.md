@@ -81,20 +81,43 @@ courses across that library.
 
 ## Question types (inline quiz / knowledge-check blocks)
 
-| type | Answer shape | Notes | Status |
+Counts from the 581-course library scan.
+
+| type | Answer shape | Count | Status |
 |---|---|---|---|
-| `MATCHING` | `answers:[{id,title,matchTitle}]` | — | documented |
-| `MULTIPLE_CHOICE` | answers carry `correct` flag | — | documented |
-| `MULTIPLE_RESPONSE` | answers carry `correct` flag | — | seen |
-| `FILL_IN_BLANK` | _TODO_ | — | seen |
+| `MULTIPLE_CHOICE` | answers carry `correct` flag | 291 | documented |
+| `MULTIPLE_RESPONSE` | answers carry `correct` flag | 209 | documented |
+| `MATCHING` | `answers:[{id,title,matchTitle}]` | 67 | documented |
+| `FILL_IN_THE_BLANK` | text answer(s); blanks in `title` | 6 | seen |
+
+> The earlier `FILL_IN_BLANK` was a guess — the real type string is
+> **`FILL_IN_THE_BLANK`**.
 
 ## Lesson types
 
-| type | Meaning | Status |
-|---|---|---|
-| `blocks` | Normal content lesson | documented |
-| `section` | Module header (no content) | documented |
-| `quiz` | Graded quiz lesson (`{type:"quiz", icon:"Quiz"}`) | documented |
+Counts from the 581-course library scan. Beyond the three core types, a handful
+of lessons report a block-like `type` (a single fullscreen interaction filling
+the lesson) — kept here for completeness; copy-faithful handles them.
+
+| type | Meaning | Count | Status |
+|---|---|---|---|
+| `blocks` | Normal content lesson | 559 | documented |
+| `section` | Module header (no content) | 225 | documented |
+| `quiz` | Graded quiz lesson (`{type:"quiz", icon:"Quiz"}`) | 156 | documented |
+| `embed` / `map` / `process` / `timeline` / `video` | Single-interaction lessons | 1 each | seen |
+
+## Library census (581 courses, 2026-06-19)
+
+- **65 distinct `family/variant`**, all documented above; full per-variant field
+  profiles in `core/census/catalog.fields.json` (5,435 field-paths).
+- **Reference distribution:** `media-image` 56,026 · `cdn` 11,061 ·
+  `media-storyline` 1,021 · `media-audio` 714 · `media-video` 713 ·
+  `storyline-crossref` 450 · `embed` 209 · `media-other` 135 ·
+  `draw-from-bank-crossref` 29.
+- **Version signal — Rise DOES expose one.** `course.version` carries values like
+  `3.100.34725.0`, `3.101.34961.0`, `3.102.35072.0` (Rise build/schema), plus
+  legacy `0`/`1` on older courses. Use it for Tier-2 version-difference hints
+  (PRD §8 / §15 resolved: a per-course version id exists).
 
 ## Pending capture (expected, not individually confirmed)
 

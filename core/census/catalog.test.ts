@@ -15,8 +15,9 @@ describe('catalog', () => {
     expect(f?.has('items[].media.audio.key')).toBe(true);
   });
 
-  it('has no field baseline for variants not yet field-catalogued', () => {
-    // Known by name but no recorded fields yet → not field-diffed.
-    expect(knownFieldsFor('image/hero')).toBeNull();
+  it('has no field baseline for a wildcard variant without recorded fields', () => {
+    // Known via the text/* wildcard, but no specific field baseline recorded.
+    expect(isKnownVariant('text/some-unseen-variant')).toBe(true);
+    expect(knownFieldsFor('text/some-unseen-variant')).toBeNull();
   });
 });

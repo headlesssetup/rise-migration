@@ -58,3 +58,24 @@ export function buildGetCourseRequest(courseId: string): RequestSpec {
     }),
   };
 }
+
+/**
+ * GET /api/rise-authoring/question_banks — list reusable question banks
+ * (API ref §9). These are separate from course content; draw-from-bank blocks
+ * reference a bank id. Needed for migration of draw-from-bank blocks.
+ */
+export function buildListQuestionBanksRequest(): RequestSpec {
+  return { url: '/api/rise-authoring/question_banks', method: 'GET' };
+}
+
+/**
+ * GET /api/rise-authoring/question_banks/{id} — one bank with its questions
+ * (API ref §9). A question = {id, type, title, answers:[{id,title,correct}],
+ * feedback, …}.
+ */
+export function buildGetQuestionBankRequest(bankId: string): RequestSpec {
+  return {
+    url: `/api/rise-authoring/question_banks/${encodeURIComponent(bankId)}`,
+    method: 'GET',
+  };
+}

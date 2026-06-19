@@ -21,4 +21,16 @@ export interface Storage {
   writeCatalog(json: string, csv: string): Promise<void>;
   /** Write the Tier-2 novelty report (new variants + new fields vs catalog). */
   writeNovelty(json: string, csv: string): Promise<void>;
+  /** Write the raw question-banks list response. */
+  writeBankIndex(raw: string): Promise<void>;
+  /** Write one question bank's raw body verbatim. */
+  writeQuestionBank(bankId: string, raw: string): Promise<void>;
+  /** Has this question bank already been saved? */
+  hasQuestionBank(bankId: string): Promise<boolean>;
+  /** Read back a saved question bank, or null. */
+  readQuestionBank(bankId: string): Promise<string | null>;
+  /** Bank ids already saved. */
+  listSavedBanks(): Promise<string[]>;
+  /** Write the question-bank catalog (per-question-type field profiles). */
+  writeBankCatalog(json: string, csv: string): Promise<void>;
 }

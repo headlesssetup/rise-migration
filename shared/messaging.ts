@@ -21,7 +21,9 @@ export interface SessionState {
 export type BackgroundRequest =
   | { type: 'GET_SESSION_STATE' }
   | { type: 'SEARCH_COURSES'; page: number; pageSize?: number }
-  | { type: 'GET_COURSE'; courseId: string };
+  | { type: 'GET_COURSE'; courseId: string }
+  | { type: 'LIST_QUESTION_BANKS' }
+  | { type: 'GET_QUESTION_BANK'; bankId: string };
 
 /** Notifications the content script sends to the background. */
 export type ContentMessage =
@@ -36,4 +38,6 @@ export type BackgroundResponse =
   | {
       type: 'COURSE_RESULT';
       result: FetchResult<{ raw: string; doc: GetCourseDocument }>;
-    };
+    }
+  | { type: 'BANKS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
+  | { type: 'BANK_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> };

@@ -11,6 +11,7 @@
 import type { Storage } from './storage';
 
 const COURSES_DIR = 'courses';
+const BANKS_DIR = 'question-banks';
 
 export class FileSystemStorage implements Storage {
   constructor(private readonly root: FileSystemDirectoryHandle) {}
@@ -98,5 +99,60 @@ export class FileSystemStorage implements Storage {
   async writeNovelty(json: string, csv: string): Promise<void> {
     await this.writeFile(this.root, 'novelty.json', json);
     await this.writeFile(this.root, 'novelty.csv', csv);
+  }
+
+  private async banksDir(): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(BANKS_DIR, { create: true });
+  }
+
+  async writeBankIndex(raw: string): Promise<void> {
+    const dir = await this.banksDir();
+    await this.writeFile(dir, '_index.json', raw);
+  }
+
+  async writeQuestionBank(bankId: string, raw: string): Promise<void> {
+    const dir = await this.banksDir();
+    await this.writeFile(dir, `${bankId}.json`, raw);
+  }
+
+  async readQuestionBank(bankId: string): Promise<string | null> {
+    try {
+      const dir = await this.banksDir();
+      const handle = await dir.getFileHandle(`${bankId}.json`);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
+  async hasQuestionBank(bankId: string): Promise<boolean> {
+    try {
+      const dir = await this.banksDir();
+      await dir.getFileHandle(`${bankId}.json`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async listSavedBanks(): Promise<string[]> {
+    const dir = await this.banksDir();
+    const ids: string[] = [];
+    const entries = (
+      dir as FileSystemDirectoryHandle & {
+        entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+      }
+    ).entries();
+    for await (const [name, handle] of entries) {
+      if (handle.kind === 'file' && name.endsWith('.json') && name !== '_index.json') {
+        ids.push(name.replace(/\.json$/, ''));
+      }
+    }
+    return ids;
+  }
+
+  async writeBankCatalog(json: string, csv: string): Promise<void> {
+    await this.writeFile(this.root, 'question-banks-catalog.json', json);
+    await this.writeFile(this.root, 'question-banks-catalog.csv', csv);
   }
 }

@@ -32,13 +32,20 @@ Output folder layout:
 
 ```
 <folder>/
-  courses/<courseId>.json   raw GET_COURSE bodies (immutable)
-  inventory.json|csv        list-level catalog (written at listing time)
-  census.json|csv           content-level census (written after fetch)
-  catalog.json|csv          per-variant field profiles (block knowledge base)
-  novelty.json|csv          Tier-2 novelty: new variants + new fields vs catalog
-  manifest.json             run index
+  courses/<courseId>.json        raw GET_COURSE bodies (immutable)
+  inventory.json|csv             list-level catalog (written at listing time)
+  census.json|csv                content-level census (written after fetch)
+  catalog.json|csv               per-variant field profiles (block knowledge base)
+  novelty.json|csv               Tier-2 novelty: new variants + new fields vs catalog
+  question-banks/<id>.json       raw question banks (+ _index.json)
+  question-banks-catalog.json|csv per-question-type field profiles
+  manifest.json                  run index
 ```
+
+**Question banks.** Reusable banks referenced by `draw from question bank` blocks
+live outside `GET_COURSE`, so "Fetch question banks" enumerates them
+(`/api/rise-authoring/question_banks`), paced-fetches + saves each raw, and
+profiles their questions by `type`. See `docs/rise-question-banks.md`.
 
 **Catalog + novelty (Tier-2, PRD §8).** For each block, a structural signature
 (`family/variant` + recursive key-paths; array indices → `[]`, id-shaped map keys
