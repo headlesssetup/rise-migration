@@ -9,7 +9,7 @@ export default defineConfig({
     name: 'Rise Migration — Explorer (Phase 0)',
     description:
       'Read-only Rise exploration: identity, course census, raw GET_COURSE export.',
-    permissions: ['sidePanel', 'storage', 'webRequest'],
+    permissions: ['sidePanel', 'storage', 'webRequest', 'scripting'],
     host_permissions: [
       'https://rise.articulate.com/*',
       'https://id.articulate.com/*',

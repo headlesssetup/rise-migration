@@ -1,5 +1,8 @@
-// Background service worker: owns auth + cross-origin fetch.
+// Background service worker: owns auth + fetch orchestration.
 //   - Captures the bearer JWT by observing real Rise requests (webRequest).
+//   - Runs API calls INSIDE the Rise tab (first-party cookies) via scripting,
+//     because Rise's catalog/manage API is cookie-authenticated and a
+//     SameSite cookie is withheld from an extension-origin (cross-site) fetch.
 //   - Exposes typed fetch RPCs to the side panel (search, get-course).
 //   - Pacing lives in the panel, NOT here.
 
@@ -18,6 +21,37 @@ import type {
 } from '@/shared/messaging';
 
 const TOKEN_KEY = 'riseToken';
+const RISE_TAB_GLOB = 'https://rise.articulate.com/*';
+
+interface InPageResult {
+  ok: boolean;
+  status: number;
+  text?: string;
+  error?: string;
+}
+
+// Executed INSIDE the Rise tab (isolated world) — a same-origin fetch that
+// rides the live session's first-party cookies, plus the bearer if we have it.
+// Must be self-contained (no closures): it is serialized by executeScript.
+async function fetchInRiseTab(
+  spec: { url: string; method: string; body?: string },
+  token: string | null,
+): Promise<InPageResult> {
+  try {
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (spec.body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(spec.url, {
+      method: spec.method,
+      headers,
+      body: spec.body,
+      credentials: 'include',
+    });
+    return { ok: res.ok, status: res.status, text: await res.text() };
+  } catch (e) {
+    return { ok: false, status: 0, error: String(e) };
+  }
+}
 
 export default defineBackground(() => {
   let token: string | null = null;
@@ -68,48 +102,67 @@ export default defineBackground(() => {
     ['requestHeaders', 'extraHeaders'],
   );
 
-  // --- Cross-origin fetch with bearer + one-shot 401 refresh ----------------
+  // Locate the live Rise tab and run the fetch inside it (first-party cookies).
+  async function relayFetch(spec: RequestSpec): Promise<InPageResult> {
+    const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOB });
+    const tab = tabs.find((t) => typeof t.id === 'number');
+    if (!tab || typeof tab.id !== 'number') {
+      return {
+        ok: false,
+        status: 0,
+        error:
+          'No open rise.articulate.com tab. Open and log into Rise, keep that tab open, then retry.',
+      };
+    }
+    try {
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'ISOLATED',
+        func: fetchInRiseTab,
+        args: [{ url: spec.url, method: spec.method, body: spec.body }, token],
+      });
+      return (
+        (injection?.result as InPageResult | undefined) ?? {
+          ok: false,
+          status: 0,
+          error: 'No result returned from the Rise tab.',
+        }
+      );
+    } catch (e) {
+      return {
+        ok: false,
+        status: 0,
+        error: `Could not run in the Rise tab (try reloading it): ${(e as Error).message}`,
+      };
+    }
+  }
+
+  // --- In-page fetch with one-shot 401 refresh ------------------------------
   async function rawFetch(
     spec: RequestSpec,
     attempt = 0,
   ): Promise<FetchResult<string>> {
-    if (!token) {
-      return {
-        ok: false,
-        error:
-          'No Rise token captured yet. Open a logged-in rise.articulate.com tab and interact with it.',
-      };
-    }
-    let res: Response;
-    try {
-      res = await fetch(spec.url, {
-        method: spec.method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...(spec.body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body: spec.body,
-        credentials: 'omit',
-      });
-    } catch (e) {
-      return { ok: false, error: `Network error: ${(e as Error).message}` };
-    }
+    const r = await relayFetch(spec);
 
-    if (res.status === 401 && attempt === 0 && (await tryRefresh())) {
+    if (r.status === 401 && attempt === 0 && (await tryRefresh())) {
       return rawFetch(spec, 1);
     }
-    if (res.status === 401) {
+    if (r.status === 401) {
       return {
         ok: false,
         status: 401,
         error:
-          'Unauthorized — token expired. Re-interact with the Rise tab to capture a fresh token, then retry.',
+          'Unauthorized (401) from Rise. Make sure you are logged into the open Rise tab, then retry.',
       };
     }
-    if (!res.ok) {
-      return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    if (!r.ok) {
+      return {
+        ok: false,
+        status: r.status || undefined,
+        error: r.error ?? `HTTP ${r.status}`,
+      };
     }
-    return { ok: true, status: res.status, data: await res.text() };
+    return { ok: true, status: r.status, data: r.text ?? '' };
   }
 
   // Best-effort refresh (rides the id.articulate.com session cookie). The fresh
@@ -131,11 +184,21 @@ export default defineBackground(() => {
     msg: BackgroundRequest,
   ): Promise<BackgroundResponse> {
     switch (msg.type) {
-      case 'GET_SESSION_STATE':
+      case 'GET_SESSION_STATE': {
+        // Live tab query is authoritative (survives SW restarts; the content
+        // script ping only updates the cached flag).
+        let present = risePresent;
+        try {
+          const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOB });
+          present = tabs.some((t) => typeof t.id === 'number');
+        } catch {
+          /* keep the ping-based value */
+        }
         return {
           type: 'SESSION_STATE',
-          state: { hasToken: !!token, risePresent, identity },
+          state: { hasToken: !!token, risePresent: present, identity },
         };
+      }
 
       case 'SEARCH_COURSES': {
         const r = await rawFetch(

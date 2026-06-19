@@ -62,6 +62,12 @@ then pick a folder and list/fetch courses.
 
 ## Notes / open items
 
+- **API calls run inside the Rise tab.** Rise's catalog/`manage/api` is
+  cookie-authenticated; a `SameSite` session cookie is withheld from an
+  extension-origin (cross-site) fetch, so the background runs the fetch in the
+  live Rise tab via `chrome.scripting.executeScript` (first-party cookies +
+  bearer). **Keep a logged-in rise.articulate.com tab open** while using the
+  panel.
 - **Token refresh on 401** is best-effort; the reliable fallback is re-interacting
   with the Rise tab so the observer captures a fresh token. Confirm the refresh
   mechanics against live Rise.

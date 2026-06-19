@@ -157,13 +157,13 @@ export function App() {
 
       <section className="card">
         <h2>Courses</h2>
-        <button onClick={list} disabled={busy || !session?.hasToken}>
+        <button onClick={list} disabled={busy || !session?.risePresent}>
           {phase === 'listing' ? 'Listing…' : 'List courses (paced)'}
         </button>
-        {!session?.hasToken && (
+        {!session?.risePresent && (
           <p className="hint">
-            Waiting for a Rise token — open and interact with a logged-in
-            rise.articulate.com tab.
+            Open and log into a rise.articulate.com tab and keep it open — the
+            panel rides that tab's live session.
           </p>
         )}
 
@@ -180,7 +180,12 @@ export function App() {
               </label>
               <button
                 onClick={runExport}
-                disabled={busy || !storage || selected.size === 0}
+                disabled={
+                  busy ||
+                  !storage ||
+                  selected.size === 0 ||
+                  !session?.risePresent
+                }
               >
                 {phase === 'exporting'
                   ? 'Fetching…'
