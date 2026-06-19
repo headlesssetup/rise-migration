@@ -20,15 +20,47 @@ function unwrap(raw: string): GetCourseDocument {
   return (parsed.payload ?? parsed) as GetCourseDocument;
 }
 
-/** Paced pagination through the whole course list. */
+// The search response shape isn't fully captured yet — be tolerant: accept a
+// bare array, common wrapper keys, or (last resort) the first array of objects
+// that look like content items.
+function extractItems(data: unknown): SearchResultItem[] {
+  if (Array.isArray(data)) return data as SearchResultItem[];
+  if (!data || typeof data !== 'object') return [];
+  const obj = data as Record<string, unknown>;
+  for (const key of ['items', 'results', 'data', 'content', 'courses', 'collection']) {
+    if (Array.isArray(obj[key])) return obj[key] as SearchResultItem[];
+  }
+  for (const v of Object.values(obj)) {
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      typeof v[0] === 'object' &&
+      v[0] !== null &&
+      'id' in (v[0] as object)
+    ) {
+      return v as SearchResultItem[];
+    }
+  }
+  return [];
+}
+
+function describeShape(data: unknown): string {
+  if (Array.isArray(data)) return `array(${data.length})`;
+  if (data && typeof data === 'object') {
+    return `keys: [${Object.keys(data as object).join(', ')}]`;
+  }
+  return typeof data;
+}
+
+/** Paced pagination through the whole course list. Pages are 0-indexed. */
 export async function listAllCourses(
   onEvent: (e: ProgressEvent) => void,
   pacing: PacingConfig = DEFAULT_PACING,
   pageSize = 16,
 ): Promise<SearchResultItem[]> {
   const all: SearchResultItem[] = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    if (page > 1) await pacedDelay(pacing); // pace between pages
+  for (let page = 0; page < MAX_PAGES; page++) {
+    if (page > 0) await pacedDelay(pacing); // pace between pages
     onEvent({ kind: 'log', message: `Fetching course list — page ${page}…` });
 
     const resp = await rpc({ type: 'SEARCH_COURSES', page, pageSize });
@@ -37,9 +69,16 @@ export async function listAllCourses(
       onEvent({ kind: 'log', message: `List error: ${resp.result.error}` });
       break;
     }
-    const items = Array.isArray(resp.result.data.items)
-      ? resp.result.data.items
-      : [];
+    const items = extractItems(resp.result.data);
+    if (page === 0) {
+      // One-time diagnostic so an unexpected response shape is visible.
+      onEvent({
+        kind: 'log',
+        message: `Search OK (HTTP ${resp.result.status}); ${describeShape(
+          resp.result.data,
+        )}; extracted ${items.length} item(s).`,
+      });
+    }
     all.push(...items);
     onEvent({ kind: 'page', page, total: all.length });
     if (items.length < pageSize) break; // reached the last page
