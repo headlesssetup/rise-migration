@@ -13,6 +13,7 @@ import {
   REFRESH_URL,
   type RequestSpec,
 } from '@/core/rise-client';
+import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
   BackgroundRequest,
   BackgroundResponse,
@@ -21,7 +22,6 @@ import type {
 } from '@/shared/messaging';
 
 const TOKEN_KEY = 'riseToken';
-const RISE_TAB_GLOB = 'https://rise.articulate.com/*';
 
 interface InPageResult {
   ok: boolean;
@@ -98,20 +98,33 @@ export default defineBackground(() => {
         setToken(value.replace(/^Bearer\s+/i, '').trim());
       }
     },
-    { urls: ['https://rise.articulate.com/*'] },
+    { urls: RISE_TAB_GLOBS },
     ['requestHeaders', 'extraHeaders'],
   );
 
+  // Find the Rise tab to operate in — prefer the active/last-focused one (the
+  // plane the operator is looking at), else any open Rise tab (US or EU).
+  async function findRiseTab(): Promise<chrome.tabs.Tab | undefined> {
+    const active = await chrome.tabs.query({
+      url: RISE_TAB_GLOBS,
+      active: true,
+      lastFocusedWindow: true,
+    });
+    const hit = active.find((t) => typeof t.id === 'number');
+    if (hit) return hit;
+    const any = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
+    return any.find((t) => typeof t.id === 'number');
+  }
+
   // Locate the live Rise tab and run the fetch inside it (first-party cookies).
   async function relayFetch(spec: RequestSpec): Promise<InPageResult> {
-    const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOB });
-    const tab = tabs.find((t) => typeof t.id === 'number');
+    const tab = await findRiseTab();
     if (!tab || typeof tab.id !== 'number') {
       return {
         ok: false,
         status: 0,
         error:
-          'No open rise.articulate.com tab. Open and log into Rise, keep that tab open, then retry.',
+          'No open Rise tab (US rise.articulate.com or EU rise.eu.articulate.com). Open and log into Rise, keep that tab open, then retry.',
       };
     }
     try {
@@ -189,7 +202,7 @@ export default defineBackground(() => {
         // script ping only updates the cached flag).
         let present = risePresent;
         try {
-          const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOB });
+          const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
           present = tabs.some((t) => typeof t.id === 'number');
         } catch {
           /* keep the ping-based value */

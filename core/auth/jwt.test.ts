@@ -34,6 +34,25 @@ describe('jwt', () => {
     });
   });
 
+  it('finds email/name in Auth0 namespaced claims', () => {
+    const token = makeJwt({
+      sub: 'auth0|abc123',
+      'https://articulate.com/email': 'jo@acme.com',
+      'https://articulate.com/name': 'Jo Smith',
+    });
+    const id = identityFromToken(token);
+    expect(id?.email).toBe('jo@acme.com');
+    expect(id?.name).toBe('Jo Smith');
+    expect(id?.sub).toBe('auth0|abc123');
+  });
+
+  it('falls back to sub when no email/name claim exists', () => {
+    const id = identityFromToken(makeJwt({ sub: 'auth0|xyz', exp: 1000 }));
+    expect(id?.email).toBeUndefined();
+    expect(id?.name).toBeUndefined();
+    expect(id?.sub).toBe('auth0|xyz');
+  });
+
   it('detects expiry', () => {
     const id = identityFromToken(makeJwt({ exp: 1000 }));
     expect(isExpired(id, 2000 * 1000)).toBe(true);

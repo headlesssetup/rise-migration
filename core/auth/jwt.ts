@@ -38,19 +38,39 @@ export function decodeJwt(token: string): JwtClaims | null {
   }
 }
 
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+// Auth0 tokens often carry email/name only under namespaced custom claims
+// (e.g. `https://articulate.com/email`), so scan beyond the standard keys.
+function findEmail(c: JwtClaims): string | undefined {
+  if (typeof c.email === 'string') return c.email;
+  for (const [k, v] of Object.entries(c)) {
+    if (typeof v === 'string' && /email$/i.test(k) && EMAIL_RE.test(v)) return v;
+  }
+  for (const v of Object.values(c)) {
+    if (typeof v === 'string' && EMAIL_RE.test(v)) return v;
+  }
+  return undefined;
+}
+
+function findName(c: JwtClaims): string | undefined {
+  for (const k of ['name', 'nickname', 'given_name', 'preferred_username']) {
+    const v = c[k];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  for (const [k, v] of Object.entries(c)) {
+    if (typeof v === 'string' && /\/(name|nickname)$/i.test(k)) return v;
+  }
+  return undefined;
+}
+
 export function identityFromToken(token: string): Identity | null {
   const c = decodeJwt(token);
   if (!c) return null;
-  const name =
-    typeof c.name === 'string'
-      ? c.name
-      : typeof c.preferred_username === 'string'
-        ? c.preferred_username
-        : undefined;
   return {
     sub: typeof c.sub === 'string' ? c.sub : undefined,
-    email: typeof c.email === 'string' ? c.email : undefined,
-    name,
+    email: findEmail(c),
+    name: findName(c),
     expiresAt: typeof c.exp === 'number' ? c.exp * 1000 : undefined,
   };
 }

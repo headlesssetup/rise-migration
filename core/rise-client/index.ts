@@ -1,15 +1,19 @@
 // Typed request builders for the Rise endpoints used in Phase 0. Pure: these
-// produce request specs; the background service worker executes them with the
-// captured bearer attached. Endpoints come straight from
-// docs/rise-api-reference.md §3 — never inferred.
+// produce request specs; the background runs them INSIDE the active Rise tab.
+//
+// URLs are RELATIVE (path + query, no origin) so they resolve against whichever
+// Rise plane the tab is on — rise.articulate.com (US) or rise.eu.articulate.com
+// (EU) — with no per-host code. Endpoints come from docs/rise-api-reference.md
+// §3 — never inferred.
 
-export const RISE_ORIGIN = 'https://rise.articulate.com';
-
-/** id.articulate.com session refresh (best-effort on 401 — see API ref §2/§10). */
+/** id.articulate.com session refresh (best-effort on 401 — see API ref §2/§10).
+ *  Note: the EU plane may use a different auth host; refresh is best-effort and
+ *  secondary now that calls ride the tab's first-party cookies. */
 export const REFRESH_URL =
   'https://id.articulate.com/api/v1/sessions/me/lifecycle/refresh';
 
 export interface RequestSpec {
+  /** Relative path (resolved against the active Rise tab's origin). */
   url: string;
   method: 'GET' | 'POST';
   /** JSON body string for POSTs. */
@@ -35,7 +39,7 @@ export function buildSearchRequest(p: SearchParams): RequestSpec {
   qs.set('sort', p.sort ?? 'RECENTLY_UPDATED');
   for (const t of p.types ?? ['COURSE', 'MICROLEARNING']) qs.append('type', t);
   return {
-    url: `${RISE_ORIGIN}/manage/api/content/search?${qs.toString()}`,
+    url: `/manage/api/content/search?${qs.toString()}`,
     method: 'GET',
   };
 }
@@ -45,7 +49,7 @@ export function buildSearchRequest(p: SearchParams): RequestSpec {
  */
 export function buildGetCourseRequest(courseId: string): RequestSpec {
   return {
-    url: `${RISE_ORIGIN}/api/rise-runtime/ducks/rise/courses/GET_COURSE`,
+    url: '/api/rise-runtime/ducks/rise/courses/GET_COURSE',
     method: 'POST',
     body: JSON.stringify({
       type: 'rise/courses/GET_COURSE',

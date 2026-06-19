@@ -162,8 +162,9 @@ export function App() {
         </button>
         {!session?.risePresent && (
           <p className="hint">
-            Open and log into a rise.articulate.com tab and keep it open — the
-            panel rides that tab's live session.
+            Open and log into a Rise tab (US rise.articulate.com or EU
+            rise.eu.articulate.com) and keep it open — the panel rides that
+            tab's live session.
           </p>
         )}
 
@@ -240,8 +241,8 @@ export function App() {
 
 function SessionView({ session }: { session: SessionState | null }) {
   if (!session) return <p className="hint">Connecting…</p>;
-  const who =
-    session.identity?.email ?? session.identity?.name ?? session.identity?.sub;
+  const id = session.identity;
+  const who = id?.email ?? id?.name;
   return (
     <ul className="kv">
       <li>
@@ -251,7 +252,8 @@ function SessionView({ session }: { session: SessionState | null }) {
         Token: <b>{session.hasToken ? 'captured' : 'none yet'}</b>
       </li>
       <li>
-        Logged in as: <b>{who ?? '—'}</b>
+        Logged in as: <b>{who ?? id?.sub ?? '—'}</b>
+        {!who && id?.sub && <span className="hint"> (user id)</span>}
       </li>
     </ul>
   );
