@@ -16,7 +16,7 @@ describe('buildCensus', () => {
 
   it('aggregates ref shapes', () => {
     const kinds = new Set(census.refs.map((r) => r.kind));
-    expect(kinds.has('media-key')).toBe(true);
+    expect(kinds.has('media-image')).toBe(true);
     expect(kinds.has('storyline-crossref')).toBe(true);
     expect(kinds.has('draw-from-bank-crossref')).toBe(true);
   });

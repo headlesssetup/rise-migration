@@ -13,6 +13,8 @@ export interface SessionState {
   hasToken: boolean;
   risePresent: boolean;
   identity: Identity | null;
+  /** Display name read from the Rise page header (the account on the tab). */
+  accountName: string | null;
 }
 
 /** Requests the panel sends to the background. */
@@ -22,7 +24,10 @@ export type BackgroundRequest =
   | { type: 'GET_COURSE'; courseId: string };
 
 /** Notifications the content script sends to the background. */
-export type ContentMessage = { type: 'RISE_PRESENT' } | { type: 'RISE_GONE' };
+export type ContentMessage =
+  | { type: 'RISE_PRESENT' }
+  | { type: 'RISE_GONE' }
+  | { type: 'RISE_ACCOUNT'; name: string };
 
 /** Responses the background returns. */
 export type BackgroundResponse =

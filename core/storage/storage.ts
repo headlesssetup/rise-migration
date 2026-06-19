@@ -13,6 +13,8 @@ export interface Storage {
   listSaved(): Promise<string[]>;
   /** Write the run manifest (index/counts/version/validation summary). */
   writeManifest(manifest: unknown): Promise<void>;
-  /** Write the census deliverables. */
+  /** Write the list-level inventory (catalog from the search listing). */
+  writeInventory(json: string, csv: string): Promise<void>;
+  /** Write the content-level census deliverables (after GET_COURSE fetch). */
   writeCensus(json: string, csv: string): Promise<void>;
 }

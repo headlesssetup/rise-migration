@@ -57,6 +57,7 @@ export default defineBackground(() => {
   let token: string | null = null;
   let identity: Identity | null = null;
   let risePresent = false;
+  let accountName: string | null = null;
 
   // Restore a token captured earlier this browser session (session storage is
   // cleared when the browser closes — we never persist credentials to disk).
@@ -209,7 +210,7 @@ export default defineBackground(() => {
         }
         return {
           type: 'SESSION_STATE',
-          state: { hasToken: !!token, risePresent: present, identity },
+          state: { hasToken: !!token, risePresent: present, identity, accountName },
         };
       }
 
@@ -273,6 +274,10 @@ export default defineBackground(() => {
       }
       if (msg.type === 'RISE_GONE') {
         risePresent = false;
+        return false;
+      }
+      if (msg.type === 'RISE_ACCOUNT') {
+        accountName = msg.name;
         return false;
       }
       handle(msg).then(sendResponse);

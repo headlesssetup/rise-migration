@@ -4,11 +4,20 @@ import { classifyString, scanCourse } from './scan';
 import type { GetCourseDocument } from '@/shared/types/rise';
 
 describe('classifyString', () => {
-  it('classifies usercontent + rise/ keys as media-key', () => {
+  it('subtypes uploaded media keys by extension/path', () => {
     expect(classifyString('https://articulateusercontent.com/rise/x.jpg')).toBe(
-      'media-key',
+      'media-image',
     );
-    expect(classifyString('rise/courses/abc/file.jpg')).toBe('media-key');
+    expect(classifyString('rise/courses/abc/file.mp4')).toBe('media-video');
+    expect(classifyString('rise/courses/abc/clip.mp3')).toBe('media-audio');
+    // No extension hint, but the JSON path says it's a video.
+    expect(
+      classifyString('rise/courses/abc/transcoded-xyz', '$.media.video.key'),
+    ).toBe('media-video');
+    // Storyline bundle keys are tagged by path.
+    expect(
+      classifyString('rise/courses/abc/pkg/story.html', '$.media.storyline.src'),
+    ).toBe('media-storyline');
   });
 
   it('classifies CDN and embeds distinctly', () => {
@@ -51,7 +60,8 @@ describe('scanCourse', () => {
 
   it('flags media keys, cross-refs, cdn and embeds by kind', () => {
     const kinds = scan.refs.map((r) => r.kind);
-    expect(kinds).toContain('media-key');
+    expect(kinds).toContain('media-image'); // image/hero block key
+    expect(kinds).toContain('media-storyline'); // storyline bundle keys
     expect(kinds).toContain('cdn');
     expect(kinds).toContain('embed');
     expect(kinds).toContain('storyline-crossref');

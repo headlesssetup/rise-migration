@@ -67,12 +67,24 @@ function describeShape(data: unknown): string {
   return typeof data;
 }
 
-/** Paced pagination through the whole library. Pages are 0-indexed; the loop
- *  is driven by `totalCount` so it's robust to server-side pageSize capping.
- *  pageSize=16 mirrors the Rise UI (16/page) so we page like a person, per the
- *  human-pacing invariant — e.g. 579 items => 37 paced pages. */
+/** One cheap page-0 search to read the library's total course count without
+ *  listing everything. Returns null if unavailable. */
+export async function countCourses(): Promise<number | null> {
+  const resp = await rpc({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+  if (resp.type === 'SEARCH_RESULT' && resp.result.ok) {
+    const tc = (resp.result.data as Record<string, unknown>).totalCount;
+    return typeof tc === 'number' ? tc : null;
+  }
+  return null;
+}
+
+/** Paced pagination through the library. Pages are 0-indexed; the loop is
+ *  driven by `totalCount` (robust to server-side pageSize capping) and stops
+ *  once `limit` courses are collected. pageSize=16 mirrors the Rise UI so we
+ *  page like a person, per the human-pacing invariant. */
 export async function listAllCourses(
   onEvent: (e: ProgressEvent) => void,
+  limit = Infinity,
   pacing: PacingConfig = DEFAULT_PACING,
   pageSize = 16,
 ): Promise<SearchResultItem[]> {
@@ -103,9 +115,9 @@ export async function listAllCourses(
     all.push(...items);
     onEvent({ kind: 'page', page, total: all.length });
     if (items.length === 0) break; // safety: nothing more to read
-    if (all.length >= total) break; // collected the whole library
+    if (all.length >= Math.min(limit, total)) break; // reached cap / library end
   }
-  return all;
+  return all.slice(0, limit);
 }
 
 export interface ExportResult {

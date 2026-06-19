@@ -10,25 +10,31 @@ catalog, and `CLAUDE.md` for the invariants.
 ## What it does
 
 1. **Captures the bearer JWT** by observing real Rise requests (`webRequest`) — no
-   credentials are stored (token lives in `storage.session` only).
-2. **Shows identity** (decoded from the JWT) and whether a Rise tab is present.
-3. **Enumerates courses** via `GET /manage/api/content/search`, paginated with
-   human pacing.
-4. **Fetches each selected course** via the `GET_COURSE` ducks RPC — strictly
-   sequential, ~2s + jitter between requests (CLAUDE.md pacing invariant).
-5. **Saves each raw `GET_COURSE` body** verbatim to a user-picked folder (File
-   System Access API).
-6. **Builds a census** — every distinct `family/variant`, every media-key /
-   cross-ref shape and where it occurs, lesson/question types, and a version
-   signal — exported as `census.json` + `census.csv`.
+   credentials are stored (token lives in `storage.session` only). Catalog calls
+   also ride the tab's first-party session cookie.
+2. **Shows identity** — the logged-in account name read from the Rise page header
+   (avatar `aria-label`, e.g. "INTEA Team"), whether a Rise tab is present, and the
+   library's **total course count** (one cheap page-0 search, auto on detect).
+3. **Enumerates courses** via `GET /manage/api/content/search`, paginated 16/page
+   like the Rise UI; a **list limit** (16-step, or "All") caps how many to list.
+4. **Inventory** — as soon as courses are listed, writes a customer-ready catalog
+   `inventory.csv`/`inventory.json` (id, title, owner, lessonCount, type, dates,
+   folder, shareId) straight from the listing — no per-course fetch needed.
+5. **Fetches selected courses** via the `GET_COURSE` ducks RPC — strictly
+   sequential, ~2s + jitter between requests, resumable (skips already-saved).
+6. **Saves each raw `GET_COURSE` body** verbatim to a remembered folder (File
+   System Access, persisted via IndexedDB; one-click reconnect after a restart).
+7. **Census** — every distinct `family/variant`, media keys split by type
+   (**image / video / audio / storyline** + other), CDN/embeds, cross-refs, and a
+   version signal — exported as `census.json` + `census.csv`.
 
 Output folder layout:
 
 ```
 <folder>/
   courses/<courseId>.json   raw GET_COURSE bodies (immutable)
-  census.json               full census
-  census.csv                flat census
+  inventory.json|csv        list-level catalog (written at listing time)
+  census.json|csv           content-level census (written after fetch)
   manifest.json             run index
 ```
 

@@ -8,7 +8,12 @@
 import type { GetCourseDocument } from '@/shared/types/rise';
 
 export type RefKind =
-  | 'media-key' // uploaded media: must be re-uploaded + remapped on import
+  // Uploaded media (must be re-uploaded + remapped on import), split by type:
+  | 'media-image'
+  | 'media-video'
+  | 'media-audio'
+  | 'media-storyline' // Storyline bundle bytes (under media.storyline)
+  | 'media-other' // uploaded key we couldn't type
   | 'cdn' // cdn.articulate.com — kept as-is, not re-uploaded
   | 'embed' // YouTube/Vimeo — plain URL, not re-uploaded
   | 'storyline-crossref' // Storyline block → Review 360 item
@@ -44,19 +49,37 @@ export interface CourseScan {
 
 const MAX_SNIPPET = 200;
 
-// String classification. Order matters: usercontent before the generic rise/
-// key check, and embed/cdn are distinct (a YouTube URL never matches the others).
+// String classification. Order matters: embed/cdn are distinct (a YouTube URL
+// never matches the others); usercontent/rise keys are uploaded media.
 const RE_USERCONTENT = /articulateusercontent\.com\//i;
 const RE_CDN = /cdn\.articulate\.com\//i;
 const RE_EMBED = /(?:youtube\.com|youtu\.be|vimeo\.com)/i;
 const RE_RISE_KEY = /(?:^|[/"'\s])rise\/courses\/[^/\s"']+\//i;
 
-/** Classify a string value as a known reference shape, or null if it's plain. */
-export function classifyString(value: string): RefKind | null {
-  if (RE_USERCONTENT.test(value)) return 'media-key';
+const RE_IMG = /\.(?:jpe?g|png|gif|svg|webp|bmp|avif|tiff?)(?:[?#]|$)/i;
+const RE_VID = /\.(?:mp4|webm|mov|m4v|ogv|avi|mkv)(?:[?#]|$)/i;
+const RE_AUD = /\.(?:mp3|m4a|wav|ogg|oga|aac|flac)(?:[?#]|$)/i;
+
+/** Subtype an uploaded-media key from its JSON path + file extension. */
+function mediaSubtype(path: string, value: string): RefKind {
+  const p = path.toLowerCase();
+  if (p.includes('storyline')) return 'media-storyline';
+  if (RE_IMG.test(value) || /\bimages?\b/.test(p)) return 'media-image';
+  if (RE_VID.test(value) || /\bvideos?\b/.test(p)) return 'media-video';
+  if (RE_AUD.test(value) || /\baudios?\b/.test(p)) return 'media-audio';
+  return 'media-other';
+}
+
+/**
+ * Classify a string value as a known reference shape, or null if it's plain.
+ * `path` (the JSON location) lets uploaded media be split into image/video/etc.
+ */
+export function classifyString(value: string, path = ''): RefKind | null {
   if (RE_CDN.test(value)) return 'cdn';
   if (RE_EMBED.test(value)) return 'embed';
-  if (RE_RISE_KEY.test(value)) return 'media-key';
+  if (RE_USERCONTENT.test(value) || RE_RISE_KEY.test(value)) {
+    return mediaSubtype(path, value);
+  }
   return null;
 }
 
@@ -88,7 +111,7 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     if (node === null || node === undefined) return;
 
     if (typeof node === 'string') {
-      const kind = classifyString(node);
+      const kind = classifyString(node, path);
       if (kind) refs.push({ kind, path, value: truncate(node), courseId });
       return;
     }

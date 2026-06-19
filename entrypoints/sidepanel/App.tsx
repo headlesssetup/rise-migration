@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildCensus, type Census } from '@/core/census/aggregate';
 import { censusToCsv, censusToJson } from '@/core/census/export';
+import {
+  buildInventory,
+  inventoryToCsv,
+  inventoryToJson,
+} from '@/core/census/inventory';
 import { FileSystemStorage } from '@/core/storage/fs';
 import type { Storage } from '@/core/storage/storage';
 import type { SessionState } from '@/shared/messaging';
 import type { SearchResultItem } from '@/shared/types/rise';
-import { exportCourses, listAllCourses, type ProgressEvent } from './orchestrator';
+import {
+  clearDirHandle,
+  loadDirHandle,
+  saveDirHandle,
+  verifyPermission,
+} from './folder-store';
+import {
+  countCourses,
+  exportCourses,
+  listAllCourses,
+  type ProgressEvent,
+} from './orchestrator';
 import { rpc } from './rpc';
 
 type DirPicker = (opts?: {
@@ -14,10 +30,16 @@ type DirPicker = (opts?: {
 
 type Phase = 'idle' | 'listing' | 'listed' | 'exporting' | 'done';
 
+const PAGE = 16;
+
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [storage, setStorage] = useState<Storage | null>(null);
   const [folderName, setFolderName] = useState<string | null>(null);
+  const [pendingHandle, setPendingHandle] =
+    useState<FileSystemDirectoryHandle | null>(null);
+  const [listLimit, setListLimit] = useState<number>(PAGE);
   const [phase, setPhase] = useState<Phase>('idle');
   const [courses, setCourses] = useState<SearchResultItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -32,7 +54,7 @@ export function App() {
     setLog((l) => [...l, message]);
   }, []);
 
-  // Poll session state (identity + token + Rise tab presence).
+  // Poll session state (identity + token + Rise tab presence + account name).
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -47,6 +69,45 @@ export function App() {
     };
   }, []);
 
+  // Restore the persisted destination folder on first load.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const handle = await loadDirHandle();
+      if (!handle || !alive) return;
+      setFolderName(handle.name);
+      if (await verifyPermission(handle, false)) {
+        setStorage(new FileSystemStorage(handle));
+        addLog(`Folder restored: ${handle.name}`);
+      } else {
+        setPendingHandle(handle); // needs a click to re-grant access
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [addLog]);
+
+  // The account on the tab drives the count — refresh it when it changes.
+  const accountName = session?.accountName ?? null;
+  useEffect(() => {
+    setTotalCount(null);
+  }, [accountName]);
+
+  // Auto-fetch the total course count once a Rise tab is present.
+  const risePresent = session?.risePresent ?? false;
+  useEffect(() => {
+    let alive = true;
+    if (!risePresent || totalCount !== null) return;
+    void (async () => {
+      const n = await countCourses();
+      if (alive && n !== null) setTotalCount(n);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [risePresent, totalCount]);
+
   useEffect(() => {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);
   }, [log]);
@@ -60,6 +121,15 @@ export function App() {
     [addLog],
   );
 
+  const useFolder = useCallback(
+    (handle: FileSystemDirectoryHandle) => {
+      setStorage(new FileSystemStorage(handle));
+      setFolderName(handle.name);
+      setPendingHandle(null);
+    },
+    [],
+  );
+
   const pickFolder = useCallback(async () => {
     const picker = (window as unknown as { showDirectoryPicker?: DirPicker })
       .showDirectoryPicker;
@@ -69,23 +139,52 @@ export function App() {
     }
     try {
       const handle = await picker({ mode: 'readwrite' });
-      setStorage(new FileSystemStorage(handle));
-      setFolderName(handle.name);
+      await saveDirHandle(handle);
+      useFolder(handle);
       addLog(`Folder selected: ${handle.name}`);
     } catch {
       /* user cancelled */
     }
+  }, [addLog, useFolder]);
+
+  const reconnectFolder = useCallback(async () => {
+    if (!pendingHandle) return;
+    if (await verifyPermission(pendingHandle, true)) {
+      useFolder(pendingHandle);
+      addLog(`Folder reconnected: ${pendingHandle.name}`);
+    } else {
+      addLog('Folder access was not granted.');
+    }
+  }, [pendingHandle, addLog, useFolder]);
+
+  const forgetFolder = useCallback(async () => {
+    await clearDirHandle();
+    setStorage(null);
+    setFolderName(null);
+    setPendingHandle(null);
+    addLog('Folder forgotten.');
   }, [addLog]);
 
   const list = useCallback(async () => {
     setPhase('listing');
     setCourses([]);
-    const result = await listAllCourses(onEvent);
+    const result = await listAllCourses(onEvent, listLimit);
     setCourses(result);
     setSelected(new Set(result.map((c) => c.id)));
     setPhase('listed');
     addLog(`Found ${result.length} courses.`);
-  }, [onEvent, addLog]);
+
+    // List-level inventory: a customer-ready catalog, no GET_COURSE needed.
+    const rows = buildInventory(result);
+    if (storage) {
+      await storage.writeInventory(inventoryToJson(rows), inventoryToCsv(rows));
+      addLog(`Inventory written (${rows.length} rows) → inventory.csv/json.`);
+    } else {
+      addLog(
+        `Inventory built (${rows.length} rows) — connect a folder to save it.`,
+      );
+    }
+  }, [onEvent, addLog, listLimit, storage]);
 
   const toggle = useCallback((id: string) => {
     setSelected((s) => {
@@ -138,6 +237,7 @@ export function App() {
   }, [storage, selectedCourses, onEvent, addLog]);
 
   const busy = phase === 'listing' || phase === 'exporting';
+  const atAll = totalCount !== null && listLimit >= totalCount;
 
   return (
     <div className="app">
@@ -145,20 +245,58 @@ export function App() {
 
       <section className="card">
         <h2>Session</h2>
-        <SessionView session={session} />
+        <SessionView session={session} totalCount={totalCount} />
       </section>
 
       <section className="card">
         <h2>Destination folder</h2>
-        <button onClick={pickFolder} disabled={busy}>
-          {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
-        </button>
+        <div className="row">
+          <button onClick={pickFolder} disabled={busy}>
+            {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
+          </button>
+          {folderName && (
+            <button onClick={forgetFolder} disabled={busy}>
+              Forget
+            </button>
+          )}
+        </div>
+        {pendingHandle && (
+          <p className="hint">
+            Folder remembered but needs access —{' '}
+            <button onClick={reconnectFolder}>Reconnect</button>
+          </p>
+        )}
       </section>
 
       <section className="card">
         <h2>Courses</h2>
+        <div className="row">
+          <label>
+            List{' '}
+            <input
+              type="number"
+              min={PAGE}
+              step={PAGE}
+              value={listLimit}
+              disabled={busy}
+              onChange={(e) =>
+                setListLimit(Math.max(PAGE, Number(e.target.value) || PAGE))
+              }
+              style={{ width: 72 }}
+            />{' '}
+            courses
+          </label>
+          <button
+            onClick={() => totalCount !== null && setListLimit(totalCount)}
+            disabled={busy || totalCount === null || atAll}
+          >
+            All{totalCount !== null ? ` (${totalCount})` : ''}
+          </button>
+        </div>
         <button onClick={list} disabled={busy || !session?.risePresent}>
-          {phase === 'listing' ? 'Listing…' : 'List courses (paced)'}
+          {phase === 'listing'
+            ? 'Listing…'
+            : `List ${atAll ? 'all' : listLimit} course(s) (paced)`}
         </button>
         {!session?.risePresent && (
           <p className="hint">
@@ -239,10 +377,16 @@ export function App() {
   );
 }
 
-function SessionView({ session }: { session: SessionState | null }) {
+function SessionView({
+  session,
+  totalCount,
+}: {
+  session: SessionState | null;
+  totalCount: number | null;
+}) {
   if (!session) return <p className="hint">Connecting…</p>;
   const id = session.identity;
-  const who = id?.email ?? id?.name;
+  const who = session.accountName ?? id?.email ?? id?.name;
   return (
     <ul className="kv">
       <li>
@@ -254,6 +398,9 @@ function SessionView({ session }: { session: SessionState | null }) {
       <li>
         Logged in as: <b>{who ?? id?.sub ?? '—'}</b>
         {!who && id?.sub && <span className="hint"> (user id)</span>}
+      </li>
+      <li>
+        Courses: <b>{totalCount ?? '—'}</b>
       </li>
     </ul>
   );
