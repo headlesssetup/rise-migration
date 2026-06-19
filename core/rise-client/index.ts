@@ -28,16 +28,17 @@ export interface SearchParams {
 }
 
 /**
- * GET /manage/api/content/search — enumerate courses (API ref §3.1).
- * Defaults mirror the captured request: pageSize=16, RECENTLY_UPDATED,
- * type=COURSE & type=MICROLEARNING.
+ * GET /manage/api/content/search — enumerate content (API ref §3.1).
+ * The `type` filter is OPTIONAL and omitted by default so we get everything the
+ * "All Content" view shows (an over-eager `type=COURSE&type=MICROLEARNING`
+ * filter returned zero against a live library). Pass `types` to narrow.
  */
 export function buildSearchRequest(p: SearchParams): RequestSpec {
   const qs = new URLSearchParams();
   qs.set('page', String(p.page));
   qs.set('pageSize', String(p.pageSize ?? 16));
   qs.set('sort', p.sort ?? 'RECENTLY_UPDATED');
-  for (const t of p.types ?? ['COURSE', 'MICROLEARNING']) qs.append('type', t);
+  for (const t of p.types ?? []) qs.append('type', t);
   return {
     url: `/manage/api/content/search?${qs.toString()}`,
     method: 'GET',

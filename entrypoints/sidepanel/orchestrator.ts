@@ -47,7 +47,17 @@ function extractItems(data: unknown): SearchResultItem[] {
 function describeShape(data: unknown): string {
   if (Array.isArray(data)) return `array(${data.length})`;
   if (data && typeof data === 'object') {
-    return `keys: [${Object.keys(data as object).join(', ')}]`;
+    const obj = data as Record<string, unknown>;
+    const total = 'totalCount' in obj ? `; totalCount=${obj.totalCount}` : '';
+    const content =
+      'content' in obj
+        ? `; content=${
+            Array.isArray(obj.content)
+              ? `array(${obj.content.length})`
+              : typeof obj.content
+          }`
+        : '';
+    return `keys: [${Object.keys(obj).join(', ')}]${total}${content}`;
   }
   return typeof data;
 }
