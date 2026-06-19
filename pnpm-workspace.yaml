@@ -1,14 +1,20 @@
-# pnpm settings live here (newer pnpm no longer reads the `pnpm` field in
-# package.json). No `packages:` key — this repo is a single package, not a
-# workspace; the file is used only for these settings.
+# pnpm settings (newer pnpm no longer reads the `pnpm` field in package.json).
+# No `packages:` key — this repo is a single package, not a workspace; the file
+# is used only for these settings.
 
-# Allow esbuild's postinstall (needed by WXT/Vite/Vitest) to run.
+# Build-script approval.
+#   pnpm 11+ uses this `allowBuilds` map (package -> allowed-to-run-scripts).
+#   - esbuild needs its postinstall (used by WXT / Vite / Vitest).
+#   - spawn-sync (legacy sync-spawn shim via wxt -> web-ext-run -> fx-runner,
+#     the Firefox runner we don't use) is explicitly NOT built — `false`
+#     acknowledges it so pnpm doesn't raise ERR_PNPM_IGNORED_BUILDS.
+allowBuilds:
+  esbuild: true
+  spawn-sync: false
+
+# Equivalent settings for pnpm 10.x (ignored by pnpm 11, which uses allowBuilds).
 onlyBuiltDependencies:
   - esbuild
-
-# Deliberately do NOT build these (acknowledged so strict pnpm won't error):
-# spawn-sync is a legacy sync-spawn shim pulled in via the Firefox runner
-# (wxt → web-ext-run → fx-runner), unused on modern Node and for our Chrome build.
 ignoredBuiltDependencies:
   - spawn-sync
 
