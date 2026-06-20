@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-06-20. Keep this current at each phase boundary._
+_Last updated: 2026-06-20 (Phase 3 import core landed on a branch). Keep this current at each phase boundary._
 
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
@@ -111,52 +111,77 @@ Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
 The full export side (Phases 0/0.1/2 incl. account extras) is **merged to
 `master`** (PRs #1–#3); extension version `0.2.4`.
 
-## Next: Phase 3 — import / recreation (the write side)
+## Phase 3 — import / recreation (the write side): IN PROGRESS (branch)
 
-Rebuild an exported archive into a *different* Rise account (US → EU). Ready to
-start: the write envelopes are now captured (a US write-path mitm session —
-re-supply `http_api.jsonl` + `ws_log.jsonl` to the Phase-3 session; they don't
-carry over). A copy-paste kickoff prompt lives in the migration notes.
+Rebuild an exported archive into a *different* Rise account (US → EU). **First
+PR landed on a feature branch** (not yet merged). What's built:
 
-**First task (before coding):** reverse-engineer the captures into a new
-`docs/rise-import-protocol.md` — exact write SEQUENCE, lock/session semantics, id
-remapping. Captured envelopes: `CREATE_LESSON`, `CREATE_BLOCKS`,
-`UPDATE_COURSE`/`courseTheme`, `INSERT_BLOCK_TEMPLATE`, `PUT_LOCK`/`DEL_LOCK`,
-question-bank `POST` + `PUT` (`session`/`lock_data`/`update_type`), and the asset
-chain `GET_YURL` → S3 `PUT` (`x-amz-acl=public-read`) → `CRUSH_IMAGE`/
-`TRANSCODE_ASSET` → `CHECK_STATUS`.
+**Decisions settled at kickoff:** packaging = **one extension, two modes**
+(Export read-only / Import write) — not two build targets; first target =
+**US→US** (captured hosts; EU overrides later); the import core is wired to the
+**live write path** (unverifiable here without a live Rise account, but ready for
+a live run).
 
-**Build order (each behind a DRY-RUN):** folders (deepest-first, map old→new id)
-→ question banks (`POST` → `PUT`) → course shell → theme → lessons →
-`CREATE_BLOCKS` (copy-faithful, client-gen ids, keep `refs` valid) → assets
-(`GET_YURL` → S3 PUT → `CRUSH`/`TRANSCODE` → remap keys) → cross-refs
-(draw-from-bank → new bank id; Storyline/Mighty → match Review 360 / flag manual).
-Verify parity + checksums → fidelity report. Strictly sequential + human-paced
-writes; idempotent + resumable job log (persist old→new id map) so retries don't
-double-create; loud-fail on unexpected write responses.
+**`docs/rise-import-protocol.md` (NEW, authoritative):** the write SEQUENCE,
+lock/session semantics, and id remapping reverse-engineered from the US
+`http_api.jsonl` capture. Documents `CREATE_LESSON`/`UPDATE_LESSON` + locks,
+`CREATE_BLOCKS` (copy-faithful), question banks `POST`→`PUT` +
+`INSERT_QUESTION_BANK_QUESTIONS` (the draw-from-bank link — a **new** envelope),
+`UPDATE_COURSE`/theme round-trip, the asset chain (`GET_YURL`→S3 `PUT`→
+`CRUSH_IMAGE`/`TRANSCODE_ASSET`→`UPDATE_COURSE {jobs}`→`CHECK_STATUS`→
+`UPDATE_BLOCK_DEBOUNCE`), folders, Storyline/Mighty (conditional), safe-import
+gates, and loud-fail assertions. (`INSERT_BLOCK_TEMPLATE` + the storyline
+`unzip` S3 PUT are documented as **out of scope** — copy-faithful recreates the
+blocks directly.)
 
-**Packaging — decide at kickoff.** Recommended: ONE codebase, TWO WXT build
-targets — a read-only **Exporter** and an **Importer** sharing `core/` — for code
-reuse + capability isolation (the exporter build can't write). Alternative: one
-extension with explicit Export/Import modes.
+**`core/import/` (pure, fully unit-tested — 46 new tests):**
+- `ids.ts` — cuid-style client-id factory + `IdMap` (old→new, JSON-serializable
+  resumable job log).
+- `remap.ts` — generic copy-faithful transform: regenerate client ids
+  consistently, rewrite id-bearing refs (`correct`/`corrects`/`refs`/`uploadId`),
+  strip server-owned fields, blank/remap uploaded media keys, and the
+  `findSurvivingSourceKeys` invariant scan.
+- `envelopes.ts` — typed `WriteSpec` builders for every captured write.
+- `plan.ts` — deterministic ordered plan (banks → course → theme → lessons →
+  blocks → uploads → cross-refs) feeding both the dry-run preview and the
+  executor; flags storyline/orphan media for manual handling.
+- `executor.ts` — walks the plan, relays envelopes (injectable), **loud-fails**
+  on unexpected responses, records server ids, paces, polls transcode jobs;
+  DRY-RUN collects envelopes without sending. Final assertion: no source media
+  key survives.
+- `guards.ts` — Source ≠ Target identity gate + plane detection.
+- `fidelity.ts` — parity/flags/surviving-key report (JSON + markdown).
 
-**Safe-import UX (required):** Import is never the default (distinct write-mode
-banner); a **target-account confirmation gate** (show the live tab's identity +
-US/EU plane before any write); a **Source ≠ Target guard** (read source identity
-from `manifest.json`, refuse to write into the same account/plane unless
-overridden); the archive stays read-only (derive the target payload from a copy);
-a **dry-run plan preview** before any write.
+**Wiring:** `background` gained a `RELAY_WRITE` handler + binary/PUT/noAuth
+support (S3 upload rides the tab, same cross-origin PUT the editor issues);
+`storage` gained `readManifest`/`readAsset` + `_import/` artifacts (kept out of
+the read-only archive); `orchestrator/import.ts` reads a course + asset manifest
++ referenced banks, runs the plan dry/live, resumes from a job log; the export
+manifest now records `sourceAccount` for the guard; `ImportView` provides the
+write-mode banner, target gate, Source≠Target guard (+ override), dry-run
+preview, and gated live import.
 
-## Open unknowns / risks (tackle early in Phase 3)
+**Still TODO in Phase 3:**
+- **Folder recreation** — the folder-create endpoint/payload is **not** in the
+  capture; the importer currently places content at the account root and flags
+  folder structure as not-yet-mapped (protocol §5). Confirm `POST /manage/api/folders`
+  on a live target.
+- **draw-from-bank source field names** — the capture *creates* the binding, so
+  the exact source-block fields (`questionBankId`/`drawCount`/`questionDrawType`)
+  aren't confirmed against a GET_COURSE block; `findBankRef` probes likely names
+  and the executor loud-fails if a bank id can't be resolved (protocol §4b).
+- **Live verification** — nothing here has been run against a live Rise account;
+  the executor is exercised only via mock-relay unit tests. Needs a real US→US
+  dry-run then live run, then an EU write capture for EU specifics.
+- **`UPDATE_COURSE_FIELD` (title)** + **`RESOLVE_ASSET`** payloads are best-guess
+  (flagged in `envelopes.ts`) — confirm on a live run.
+
+## Open unknowns / risks (Phase 3)
 
 - **EU-plane hosts** — EU Rise domain, EU S3 bucket, EU usercontent domain, EU
-  auth are uncaptured (PRD §15). Relative URLs ride the tab, but the asset-upload
-  host + `CRUSH`/`TRANSCODE` may differ — get an EU **write** capture, or
-  build/verify US→US first.
-- **Write envelopes — US captured, not yet documented.** A US write-path mitm
-  session covers the envelopes above; reverse-engineer it into
-  `docs/rise-import-protocol.md` (sequence + lock/session semantics) before
-  building. EU write capture still needed.
+  auth are uncaptured (PRD §15). Relative URLs ride the tab and the S3 upload host
+  comes back inside `GET_YURL`, but EU `CRUSH`/`TRANSCODE` behaviour is unknown —
+  built/verify **US→US first**, then get an EU **write** capture.
 - **Storyline reachability** — only recreatable if the target can reach the same
   Review 360 item; otherwise flag for manual handling.
 - **Orphaned media** — some courses reference media keys that are 403/deleted at
