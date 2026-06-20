@@ -386,7 +386,7 @@ export function App() {
 
   return (
     <div className="app">
-      <h1>Rise Explorer · Phase 0</h1>
+      <h1>Rise Migration — Exporter</h1>
 
       <section className="card">
         <h2>Session</h2>
@@ -555,10 +555,13 @@ export function App() {
       )}
 
       {census && (
-        <section className="card">
-          <h2>Census</h2>
+        <details className="card">
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+            Census — {census.courseCount} course(s) · {census.variants.length}{' '}
+            variants · {census.refs.length} ref shapes
+          </summary>
           <CensusView census={census} />
-        </section>
+        </details>
       )}
 
       <section className="card">
