@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-06-19. Keep this current at each phase boundary._
+_Last updated: 2026-06-20. Keep this current at each phase boundary._
 
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
@@ -108,21 +108,55 @@ force re-download).
 
 Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
 
-## Then: Phase 3 — import / recreation (the write side)
+The full export side (Phases 0/0.1/2 incl. account extras) is **merged to
+`master`** (PRs #1–#3); extension version `0.2.4`.
 
-Recreate folders (deepest-first, map old→new id) → question banks → courses
-(shell → theme → lessons → `CREATE_BLOCKS`, copy-faithful, client-gen ids) →
-assets (`GET_YURL` → S3 PUT → `CRUSH`/`TRANSCODE` → remap keys) → cross-refs
-(draw-from-bank → new bank id; Storyline → match Review 360). Verify parity +
-checksums → fidelity report.
+## Next: Phase 3 — import / recreation (the write side)
+
+Rebuild an exported archive into a *different* Rise account (US → EU). Ready to
+start: the write envelopes are now captured (a US write-path mitm session —
+re-supply `http_api.jsonl` + `ws_log.jsonl` to the Phase-3 session; they don't
+carry over). A copy-paste kickoff prompt lives in the migration notes.
+
+**First task (before coding):** reverse-engineer the captures into a new
+`docs/rise-import-protocol.md` — exact write SEQUENCE, lock/session semantics, id
+remapping. Captured envelopes: `CREATE_LESSON`, `CREATE_BLOCKS`,
+`UPDATE_COURSE`/`courseTheme`, `INSERT_BLOCK_TEMPLATE`, `PUT_LOCK`/`DEL_LOCK`,
+question-bank `POST` + `PUT` (`session`/`lock_data`/`update_type`), and the asset
+chain `GET_YURL` → S3 `PUT` (`x-amz-acl=public-read`) → `CRUSH_IMAGE`/
+`TRANSCODE_ASSET` → `CHECK_STATUS`.
+
+**Build order (each behind a DRY-RUN):** folders (deepest-first, map old→new id)
+→ question banks (`POST` → `PUT`) → course shell → theme → lessons →
+`CREATE_BLOCKS` (copy-faithful, client-gen ids, keep `refs` valid) → assets
+(`GET_YURL` → S3 PUT → `CRUSH`/`TRANSCODE` → remap keys) → cross-refs
+(draw-from-bank → new bank id; Storyline/Mighty → match Review 360 / flag manual).
+Verify parity + checksums → fidelity report. Strictly sequential + human-paced
+writes; idempotent + resumable job log (persist old→new id map) so retries don't
+double-create; loud-fail on unexpected write responses.
+
+**Packaging — decide at kickoff.** Recommended: ONE codebase, TWO WXT build
+targets — a read-only **Exporter** and an **Importer** sharing `core/` — for code
+reuse + capability isolation (the exporter build can't write). Alternative: one
+extension with explicit Export/Import modes.
+
+**Safe-import UX (required):** Import is never the default (distinct write-mode
+banner); a **target-account confirmation gate** (show the live tab's identity +
+US/EU plane before any write); a **Source ≠ Target guard** (read source identity
+from `manifest.json`, refuse to write into the same account/plane unless
+overridden); the archive stays read-only (derive the target payload from a copy);
+a **dry-run plan preview** before any write.
 
 ## Open unknowns / risks (tackle early in Phase 3)
 
 - **EU-plane hosts** — EU Rise domain, EU S3 bucket, EU usercontent domain, EU
-  auth are uncaptured (PRD §15). Confirm before building import.
-- **Write envelopes uncaptured** — `CREATE_BLOCKS`, question-bank `PUT`
-  (`session`/`lock_data`/`update_type` + the lock call), folder create, asset
-  upload chain. Need a real mitm capture of each before Phase 3.
+  auth are uncaptured (PRD §15). Relative URLs ride the tab, but the asset-upload
+  host + `CRUSH`/`TRANSCODE` may differ — get an EU **write** capture, or
+  build/verify US→US first.
+- **Write envelopes — US captured, not yet documented.** A US write-path mitm
+  session covers the envelopes above; reverse-engineer it into
+  `docs/rise-import-protocol.md` (sequence + lock/session semantics) before
+  building. EU write capture still needed.
 - **Storyline reachability** — only recreatable if the target can reach the same
   Review 360 item; otherwise flag for manual handling.
 - **Orphaned media** — some courses reference media keys that are 403/deleted at
