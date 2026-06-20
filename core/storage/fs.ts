@@ -1,12 +1,15 @@
 // FileSystemStorage — writes into a user-picked folder via the File System
-// Access API. Layout per course folder:
-//   <root>/courses/<courseId>.json          raw GET_COURSE body (never mutated)
-//   <root>/courses/<courseId>.assets.json   per-course asset manifest (Phase 2)
+// Access API. Layout:
+//   <root>/manifest.json                    run index (stays at root)
+//   <root>/courses/<id>.json                raw GET_COURSE body (never mutated)
+//   <root>/courses/<id>.assets.json         per-course asset manifest
+//   <root>/question-banks/<id>.json|_index  raw banks (+ per-bank asset manifest)
 //   <root>/assets/<sha256>.<ext>            content-addressed media bytes (dedup)
-//   <root>/assets-summary.json              run-wide asset totals + assertion
-//   <root>/census.json                      full census
-//   <root>/census.csv                       flat census
-//   <root>/manifest.json                    run index
+//   <root>/account/                         raw account source: folders.json,
+//                                           block-templates/typefaces/review-items
+//   <root>/_metadata/                       derived reports (regenerated each run):
+//                                           inventory/census/catalog/novelty/
+//                                           *-inventory/*-catalog/assets-summary
 //
 // Note: File System Access handles only work in a window context (the side
 // panel), never in the service worker — so this lives panel-side.
@@ -16,12 +19,35 @@ import type { Storage } from './storage';
 const COURSES_DIR = 'courses';
 const BANKS_DIR = 'question-banks';
 const ASSETS_DIR = 'assets';
+// Derived reports (regenerated each run) live under _metadata/; raw account-level
+// source exports under account/. Content dirs + manifest.json stay at root.
+const META_DIR = '_metadata';
+const ACCOUNT_DIR = 'account';
 
 export class FileSystemStorage implements Storage {
   constructor(private readonly root: FileSystemDirectoryHandle) {}
 
   private async coursesDir(): Promise<FileSystemDirectoryHandle> {
     return this.root.getDirectoryHandle(COURSES_DIR, { create: true });
+  }
+
+  private metaDir(): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(META_DIR, { create: true });
+  }
+
+  private accountDir(): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(ACCOUNT_DIR, { create: true });
+  }
+
+  /** Write a json+csv report pair into _metadata/. */
+  private async writeMetaPair(
+    base: string,
+    json: string,
+    csv: string,
+  ): Promise<void> {
+    const dir = await this.metaDir();
+    await this.writeFile(dir, `${base}.json`, json);
+    await this.writeFile(dir, `${base}.csv`, csv);
   }
 
   private async writeFile(
@@ -90,13 +116,13 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeInventory(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'inventory.json', json);
-    await this.writeFile(this.root, 'inventory.csv', csv);
+    await this.writeMetaPair('inventory', json, csv);
   }
 
   async readInventory(): Promise<string | null> {
     try {
-      const handle = await this.root.getFileHandle('inventory.json');
+      const dir = await this.metaDir();
+      const handle = await dir.getFileHandle('inventory.json');
       return await (await handle.getFile()).text();
     } catch {
       return null;
@@ -104,18 +130,15 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeCensus(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'census.json', json);
-    await this.writeFile(this.root, 'census.csv', csv);
+    await this.writeMetaPair('census', json, csv);
   }
 
   async writeCatalog(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'catalog.json', json);
-    await this.writeFile(this.root, 'catalog.csv', csv);
+    await this.writeMetaPair('catalog', json, csv);
   }
 
   async writeNovelty(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'novelty.json', json);
-    await this.writeFile(this.root, 'novelty.csv', csv);
+    await this.writeMetaPair('novelty', json, csv);
   }
 
   private async banksDir(): Promise<FileSystemDirectoryHandle> {
@@ -184,22 +207,22 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeBankCatalog(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'question-banks-catalog.json', json);
-    await this.writeFile(this.root, 'question-banks-catalog.csv', csv);
+    await this.writeMetaPair('question-banks-catalog', json, csv);
   }
 
   async writeBankInventory(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'question-banks-inventory.json', json);
-    await this.writeFile(this.root, 'question-banks-inventory.csv', csv);
+    await this.writeMetaPair('question-banks-inventory', json, csv);
   }
 
   async writeFolders(raw: string): Promise<void> {
-    await this.writeFile(this.root, 'folders.json', raw);
+    const dir = await this.accountDir();
+    await this.writeFile(dir, 'folders.json', raw);
   }
 
   async readFolders(): Promise<string | null> {
     try {
-      const handle = await this.root.getFileHandle('folders.json');
+      const dir = await this.accountDir();
+      const handle = await dir.getFileHandle('folders.json');
       return await (await handle.getFile()).text();
     } catch {
       return null;
@@ -207,8 +230,34 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeFolderInventory(json: string, csv: string): Promise<void> {
-    await this.writeFile(this.root, 'folders-inventory.json', json);
-    await this.writeFile(this.root, 'folders-inventory.csv', csv);
+    await this.writeMetaPair('folders-inventory', json, csv);
+  }
+
+  async writeBlockTemplates(raw: string): Promise<void> {
+    const dir = await this.accountDir();
+    await this.writeFile(dir, 'block-templates.json', raw);
+  }
+
+  async writeBlockTemplateInventory(json: string, csv: string): Promise<void> {
+    await this.writeMetaPair('block-templates-inventory', json, csv);
+  }
+
+  async writeTypefaces(raw: string): Promise<void> {
+    const dir = await this.accountDir();
+    await this.writeFile(dir, 'typefaces.json', raw);
+  }
+
+  async writeTypefaceInventory(json: string, csv: string): Promise<void> {
+    await this.writeMetaPair('typefaces-inventory', json, csv);
+  }
+
+  async writeReviewItems(raw: string): Promise<void> {
+    const dir = await this.accountDir();
+    await this.writeFile(dir, 'review-items.json', raw);
+  }
+
+  async writeReviewItemsInventory(json: string, csv: string): Promise<void> {
+    await this.writeMetaPair('review-items-inventory', json, csv);
   }
 
   // --- Phase 2: assets --------------------------------------------------------
@@ -276,6 +325,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeAssetsSummary(json: string): Promise<void> {
-    await this.writeFile(this.root, 'assets-summary.json', json);
+    const dir = await this.metaDir();
+    await this.writeFile(dir, 'assets-summary.json', json);
   }
 }

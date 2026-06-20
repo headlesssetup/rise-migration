@@ -124,6 +124,53 @@ export async function runPool<T, R>(
   return results;
 }
 
+export interface KeyDownloadResult {
+  /** key → stored file path `assets/<sha256>.<ext>` (successes only). */
+  files: Record<string, string>;
+  failed: { key: string; error: string; status?: number }[];
+  written: number;
+  deduped: number;
+}
+
+/**
+ * Download a flat list of CDN keys (e.g. typeface fonts under rise/fonts/…) and
+ * store them content-addressed via the sink. Parallel pool; dedup by content.
+ */
+export async function downloadKeyList(
+  keys: string[],
+  sink: AssetSink,
+  downloader: Downloader,
+  concurrency = DEFAULT_CONCURRENCY,
+): Promise<KeyDownloadResult> {
+  const results = await runPool(keys, concurrency, async (key): Promise<PerKeyResult> => {
+    const res = await downloader(key);
+    if (!res.ok || !res.bytes) {
+      return { failure: { key, error: res.error ?? `HTTP ${res.status ?? 0}`, status: res.status } };
+    }
+    const hash = await sha256Hex(res.bytes);
+    const ext = extFromKey(key) || extFromContentType(res.contentType) || 'bin';
+    const name = `${hash}.${ext}`;
+    const existed = await sink.hasAsset(name);
+    if (!existed) await sink.writeAsset(name, res.bytes);
+    return {
+      wrote: !existed,
+      entry: { key, kind: 'media-other', hash, ext, file: `assets/${name}`, size: res.bytes.byteLength },
+    };
+  });
+
+  const out: KeyDownloadResult = { files: {}, failed: [], written: 0, deduped: 0 };
+  for (const r of results) {
+    if (r.entry) {
+      out.files[r.entry.key] = r.entry.file;
+      if (r.wrote) out.written += 1;
+      else out.deduped += 1;
+    } else if (r.failure) {
+      out.failed.push(r.failure);
+    }
+  }
+  return out;
+}
+
 /** sha256 hex of bytes — the content address + integrity checksum. */
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource);

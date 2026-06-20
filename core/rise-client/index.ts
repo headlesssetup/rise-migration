@@ -13,7 +13,8 @@ export const REFRESH_URL =
   'https://id.articulate.com/api/v1/sessions/me/lifecycle/refresh';
 
 export interface RequestSpec {
-  /** Relative path (resolved against the active Rise tab's origin). */
+  /** Relative path (resolved against the active Rise tab's origin), or an
+   *  absolute URL for cross-origin account APIs (e.g. api.articulate.com). */
   url: string;
   method: 'GET' | 'POST';
   /** JSON body string for POSTs. */
@@ -85,6 +86,49 @@ export function buildListQuestionBanksRequest(): RequestSpec {
 export function buildGetQuestionBankRequest(bankId: string): RequestSpec {
   return {
     url: `/api/rise-authoring/question_banks/${encodeURIComponent(bankId)}`,
+    method: 'GET',
+  };
+}
+
+/**
+ * POST .../ducks/rise/blockTemplates/FETCH_BLOCK_TEMPLATES — the account's saved
+ * reusable block templates (team library). Body payload is null.
+ */
+export function buildFetchBlockTemplatesRequest(): RequestSpec {
+  return {
+    url: '/api/rise-runtime/ducks/rise/blockTemplates/FETCH_BLOCK_TEMPLATES',
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'rise/blockTemplates/FETCH_BLOCK_TEMPLATES',
+      payload: null,
+    }),
+  };
+}
+
+/**
+ * POST .../ducks/rise/typefaces/FETCH_TYPEFACES — the account's custom fonts.
+ * The payload is a courseId (the calling context); the response lists the
+ * subscription-level typefaces regardless, so any saved course id works.
+ */
+export function buildFetchTypefacesRequest(courseId: string): RequestSpec {
+  return {
+    url: '/api/rise-runtime/ducks/rise/typefaces/FETCH_TYPEFACES',
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'rise/typefaces/FETCH_TYPEFACES',
+      payload: courseId,
+    }),
+  };
+}
+
+/**
+ * GET api.articulate.com/review/items — Review 360 "storyline" items the account
+ * can reach (incl. Mighty bundles, flagged `source.mighty_bundle`). Absolute URL
+ * (cross-origin, bearer-auth, CORS-enabled); covered by host_permissions.
+ */
+export function buildReviewItemsRequest(): RequestSpec {
+  return {
+    url: 'https://api.articulate.com/review/items?includeStackItems=true&productFilter=storyline',
     method: 'GET',
   };
 }

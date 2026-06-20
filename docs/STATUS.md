@@ -22,21 +22,29 @@ API calls run **inside the live Rise tab** via `chrome.scripting.executeScript`
 (first-party cookies; catalog is cookie-authed). Plane-agnostic (US + EU) via
 relative URLs. Account identity from the header avatar.
 
-**Outputs** (to a user-picked folder, persisted via IndexedDB):
-`inventory.*`, `folders.json` + `folders-inventory.*`, `census.*`,
-`catalog.*` (per-variant field profiles), `novelty.*` (new variants/fields vs
-catalog), `question-banks/*` + `question-banks-catalog.*` (per-type schema) +
-`question-banks-inventory.*` (per-bank decision table), `manifest.json`.
+**Outputs** (to a user-picked folder, persisted via IndexedDB). Layout: root
+holds `manifest.json` + content dirs `courses/`, `question-banks/`, `assets/`;
+raw account source in `account/` (`folders.json`, `block-templates.json`,
+`typefaces.json`, `review-items.json`); all derived reports in `_metadata/`
+(`inventory.*`, `census.*`, `catalog.*` (per-variant field profiles), `novelty.*`,
+`folders-inventory.*`, `question-banks-catalog.*` (per-type schema) +
+`question-banks-inventory.*` (per-bank decision table), `block-templates-inventory.*`,
+`typefaces-inventory.*`, `review-items-inventory.*`, `assets-summary.json`).
+(Older runs wrote these at root; stale root files are harmless — delete them.)
+The account exports + their endpoint map are documented in `docs/rise-account-exports.md`.
 
 **Tier-1 loud-fail gating and the novelty accept-UI are intentionally deferred** —
 catalog curation is done **by hand** (send a run's `catalog.json`; we regenerate
 `core/census/catalog.fields.json`). This works well; no automation needed.
 
-**Phase 2 (asset extraction): DONE** — see below. The export side is complete:
-courses + banks + folders + uploaded media all captured into a self-sufficient
-archive.
+**Phase 2 (asset extraction + account exports): DONE** — see below. The export
+side is complete: courses + banks + folders + uploaded media + **account extras**
+(block templates, custom typefaces incl. font files, Review-360 items inventory)
+all captured into a self-sufficient archive. **Mighty** content is treated as
+Storyline (reference only): the review-items inventory flags `mighty` bundles
+(empty Review packages); bundle bytes are intentionally not grabbed yet.
 
-Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
+Stats: 101 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
 Phase 0 validated against a live 579-course account + mitm captures.
 
 ## Known schema (captured)

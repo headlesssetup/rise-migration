@@ -45,6 +45,7 @@ import {
   countCourses,
   downloadAllAssets,
   exportCourses,
+  fetchAccountExtras,
   fetchFolders,
   fetchQuestionBanks,
   buildBankInventoryRows,
@@ -368,6 +369,18 @@ export function App() {
     }
   }, [storage, onEvent, addLog]);
 
+  const runAccount = useCallback(async () => {
+    if (!storage) return;
+    setPhase('exporting');
+    setProgress(null);
+    addLog('Exporting account extras (block templates, typefaces, review items)…');
+    const s = await fetchAccountExtras(storage, onEvent);
+    setPhase('done');
+    addLog(
+      `Account extras: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s), ${s.reviewItems} review item(s) (${s.mightyItems} Mighty).`,
+    );
+  }, [storage, onEvent, addLog]);
+
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
 
@@ -508,6 +521,21 @@ export function App() {
           and YouTube/Vimeo embeds are kept as references. No Rise tab required.
         </p>
         {assets && <AssetsView summary={assets} />}
+      </section>
+
+      <section className="card">
+        <h2>Account extras</h2>
+        <button
+          onClick={runAccount}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Export account extras'}
+        </button>
+        <p className="hint">
+          Block templates, custom typefaces (+ font files), and the Review-360
+          items inventory (flags Mighty bundles). Raw → account/, reports →
+          _metadata/.
+        </p>
       </section>
 
       {progress && (

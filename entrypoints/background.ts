@@ -8,10 +8,13 @@
 
 import { identityFromToken, type Identity } from '@/core/auth/jwt';
 import {
+  buildFetchBlockTemplatesRequest,
+  buildFetchTypefacesRequest,
   buildGetCourseRequest,
   buildGetQuestionBankRequest,
   buildListFoldersRequest,
   buildListQuestionBanksRequest,
+  buildReviewItemsRequest,
   buildSearchRequest,
   REFRESH_URL,
   type RequestSpec,
@@ -22,6 +25,7 @@ import type {
   BackgroundResponse,
   ContentMessage,
   FetchResult,
+  RawKind,
 } from '@/shared/messaging';
 
 const TOKEN_KEY = 'riseToken';
@@ -197,6 +201,34 @@ export default defineBackground(() => {
     }
   }
 
+  // Fetch a raw JSON resource and wrap it as a RAW_RESULT (shared by the
+  // account-level exports: block templates, typefaces, review items).
+  async function rawResult(
+    kind: RawKind,
+    spec: RequestSpec,
+    label: string,
+  ): Promise<BackgroundResponse> {
+    const r = await rawFetch(spec);
+    if (!r.ok) return { type: 'RAW_RESULT', kind, result: r };
+    try {
+      return {
+        type: 'RAW_RESULT',
+        kind,
+        result: {
+          ok: true,
+          status: r.status,
+          data: { raw: r.data, doc: JSON.parse(r.data) },
+        },
+      };
+    } catch {
+      return {
+        type: 'RAW_RESULT',
+        kind,
+        result: { ok: false, status: r.status, error: `${label} was not valid JSON.` },
+      };
+    }
+  }
+
   async function handle(
     msg: BackgroundRequest,
   ): Promise<BackgroundResponse> {
@@ -333,6 +365,27 @@ export default defineBackground(() => {
           };
         }
       }
+
+      case 'FETCH_BLOCK_TEMPLATES':
+        return rawResult(
+          'blockTemplates',
+          buildFetchBlockTemplatesRequest(),
+          'Block templates response',
+        );
+
+      case 'FETCH_TYPEFACES':
+        return rawResult(
+          'typefaces',
+          buildFetchTypefacesRequest(msg.courseId),
+          'Typefaces response',
+        );
+
+      case 'REVIEW_ITEMS':
+        return rawResult(
+          'reviewItems',
+          buildReviewItemsRequest(),
+          'Review items response',
+        );
     }
   }
 

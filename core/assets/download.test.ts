@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   downloadAssetsFor,
+  downloadKeyList,
   findUndownloadedKeys,
   keyPathCandidates,
   runPool,
@@ -33,6 +34,32 @@ function fakeDownloader(map: Record<string, Uint8Array>): Downloader {
     return { ok: true, status: 200, bytes };
   };
 }
+
+describe('downloadKeyList', () => {
+  it('stores a flat key list content-addressed, deduping identical bytes', async () => {
+    const sink = memSink();
+    const woff = enc('FONT-A');
+    const res = await downloadKeyList(
+      [
+        'rise/fonts/u/a-Light.woff',
+        'rise/fonts/u/a-Bold.woff', // same bytes → deduped
+        'rise/fonts/u/missing.woff', // 404
+      ],
+      sink,
+      fakeDownloader({
+        'rise/fonts/u/a-Light.woff': woff,
+        'rise/fonts/u/a-Bold.woff': woff,
+      }),
+    );
+    expect(res.written).toBe(1);
+    expect(res.deduped).toBe(1);
+    expect(res.failed.map((f) => f.key)).toEqual(['rise/fonts/u/missing.woff']);
+    const hash = await sha256Hex(woff);
+    expect(res.files['rise/fonts/u/a-Light.woff']).toBe(`assets/${hash}.woff`);
+    expect(res.files['rise/fonts/u/a-Bold.woff']).toBe(`assets/${hash}.woff`);
+    expect(sink.files.size).toBe(1);
+  });
+});
 
 describe('keyPathCandidates', () => {
   it('offers verbatim first, then a single-encoded normalization', () => {

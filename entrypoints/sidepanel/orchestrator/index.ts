@@ -21,3 +21,4 @@ export {
   type BankFetchResult,
 } from './banks';
 export { cdnDownload, downloadAllAssets, type AssetsSummary } from './assets';
+export { fetchAccountExtras, type AccountExtrasSummary } from './account';

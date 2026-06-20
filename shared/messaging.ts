@@ -24,7 +24,13 @@ export type BackgroundRequest =
   | { type: 'GET_COURSE'; courseId: string }
   | { type: 'LIST_FOLDERS' }
   | { type: 'LIST_QUESTION_BANKS' }
-  | { type: 'GET_QUESTION_BANK'; bankId: string };
+  | { type: 'GET_QUESTION_BANK'; bankId: string }
+  | { type: 'FETCH_BLOCK_TEMPLATES' }
+  | { type: 'FETCH_TYPEFACES'; courseId: string }
+  | { type: 'REVIEW_ITEMS' };
+
+/** Account-level raw exports that share a {raw, doc} result shape. */
+export type RawKind = 'blockTemplates' | 'typefaces' | 'reviewItems';
 
 /** Notifications the content script sends to the background. */
 export type ContentMessage =
@@ -42,4 +48,9 @@ export type BackgroundResponse =
     }
   | { type: 'FOLDERS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
   | { type: 'BANKS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
-  | { type: 'BANK_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> };
+  | { type: 'BANK_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
+  | {
+      type: 'RAW_RESULT';
+      kind: RawKind;
+      result: FetchResult<{ raw: string; doc: unknown }>;
+    };

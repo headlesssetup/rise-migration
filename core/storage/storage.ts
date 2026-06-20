@@ -46,6 +46,20 @@ export interface Storage {
   /** Write the combined folder inventory (course + bank, with name-paths). */
   writeFolderInventory(json: string, csv: string): Promise<void>;
 
+  // --- Phase 2.4: account-level exports (raw → account/, reports → _metadata/) ---
+  /** Write the raw block-templates response. */
+  writeBlockTemplates(raw: string): Promise<void>;
+  /** Write the block-templates inventory. */
+  writeBlockTemplateInventory(json: string, csv: string): Promise<void>;
+  /** Write the raw typefaces response. */
+  writeTypefaces(raw: string): Promise<void>;
+  /** Write the typefaces inventory. */
+  writeTypefaceInventory(json: string, csv: string): Promise<void>;
+  /** Write the raw Review-360 items response. */
+  writeReviewItems(raw: string): Promise<void>;
+  /** Write the Review-360 items inventory. */
+  writeReviewItemsInventory(json: string, csv: string): Promise<void>;
+
   // --- Phase 2: assets (content-addressed binaries + per-owner manifests) ---
   /** Write a content-addressed asset blob: `assets/<name>` (name=`<sha256>.<ext>`). */
   writeAsset(name: string, bytes: Uint8Array): Promise<void>;

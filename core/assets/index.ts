@@ -23,6 +23,7 @@ export {
 export { locateKey, formatLocation, type KeyLocation } from './locate';
 export {
   downloadAssetsFor,
+  downloadKeyList,
   keyPathCandidates,
   runPool,
   sha256Hex,
@@ -32,4 +33,5 @@ export {
   type DownloadOutcome,
   type DownloadResult,
   type DownloadStats,
+  type KeyDownloadResult,
 } from './download';
