@@ -257,6 +257,19 @@ export class FileSystemStorage implements Storage {
     }
   }
 
+  async readAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+  ): Promise<string | null> {
+    try {
+      const dir = await this.scopeDir(scope);
+      const handle = await dir.getFileHandle(`${id}.assets.json`);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
   async writeAssetsSummary(json: string): Promise<void> {
     await this.writeFile(this.root, 'assets-summary.json', json);
   }

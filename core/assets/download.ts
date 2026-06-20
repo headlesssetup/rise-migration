@@ -24,9 +24,60 @@ export interface DownloadOutcome {
   status?: number;
   contentType?: string;
   error?: string;
+  /** The key-path variant that was fetched (for diagnostics). */
+  urlTried?: string;
 }
 
 export type Downloader = (key: string) => Promise<DownloadOutcome>;
+
+/** Decode a key to its literal form, peeling double/triple percent-encoding
+ *  (`%2520` → `%20` → space). Guarded against malformed `%` sequences. */
+function decodeToLiteral(key: string): string {
+  let cur = key;
+  for (let i = 0; i < 3; i++) {
+    let dec: string;
+    try {
+      dec = decodeURIComponent(cur);
+    } catch {
+      break;
+    }
+    if (dec === cur) break;
+    cur = dec;
+  }
+  return cur;
+}
+
+/** Percent-encode each path segment (preserving `/`) for a CDN request. */
+function encodePath(literal: string): string {
+  return literal.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * Candidate key-paths to try against the CDN, in order, de-duplicated:
+ *   1. verbatim (correct for already single-encoded keys),
+ *   2. normalized single-encoding (fixes `%2520` double-encoding + literals),
+ *   3. NFC-normalized (fixes NFD combining-mark filenames).
+ * Append each to the CDN base to form the request URL.
+ */
+export function keyPathCandidates(key: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (p: string): void => {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  };
+  add(key);
+  const literal = decodeToLiteral(key);
+  add(encodePath(literal));
+  try {
+    add(encodePath(literal.normalize('NFC')));
+  } catch {
+    /* normalize unsupported — skip */
+  }
+  return out;
+}
 
 /** The binary surface of Storage that the downloader needs (FileSystemStorage
  *  satisfies it). Keeping it narrow makes the core testable with a Map sink. */
@@ -42,6 +93,8 @@ export interface DownloadStats {
   written: number;
   /** Fetched keys whose bytes were already on disk (content dedup). */
   deduped: number;
+  /** Keys carried over from a prior manifest without re-fetching (resume). */
+  reused: number;
   /** Keys that failed to download. */
   failed: number;
 }
@@ -83,12 +136,16 @@ interface PerKeyResult {
   entry?: AssetManifestEntry;
   failure?: AssetFailure;
   wrote?: boolean;
+  reused?: boolean;
 }
 
 /**
  * Download every uploaded-media key in `doc`, store bytes content-addressed
  * (`assets/<sha256>.<ext>`, written once), and return the manifest + stats.
  * Downloads run in parallel (pool) since the CDN is public-read.
+ *
+ * `opts.priorAssets` (from a previous manifest) are reused without re-fetching —
+ * this drives cheap resume: a re-run only fetches keys that are new or failed.
  */
 export async function downloadAssetsFor(
   ownerType: OwnerType,
@@ -96,20 +153,30 @@ export async function downloadAssetsFor(
   doc: unknown,
   sink: AssetSink,
   downloader: Downloader,
-  opts: { concurrency?: number; generatedAt?: string } = {},
+  opts: {
+    concurrency?: number;
+    generatedAt?: string;
+    priorAssets?: AssetManifestEntry[];
+  } = {},
 ): Promise<DownloadResult> {
   const collected = collectAssetKeys(doc, ownerId);
+  const reuse = new Map((opts.priorAssets ?? []).map((e) => [e.key, e]));
 
   const perKey = await runPool(
     collected,
     opts.concurrency ?? DEFAULT_CONCURRENCY,
     async (ak): Promise<PerKeyResult> => {
+      const prior = reuse.get(ak.key);
+      if (prior) return { entry: prior, reused: true };
+
       const res = await downloader(ak.key);
       if (!res.ok || !res.bytes) {
         return {
           failure: {
             key: ak.key,
             error: res.error ?? `HTTP ${res.status ?? 0}`,
+            status: res.status,
+            urlTried: res.urlTried,
           },
         };
       }
@@ -137,10 +204,12 @@ export async function downloadAssetsFor(
   const failed: AssetFailure[] = [];
   let written = 0;
   let deduped = 0;
+  let reused = 0;
   for (const r of perKey) {
     if (r.entry) {
       assets.push(r.entry);
-      if (r.wrote) written += 1;
+      if (r.reused) reused += 1;
+      else if (r.wrote) written += 1;
       else deduped += 1;
     } else if (r.failure) {
       failed.push(r.failure);
@@ -156,6 +225,12 @@ export async function downloadAssetsFor(
       failed,
       opts.generatedAt,
     ),
-    stats: { fetched: assets.length, written, deduped, failed: failed.length },
+    stats: {
+      fetched: written + deduped,
+      written,
+      deduped,
+      reused,
+      failed: failed.length,
+    },
   };
 }

@@ -24,6 +24,10 @@ export interface AssetManifestEntry {
 export interface AssetFailure {
   key: string;
   error: string;
+  /** HTTP status of the last attempt (0/undefined for network errors). */
+  status?: number;
+  /** The key-path variant last tried against the CDN (diagnostics). */
+  urlTried?: string;
 }
 
 export interface AssetManifest {

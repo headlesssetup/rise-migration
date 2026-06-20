@@ -21,6 +21,7 @@ export {
 } from './manifest';
 export {
   downloadAssetsFor,
+  keyPathCandidates,
   runPool,
   sha256Hex,
   DEFAULT_CONCURRENCY,

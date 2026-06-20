@@ -34,19 +34,21 @@ export interface AssetKey {
   paths: string[];
 }
 
-// Global extractors. Mirror the classification regexes in core/census/scan.ts,
-// but capture every match within a string rather than classifying it whole.
-// - usercontent URL: capture the path after the host.
-// - bare rise key: rise/courses/{id}/… or rise/questionBanks/{id}/…
-// The char class stops at quotes/whitespace/markup/parens so embedded URLs in
-// HTML attributes or JSON are bounded correctly.
+// Extractors. Two modes:
+//  - Whole-value fast path: a string node that IS a single bare key or
+//    usercontent URL is taken verbatim — including `(`, `)`, `%2520`, unicode —
+//    so filenames like `Group 2 (7).png` are never truncated.
+//  - Bounded fallback: for keys embedded inside a larger HTML/text blob, capture
+//    each match up to a real delimiter (quote / whitespace / markup / paren).
+const RE_WHOLE_VALUE =
+  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.com\/)?(rise\/(?:courses|questionBanks)\/\S+)$/i;
 const RE_USERCONTENT_URL =
   /https?:\/\/(?:www\.)?articulateusercontent\.com\/([^\s"'<>\\)]+)/gi;
 const RE_BARE_RISE_KEY =
   /rise\/(?:courses|questionBanks)\/[^\s"'<>\\)]+/gi;
 
 /** Strip a trailing `?query`/`#fragment` and any trailing punctuation that the
- *  greedy char class may have swept up at a sentence/markup boundary. */
+ *  bounded char class may have swept up at a sentence/markup boundary. */
 function canonicalizeKey(raw: string): string {
   const head = raw.split(/[?#]/, 1)[0] ?? raw;
   return head.replace(/[.,;:]+$/, ''); // trailing sentence punctuation, not extensions
@@ -59,6 +61,10 @@ function canonicalizeKey(raw: string): string {
  * and de-duplicated.
  */
 export function extractUploadedKeys(value: string): string[] {
+  // Fast path: the entire value is one key/URL — take it whole (parens etc.).
+  const whole = value.trim().match(RE_WHOLE_VALUE);
+  if (whole?.[1]) return [canonicalizeKey(whole[1])];
+
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (raw: string): void => {

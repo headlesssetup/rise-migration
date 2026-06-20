@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   downloadAssetsFor,
   findUndownloadedKeys,
+  keyPathCandidates,
   runPool,
   sha256Hex,
   type AssetSink,
@@ -32,6 +33,25 @@ function fakeDownloader(map: Record<string, Uint8Array>): Downloader {
     return { ok: true, status: 200, bytes };
   };
 }
+
+describe('keyPathCandidates', () => {
+  it('offers verbatim first, then a single-encoded normalization', () => {
+    const c = keyPathCandidates('rise/courses/c1/Group%25202%2520(7).png');
+    expect(c[0]).toBe('rise/courses/c1/Group%25202%2520(7).png'); // verbatim
+    expect(c).toContain('rise/courses/c1/Group%202%20(7).png'); // %2520 → %20
+  });
+
+  it('offers an NFC-normalized variant for NFD unicode', () => {
+    const c = keyPathCandidates('rise/courses/c1/Ka%CC%88tting.mp4'); // a + combining ¨
+    expect(c).toContain('rise/courses/c1/K%C3%A4tting.mp4'); // precomposed ä
+  });
+
+  it('returns a single candidate for an already-clean key', () => {
+    expect(keyPathCandidates('rise/courses/c1/clean.jpg')).toEqual([
+      'rise/courses/c1/clean.jpg',
+    ]);
+  });
+});
 
 describe('runPool', () => {
   it('preserves input order', async () => {
@@ -143,5 +163,38 @@ describe('downloadAssetsFor', () => {
     expect(second.stats.written).toBe(0);
     expect(second.stats.deduped).toBe(1);
     expect(sink.files.size).toBe(1);
+  });
+
+  it('reuses prior manifest entries without re-fetching (resume)', async () => {
+    const sink = memSink();
+    // Downloader serves only clip.mp4; one.jpg would 404 if it were fetched.
+    const dl = fakeDownloader({ 'rise/courses/c1/clip.mp4': enc('VID') });
+    const prior = [
+      {
+        key: 'rise/courses/c1/one.jpg',
+        kind: 'media-image' as const,
+        hash: 'deadbeef',
+        ext: 'jpg',
+        file: 'assets/deadbeef.jpg',
+        size: 3,
+      },
+    ];
+    const { manifest, stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      {
+        a: { media: { image: { key: 'rise/courses/c1/one.jpg' } } },
+        c: { media: { video: { key: 'rise/courses/c1/clip.mp4' } } },
+      },
+      sink,
+      dl,
+      { priorAssets: prior },
+    );
+    expect(stats.reused).toBe(1); // one.jpg carried over, not fetched
+    expect(stats.written).toBe(1); // clip.mp4 fetched fresh
+    expect(manifest.complete).toBe(true);
+    expect(
+      manifest.assets.find((a) => a.key.endsWith('one.jpg'))?.hash,
+    ).toBe('deadbeef');
   });
 });

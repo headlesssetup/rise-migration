@@ -337,14 +337,18 @@ export function App() {
     const summary = await downloadAllAssets(storage, onEvent);
     setAssets(summary);
     setPhase('done');
+    const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
     addLog(
-      `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.failed} failed across ${summary.owners} owner(s)${
+      `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
         summary.skipped ? ` (${summary.skipped} already done)` : ''
       }. → assets/, *.assets.json, assets-summary.json.`,
     );
+    if (orphan) {
+      addLog(`${orphan} asset(s) orphaned (404 — likely deleted); not blocking.`);
+    }
     if (!summary.complete) {
       const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
-      addLog(`⚠ ${n} uploaded key(s) did NOT download — see assets-summary.json.`);
+      addLog(`⚠ ${n} key(s) failed (non-404) — click Download assets again to retry.`);
     }
   }, [storage, onEvent, addLog]);
 

@@ -55,6 +55,30 @@ describe('extractUploadedKeys', () => {
     expect(extractUploadedKeys('just some text')).toEqual([]);
     expect(extractUploadedKeys('rise/assets/themes/cover.jpg')).toEqual([]);
   });
+
+  it('keeps parentheses in a whole-value key (no truncation at ")")', () => {
+    // Regression: the bounded regex used to cut "…(7).png" at the first ")".
+    expect(
+      extractUploadedKeys('rise/courses/c1/abc-Group%25202%2520(7).png'),
+    ).toEqual(['rise/courses/c1/abc-Group%25202%2520(7).png']);
+    expect(
+      extractUploadedKeys(
+        'https://articulateusercontent.com/rise/courses/c1/cover%2520(5).png',
+      ),
+    ).toEqual(['rise/courses/c1/cover%2520(5).png']);
+  });
+
+  it('keeps double-encoding and NFD unicode in a whole-value key', () => {
+    expect(extractUploadedKeys('rise/courses/c1/Ka%CC%88tting.mp4')).toEqual([
+      'rise/courses/c1/Ka%CC%88tting.mp4',
+    ]);
+  });
+
+  it('still bounds keys embedded in a larger HTML/text blob', () => {
+    const html =
+      '<p>a <img src="https://articulateusercontent.com/rise/courses/c1/a.gif"> b</p>';
+    expect(extractUploadedKeys(html)).toEqual(['rise/courses/c1/a.gif']);
+  });
 });
 
 describe('extFromKey / extFromContentType', () => {

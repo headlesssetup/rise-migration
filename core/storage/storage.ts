@@ -60,6 +60,11 @@ export interface Storage {
     scope: 'courses' | 'question-banks',
     id: string,
   ): Promise<boolean>;
+  /** Read a prior asset manifest (for resume / retry), or null if absent. */
+  readAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+  ): Promise<string | null>;
   /** Write the run-wide assets summary (totals + un-downloaded-key assertion). */
   writeAssetsSummary(json: string): Promise<void>;
 }

@@ -56,16 +56,26 @@ The archive is now self-sufficient for import: uploaded binaries are downloaded
 from the public CDN and stored content-addressed.
 
 - `core/assets/keys.ts` — reuses `scanRefs` (untruncated) to enumerate media
-  occurrences, then `extractUploadedKeys` pulls clean keys out of each value
-  (handles bare keys, usercontent URLs, and HTML-embedded URLs).
+  occurrences, then `extractUploadedKeys` pulls clean keys out of each value.
+  A whole-value fast path takes a bare key / usercontent URL verbatim (incl.
+  `(n)`, `%2520`, unicode); a bounded regex handles keys embedded in HTML.
   `collectAssetKeys` keeps `media-image/video/audio/other`, deduped by key.
 - `core/assets/download.ts` — `downloadAssetsFor` runs a bounded parallel pool
-  (`runPool`, default 4) of CDN downloads, hashes bytes (`sha256Hex`), writes
-  each blob once via an injected `AssetSink`, and builds the manifest.
+  (`runPool`, default 4), hashes bytes (`sha256Hex`), writes each blob once via
+  an injected `AssetSink`, and builds the manifest. `keyPathCandidates` yields
+  verbatim → single-encoded (fixes `%2520`) → NFC (fixes NFD unicode) URL forms.
+  `priorAssets` lets a re-run reuse downloaded keys without re-fetching (resume).
 - `core/assets/manifest.ts` — per-owner `AssetManifest` + `findUndownloadedKeys`
   (the loud-fail assertion: every collected key must resolve to a stored asset).
-- Panel: `orchestrator/assets.ts` (`cdnDownload`, `downloadAllAssets`) +
-  the "Assets (Phase 2)" card in `App.tsx`.
+- Panel: `orchestrator/assets.ts` (`cdnDownload` tries the encoding variants +
+  retries transient 429/5xx; `downloadAllAssets` resumes incomplete owners and
+  splits failures into `orphaned` (404 after all variants) vs retryable) + the
+  "Assets (Phase 2)" card in `App.tsx`.
+
+**Resume:** re-running "Download assets" skips owners whose manifest is already
+complete, reuses successful keys for incomplete ones, and retries only the
+failures — so a re-run is cheap and self-healing. (An early full-library run hit
+1,498 failures from a `)`-truncation + double-encoding bug, since fixed.)
 
 **Archive layout (new):**
 - `assets/<sha256>.<ext>` — content-addressed media bytes, deduped across the run.
