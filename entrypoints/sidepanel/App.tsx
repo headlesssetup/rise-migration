@@ -15,6 +15,8 @@ import {
 import {
   bankCatalogToCsv,
   bankCatalogToJson,
+  bankInventoryToCsv,
+  bankInventoryToJson,
   buildBankCatalog,
   type BankCatalog,
 } from '@/core/census/question-banks';
@@ -27,6 +29,7 @@ import { FileSystemStorage } from '@/core/storage/fs';
 import type { Storage } from '@/core/storage/storage';
 import type { SessionState } from '@/shared/messaging';
 import type { SearchResultItem } from '@/shared/types/rise';
+import { AssetsView } from './components/AssetsView';
 import { BanksView } from './components/BanksView';
 import { CensusView } from './components/CensusView';
 import { NoveltyView } from './components/NoveltyView';
@@ -40,12 +43,16 @@ import {
 import {
   buildFolders,
   countCourses,
+  downloadAllAssets,
   exportCourses,
+  fetchAccountExtras,
   fetchFolders,
   fetchQuestionBanks,
+  buildBankInventoryRows,
   listAllCourses,
   scanSavedBanks,
   scanSavedCourses,
+  type AssetsSummary,
   type ProgressEvent,
 } from './orchestrator';
 import { rpc } from './rpc';
@@ -76,6 +83,7 @@ export function App() {
   const [census, setCensus] = useState<Census | null>(null);
   const [novelty, setNovelty] = useState<NoveltyReport | null>(null);
   const [banks, setBanks] = useState<BankCatalog | null>(null);
+  const [assets, setAssets] = useState<AssetsSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((message: string) => {
@@ -302,6 +310,17 @@ export function App() {
     const saved = await scanSavedBanks(storage, onEvent);
     const cat = buildBankCatalog(saved);
     await storage.writeBankCatalog(bankCatalogToJson(cat), bankCatalogToCsv(cat));
+
+    // Per-bank inventory (decision table: size, folder, usage, owner, status).
+    const inv = await buildBankInventoryRows(storage, saved);
+    await storage.writeBankInventory(
+      bankInventoryToJson(inv),
+      bankInventoryToCsv(inv),
+    );
+    addLog(
+      `Bank inventory: ${inv.length} bank(s) → question-banks-inventory.csv/json.`,
+    );
+
     setBanks(cat);
     setPhase('done');
     if (res.failed.length) {
@@ -324,12 +343,50 @@ export function App() {
     }
   }, [storage, onEvent, addLog]);
 
+  const runAssets = useCallback(async () => {
+    if (!storage) return;
+    setPhase('exporting');
+    setAssets(null);
+    setProgress(null);
+    addLog('Downloading assets from articulateusercontent.com (parallel)…');
+    const summary = await downloadAllAssets(storage, onEvent);
+    setAssets(summary);
+    setPhase('done');
+    const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
+    addLog(
+      `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
+        summary.skipped ? ` (${summary.skipped} already done)` : ''
+      }. → assets/, *.assets.json, assets-summary.json.`,
+    );
+    if (orphan) {
+      addLog(
+        `${orphan} asset(s) missing at source (403/404 — likely deleted); flagged in assets-summary.json, not blocking.`,
+      );
+    }
+    if (!summary.complete) {
+      const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
+      addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
+    }
+  }, [storage, onEvent, addLog]);
+
+  const runAccount = useCallback(async () => {
+    if (!storage) return;
+    setPhase('exporting');
+    setProgress(null);
+    addLog('Exporting account extras (block templates, typefaces, review items)…');
+    const s = await fetchAccountExtras(storage, onEvent);
+    setPhase('done');
+    addLog(
+      `Account extras: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s), ${s.reviewItems} review item(s) (${s.mightyItems} Mighty).`,
+    );
+  }, [storage, onEvent, addLog]);
+
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
 
   return (
     <div className="app">
-      <h1>Rise Explorer · Phase 0</h1>
+      <h1>Rise Migration — Exporter</h1>
 
       <section className="card">
         <h2>Session</h2>
@@ -452,6 +509,35 @@ export function App() {
         {banks && <BanksView banks={banks} />}
       </section>
 
+      <section className="card">
+        <h2>Assets (Phase 2)</h2>
+        <button onClick={runAssets} disabled={busy || !storage}>
+          {phase === 'exporting' ? 'Working…' : 'Download assets'}
+        </button>
+        <p className="hint">
+          Downloads uploaded media (image/video/audio) for every saved course +
+          bank from the public CDN (parallel — no pacing). Stored content-addressed
+          in assets/ with per-owner *.assets.json. Storyline bundles, cdn.articulate.com,
+          and YouTube/Vimeo embeds are kept as references. No Rise tab required.
+        </p>
+        {assets && <AssetsView summary={assets} />}
+      </section>
+
+      <section className="card">
+        <h2>Account extras</h2>
+        <button
+          onClick={runAccount}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Export account extras'}
+        </button>
+        <p className="hint">
+          Block templates, custom typefaces (+ font files), and the Review-360
+          items inventory (flags Mighty bundles). Raw → account/, reports →
+          _metadata/.
+        </p>
+      </section>
+
       {progress && (
         <section className="card">
           <h2>Progress</h2>
@@ -469,10 +555,13 @@ export function App() {
       )}
 
       {census && (
-        <section className="card">
-          <h2>Census</h2>
+        <details className="card">
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+            Census — {census.courseCount} course(s) · {census.variants.length}{' '}
+            variants · {census.refs.length} ref shapes
+          </summary>
           <CensusView census={census} />
-        </section>
+        </details>
       )}
 
       <section className="card">

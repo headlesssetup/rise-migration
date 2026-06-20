@@ -95,6 +95,13 @@ attributes — preserve verbatim.
    field-paths (core = present in every question of that type, vs optional) →
    `question-banks-catalog.json` / `.csv`. The catalog also includes a
    `mediaRefs` summary (see below).
+4. Inventory (decision table): one row per bank →
+   `question-banks-inventory.json` / `.csv` with `id, title, folderPath,
+   questionCount, types` (per-type breakdown), `mediaCount, usedByCourses`
+   (how many exported courses reference it via draw-from-bank), `exampleCourseIds,
+   deleted, updatedAt, version, author/authorEmail, lastEditedBy, folderId`.
+   This is the "which banks should we migrate?" view (e.g. `usedByCourses: 0` =
+   likely droppable). **No `created_at`** is exposed by Rise — only `updated_at`.
 
 ## Media (banks carry their own assets)
 

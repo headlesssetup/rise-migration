@@ -21,14 +21,14 @@ Rise blocks **round-trip verbatim** — read each block's JSON and write it back
 - **Copy-faithful round-trip check.** For any block treated as copy-faithful, assert that re-serialized output equals source input except for intended media/ref remaps. A mismatch is a code-fault signal → alert, do not ship it silently.
 - **No source media keys may survive** in an imported course. Assert every uploaded-asset key was re-uploaded and remapped before declaring success. (CDN URLs `cdn.articulate.com/...` and embeds YouTube/Vimeo are kept as-is — not re-uploaded.)
 - **The source archive is the immutable source of truth.** Never mutate it. The target payload is derived at import time from a copy.
-- **Storyline is conditional.** A Storyline block is only recreatable if the target account can reach the same Review 360 item (same 360 org/team). If not, flag it for manual handling — there is no API path to ingest a raw bundle.
+- **Storyline is conditional.** A Storyline block is only recreatable if the target account can reach the same Review 360 item (same 360 org/team). If not, flag it for manual handling — there is no API path to ingest a raw bundle. **Mighty** (external plugin) is treated as Storyline: it surfaces as storyline-variant blocks + Review-360 items flagged `mighty_bundle` (empty package). Reference only — flagged in the review-items inventory; bundle bytes not grabbed yet; target needs the Mighty plugin provisioned.
 - **Auth:** bearer JWT (Okta). Content script captures it from the live session; service worker attaches `Authorization: Bearer`; refresh on `401` via `id.articulate.com/.../lifecycle/refresh`. Never persist customer credentials.
 - **IDs:** course id and lesson id are server-assigned; block ids and item ids are client-generated (cuid-style) — generate consistently and keep internal `refs` (`items:<itemId>/…`) valid.
 - **EU-resident store** for the US→EU case; provide a purge-job-data action.
 - **Service worker is ephemeral.** Persist job progress to storage so a terminated worker resumes mid-job.
 
 ## Storage
-- Course archives → File System Access API into a user-picked folder: raw `course.json` + `/assets/` + `manifest.json` per course.
+- Course archives → File System Access API into a user-picked folder. Layout: root = `manifest.json` + content dirs `courses/`, `question-banks/`, `assets/` (content-addressed); raw account source in `account/` (folders, block-templates, typefaces, review-items); derived reports (inventories/census/catalog/novelty/assets-summary) in `_metadata/`. See `docs/rise-account-exports.md` for the full account export map.
 - App state (registry, job status, session/identity) → `chrome.storage.local` / IndexedDB.
 - All storage behind a `Storage` interface: `FileSystemStorage` now, `DbStorage` later.
 

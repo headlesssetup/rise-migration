@@ -22,17 +22,30 @@ API calls run **inside the live Rise tab** via `chrome.scripting.executeScript`
 (first-party cookies; catalog is cookie-authed). Plane-agnostic (US + EU) via
 relative URLs. Account identity from the header avatar.
 
-**Outputs** (to a user-picked folder, persisted via IndexedDB):
-`inventory.*`, `folders.json` + `folders-inventory.*`, `census.*`,
-`catalog.*` (per-variant field profiles), `novelty.*` (new variants/fields vs
-catalog), `question-banks/*` + `question-banks-catalog.*`, `manifest.json`.
+**Outputs** (to a user-picked folder, persisted via IndexedDB). Layout: root
+holds `manifest.json` + content dirs `courses/`, `question-banks/`, `assets/`;
+raw account source in `account/` (`folders.json`, `block-templates.json`,
+`typefaces.json`, `review-items.json`); all derived reports in `_metadata/`
+(`inventory.*`, `census.*`, `catalog.*` (per-variant field profiles), `novelty.*`,
+`folders-inventory.*`, `question-banks-catalog.*` (per-type schema) +
+`question-banks-inventory.*` (per-bank decision table), `block-templates-inventory.*`,
+`typefaces-inventory.*`, `review-items-inventory.*`, `assets-summary.json`).
+(Older runs wrote these at root; stale root files are harmless — delete them.)
+The account exports + their endpoint map are documented in `docs/rise-account-exports.md`.
 
 **Tier-1 loud-fail gating and the novelty accept-UI are intentionally deferred** —
 catalog curation is done **by hand** (send a run's `catalog.json`; we regenerate
 `core/census/catalog.fields.json`). This works well; no automation needed.
 
-Stats: 54 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
-Validated against a live 579-course account + mitm captures.
+**Phase 2 (asset extraction + account exports): DONE** — see below. The export
+side is complete: courses + banks + folders + uploaded media + **account extras**
+(block templates, custom typefaces incl. font files, Review-360 items inventory)
+all captured into a self-sufficient archive. **Mighty** content is treated as
+Storyline (reference only): the review-items inventory flags `mighty` bundles
+(empty Review packages); bundle bytes are intentionally not grabbed yet.
+
+Stats: 101 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
+Phase 0 validated against a live 579-course account + mitm captures.
 
 ## Known schema (captured)
 
@@ -46,30 +59,54 @@ Validated against a live 579-course account + mitm captures.
   `rise/questionBanks/{id}/…` (snake_case). CDN (`cdn.articulate.com`) + embeds
   kept as references.
 
-## Next: Phase 2 — asset extraction (finish the export side)
+## Phase 2 — asset extraction (finish the export side): DONE
 
-Goal: download the uploaded binaries so an archive is self-sufficient for import.
+The archive is now self-sufficient for import: uploaded binaries are downloaded
+from the public CDN and stored content-addressed.
 
-- From the census, collect **distinct uploaded-media keys** per course + per bank
-  (`media-image/video/audio/other`). Download from
-  `https://articulateusercontent.com/{key}` (public-read).
-- **Skip** (kept as references): `cdn.articulate.com`, YouTube/Vimeo embeds, and
-  **Storyline bundles** (recreated via Review 360, not re-uploaded).
-- Write an **asset manifest** per course/bank + verify **no uploaded key is left
-  un-downloaded** (CLAUDE.md invariant).
+- `core/assets/keys.ts` — reuses `scanRefs` (untruncated) to enumerate media
+  occurrences, then `extractUploadedKeys` pulls clean keys out of each value.
+  A whole-value fast path takes a bare key / usercontent URL verbatim (incl.
+  `(n)`, `%2520`, unicode); a bounded regex handles keys embedded in HTML.
+  `collectAssetKeys` keeps `media-image/video/audio/other`, deduped by key.
+- `core/assets/download.ts` — `downloadAssetsFor` runs a bounded parallel pool
+  (`runPool`, default 4), hashes bytes (`sha256Hex`), writes each blob once via
+  an injected `AssetSink`, and builds the manifest. `keyPathCandidates` yields
+  verbatim → single-encoded (fixes `%2520`) → NFC (fixes NFD unicode) URL forms.
+  `priorAssets` lets a re-run reuse downloaded keys without re-fetching (resume).
+- `core/assets/manifest.ts` — per-owner `AssetManifest` + `findUndownloadedKeys`
+  (assertion: every collected key resolves to a stored asset) + `isOrphanStatus`
+  (403/404 ⇒ missing at source). `core/assets/locate.ts` resolves a key's JSON
+  path → `lessonTitle / family/variant / blockId` so a missing asset is findable.
+- Panel: `orchestrator/assets.ts` (`cdnDownload` tries the encoding variants +
+  retries transient 429/5xx; `downloadAllAssets` resumes incomplete owners and
+  splits failures into `orphaned` (403/404 — missing at source, tagged with
+  course title + location) vs retryable) + the "Assets (Phase 2)" card.
 
-**Locked decisions:**
-1. **Layout — content-addressed + dedup.** Store bytes once at
-   `assets/<sha256>.<ext>`; each course/bank gets an `assets-manifest.json`
-   mapping its media keys → hash/size/checksum. (Mirrors import's upload-once.)
-2. **Concurrency — parallel (~4), no human-pacing.** The 2s pacing invariant is
-   scoped to the Rise **authoring API** (course fetch/pagination), not the public
-   `articulateusercontent.com` CDN.
-3. **Storyline — do not download** bundle bytes.
+**Resume:** re-running "Download assets" skips owners whose manifest is already
+complete, reuses successful keys for incomplete ones, and retries only the
+failures — so a re-run is cheap and self-healing. (An early full-library run hit
+1,498 failures from a `)`-truncation + double-encoding bug, since fixed; the
+~500 residual were all **403/AccessDenied = deleted at source** — S3 returns 403
+for absent keys on a bucket without public `ListBucket` — now classified as
+`orphaned`, not failures.)
 
-Implementation notes: add `https://articulateusercontent.com/*` to
-`host_permissions`; add a binary write path to `FileSystemStorage`
-(`createWritable().write(Blob)`); reuse the existing `scanRefs` to enumerate keys.
+**Archive layout (new):**
+- `assets/<sha256>.<ext>` — content-addressed media bytes, deduped across the run.
+- `courses/<id>.assets.json` / `question-banks/<id>.assets.json` — per-owner
+  manifest mapping keys → `{hash, ext, file, size}` (sha256 = checksum).
+- `assets-summary.json` — run-wide totals (written/deduped/failed) + the
+  un-downloaded-key assertion result.
+
+**Locked decisions (as built):** content-addressed dedup; parallel pool (~4), no
+human-pacing (CDN is public-read, outside the authoring-API pacing invariant);
+Storyline bundles, `cdn.articulate.com`, and YouTube/Vimeo embeds kept as
+references (not downloaded). Downloads run panel-side (extension page +
+`articulateusercontent.com` host permission), so no Rise tab / background relay
+is needed. Owners with an existing `*.assets.json` are resume-skipped (delete to
+force re-download).
+
+Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
 
 ## Then: Phase 3 — import / recreation (the write side)
 
@@ -88,6 +125,10 @@ checksums → fidelity report.
   upload chain. Need a real mitm capture of each before Phase 3.
 - **Storyline reachability** — only recreatable if the target can reach the same
   Review 360 item; otherwise flag for manual handling.
+- **Orphaned media** — some courses reference media keys that are 403/deleted at
+  source (`assets-summary.json → orphaned`). They can't be re-uploaded; import
+  must read the asset manifest and flag/skip the referencing block (with the
+  recorded location) rather than ship a dead key.
 - **Folder team/subscription scoping** (`ownerPrincipalId`, `subscriptionId`,
   shared vs private) may not map 1:1 across accounts.
 

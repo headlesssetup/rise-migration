@@ -1,8 +1,8 @@
 {
   "name": "rise-migration",
-  "description": "Rise Export/Import Tool — Phase 0 read-only exploration extension",
+  "description": "Rise Export/Import Tool — account exporter (courses, question banks, folders, assets, account extras)",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.2.4",
   "type": "module",
   "scripts": {
     "dev": "wxt",

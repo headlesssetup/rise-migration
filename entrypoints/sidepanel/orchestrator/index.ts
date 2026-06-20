@@ -17,5 +17,8 @@ export { buildFolders, fetchFolders } from './folders';
 export {
   fetchQuestionBanks,
   scanSavedBanks,
+  buildBankInventoryRows,
   type BankFetchResult,
 } from './banks';
+export { cdnDownload, downloadAllAssets, type AssetsSummary } from './assets';
+export { fetchAccountExtras, type AccountExtrasSummary } from './account';

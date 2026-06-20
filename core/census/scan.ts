@@ -107,8 +107,14 @@ export function classifyString(value: string, path = ''): RefKind | null {
   return null;
 }
 
-function truncate(s: string): string {
-  return s.length > MAX_SNIPPET ? `${s.slice(0, MAX_SNIPPET)}…` : s;
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+export interface ScanRefsOptions {
+  /** Max length of each occurrence `value` before truncation. Defaults to 200
+   *  (census snippets). Asset extraction passes Infinity to keep full keys. */
+  maxSnippet?: number;
 }
 
 /**
@@ -117,13 +123,18 @@ function truncate(s: string): string {
  * embed, and cross-ref (Storyline media, draw-from-bank). `ownerId` tags each
  * occurrence with its source doc (course id or bank id).
  */
-export function scanRefs(doc: unknown, ownerId?: string): RefOccurrence[] {
+export function scanRefs(
+  doc: unknown,
+  ownerId?: string,
+  opts: ScanRefsOptions = {},
+): RefOccurrence[] {
+  const max = opts.maxSnippet ?? MAX_SNIPPET;
   const refs: RefOccurrence[] = [];
   const walk = (node: unknown, path: string): void => {
     if (node === null || node === undefined) return;
     if (typeof node === 'string') {
       const kind = classifyString(node, path);
-      if (kind) refs.push({ kind, path, value: truncate(node), courseId: ownerId });
+      if (kind) refs.push({ kind, path, value: truncate(node, max), courseId: ownerId });
       return;
     }
     if (typeof node !== 'object') return;
@@ -136,7 +147,7 @@ export function scanRefs(doc: unknown, ownerId?: string): RefOccurrence[] {
       refs.push({
         kind: 'draw-from-bank-crossref',
         path,
-        value: truncate(JSON.stringify(obj)),
+        value: truncate(JSON.stringify(obj), max),
         courseId: ownerId,
       });
     }
@@ -146,7 +157,7 @@ export function scanRefs(doc: unknown, ownerId?: string): RefOccurrence[] {
         refs.push({
           kind: 'storyline-crossref',
           path: childPath,
-          value: truncate(JSON.stringify(v)),
+          value: truncate(JSON.stringify(v), max),
           courseId: ownerId,
         });
       }

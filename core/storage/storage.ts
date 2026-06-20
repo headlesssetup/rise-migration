@@ -37,10 +37,50 @@ export interface Storage {
   readBankIndex(): Promise<string | null>;
   /** Write the question-bank catalog (per-question-type field profiles). */
   writeBankCatalog(json: string, csv: string): Promise<void>;
+  /** Write the per-bank inventory (decision table: one row per bank). */
+  writeBankInventory(json: string, csv: string): Promise<void>;
   /** Write the raw folders list response. */
   writeFolders(raw: string): Promise<void>;
   /** Read the raw folders list response, or null. */
   readFolders(): Promise<string | null>;
   /** Write the combined folder inventory (course + bank, with name-paths). */
   writeFolderInventory(json: string, csv: string): Promise<void>;
+
+  // --- Phase 2.4: account-level exports (raw → account/, reports → _metadata/) ---
+  /** Write the raw block-templates response. */
+  writeBlockTemplates(raw: string): Promise<void>;
+  /** Write the block-templates inventory. */
+  writeBlockTemplateInventory(json: string, csv: string): Promise<void>;
+  /** Write the raw typefaces response. */
+  writeTypefaces(raw: string): Promise<void>;
+  /** Write the typefaces inventory. */
+  writeTypefaceInventory(json: string, csv: string): Promise<void>;
+  /** Write the raw Review-360 items response. */
+  writeReviewItems(raw: string): Promise<void>;
+  /** Write the Review-360 items inventory. */
+  writeReviewItemsInventory(json: string, csv: string): Promise<void>;
+
+  // --- Phase 2: assets (content-addressed binaries + per-owner manifests) ---
+  /** Write a content-addressed asset blob: `assets/<name>` (name=`<sha256>.<ext>`). */
+  writeAsset(name: string, bytes: Uint8Array): Promise<void>;
+  /** Is this content-addressed asset already stored? (cross-owner dedup). */
+  hasAsset(name: string): Promise<boolean>;
+  /** Write a course/bank's asset manifest → `<scope>/<id>.assets.json`. */
+  writeAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+    json: string,
+  ): Promise<void>;
+  /** Has this owner's asset manifest already been written? (resume). */
+  hasAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+  ): Promise<boolean>;
+  /** Read a prior asset manifest (for resume / retry), or null if absent. */
+  readAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+  ): Promise<string | null>;
+  /** Write the run-wide assets summary (totals + un-downloaded-key assertion). */
+  writeAssetsSummary(json: string): Promise<void>;
 }
