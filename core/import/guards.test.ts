@@ -59,6 +59,13 @@ describe('checkSourceNotTarget', () => {
     expect(v.ok).toBe(false);
   });
 
+  it('blocks by name when the target sub is not yet captured (safety-bias)', () => {
+    // source recorded a sub; live target tab has no JWT identity yet (sub null)
+    const v = checkSourceNotTarget(src, { name: 'INTEA Team', sub: null, plane: 'us' });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.sameAccount).toBe(true);
+  });
+
   it('allows (with caveat) when source identity is unrecorded', () => {
     const v = checkSourceNotTarget(undefined, { name: 'Target', sub: 'x' });
     expect(v.ok).toBe(true);

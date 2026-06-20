@@ -392,6 +392,19 @@ survive"). CDN (`cdn.articulate.com`) + embeds (YouTube/Vimeo) are kept as-is.
 referencing block (with its recorded `lessonTitle / family/variant / blockId` from
 `core/assets/locate.ts`) for manual handling and skip its upload.
 
+**Media NOT on a content block (course/lesson/theme/bank).** The capture only shows
+uploading media that attaches to a content block (`UPDATE_BLOCK_DEBOUNCE`). It does
+**not** show how to (re)upload a course **cover/card** image, a **lesson header**
+image, a custom **theme** image, or **question-bank** question media — those write
+paths are uncaptured. So the importer treats them like orphans: **flag** each for
+manual handling and **blank** its uploaded key in the payload (theme/lesson) so a dead
+source key is never written. (Built-in `cdn.articulate.com` / `…/assets/rise/…` theme
+images are kept verbatim — they're not `rise/courses/<id>/…` uploads.) The final
+invariant then asserts every *remaining* uploaded key belongs to a **target** owner
+(new course / new bank id); a key under any other owner that isn't flagged is a
+loud-fail. Confirm the cover/header/bank upload envelopes on a live target to promote
+these from flagged to migrated.
+
 ---
 
 ## 9. Storyline / Mighty (conditional — flag, don't fail)

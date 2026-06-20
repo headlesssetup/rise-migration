@@ -143,6 +143,31 @@ export function remapMediaKeys<T extends Json>(
   return transform(doc) as T;
 }
 
+/** Walk a doc and collect every uploaded media key, keyed by owner id (the 3rd
+ *  path segment of `rise/{courses|questionBanks}/<ownerId>/…`). */
+function collectUploadedKeysByOwner(doc: Json): { key: string; ownerId: string }[] {
+  const out: { key: string; ownerId: string }[] = [];
+  const walk = (node: Json): void => {
+    if (typeof node === 'string') {
+      const kind = classifyString(node);
+      if (kind && kind.startsWith('media-')) {
+        for (const key of extractUploadedKeys(node)) {
+          const ownerId = key.split('/')[2] ?? '';
+          out.push({ key, ownerId });
+        }
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (isObject(node)) for (const v of Object.values(node)) walk(v);
+  };
+  walk(doc);
+  return out;
+}
+
 /**
  * Loud-fail assertion (CLAUDE.md: "no source media keys may survive"). Returns
  * every uploaded key still pointing at the SOURCE owner space
@@ -156,24 +181,27 @@ export function findSurvivingSourceKeys(
 ): string[] {
   const owners = new Set(sourceOwnerIds);
   const survivors = new Set<string>();
-  const walk = (node: Json): void => {
-    if (typeof node === 'string') {
-      const kind = classifyString(node);
-      if (kind && kind.startsWith('media-')) {
-        for (const key of extractUploadedKeys(node)) {
-          // key shape: rise/{courses|questionBanks}/<ownerId>/<file>
-          const ownerId = key.split('/')[2];
-          if (ownerId && owners.has(ownerId)) survivors.add(key);
-        }
-      }
-      return;
-    }
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-      return;
-    }
-    if (isObject(node)) for (const v of Object.values(node)) walk(v);
-  };
-  walk(doc);
+  for (const { key, ownerId } of collectUploadedKeysByOwner(doc)) {
+    if (ownerId && owners.has(ownerId)) survivors.add(key);
+  }
   return [...survivors];
+}
+
+/**
+ * Stronger invariant: every uploaded key in the rebuilt doc must belong to a
+ * TARGET owner (the new course id / new bank ids). Returns any key whose owner
+ * is NOT a target owner — i.e. a source/foreign key that wasn't remapped. More
+ * robust than an allowlist of known source owners (catches keys copied from
+ * other courses/banks too).
+ */
+export function findForeignMediaKeys(
+  doc: Json,
+  targetOwnerIds: Iterable<string>,
+): string[] {
+  const targets = new Set(targetOwnerIds);
+  const foreign = new Set<string>();
+  for (const { key, ownerId } of collectUploadedKeysByOwner(doc)) {
+    if (!ownerId || !targets.has(ownerId)) foreign.add(key);
+  }
+  return [...foreign];
 }

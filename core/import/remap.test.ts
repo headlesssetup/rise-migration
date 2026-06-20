@@ -5,6 +5,7 @@ import {
   blankUploadedMediaKeys,
   remapMediaKeys,
   findSurvivingSourceKeys,
+  findForeignMediaKeys,
   registerClientIds,
   SERVER_OWNED_FIELDS,
 } from './remap';
@@ -162,5 +163,26 @@ describe('findSurvivingSourceKeys', () => {
   it('returns empty when fully remapped', () => {
     const doc = { a: { key: 'rise/courses/TGT/x.jpg' } };
     expect(findSurvivingSourceKeys(doc, ['SRC'])).toEqual([]);
+  });
+});
+
+describe('findForeignMediaKeys', () => {
+  it('flags any uploaded key not under a target owner (incl. foreign owners)', () => {
+    const doc = {
+      a: { key: 'rise/courses/TGT/x.jpg' }, // target owner — ok
+      b: { key: 'rise/courses/SRC/y.jpg' }, // source owner — foreign
+      c: { key: 'rise/courses/OTHER/z.jpg' }, // a 3rd course — foreign
+      bank: { key: 'rise/questionBanks/NEWBANK/q.png' }, // target bank — ok
+    };
+    const foreign = findForeignMediaKeys(doc, ['TGT', 'NEWBANK']);
+    expect(foreign).toContain('rise/courses/SRC/y.jpg');
+    expect(foreign).toContain('rise/courses/OTHER/z.jpg');
+    expect(foreign).not.toContain('rise/courses/TGT/x.jpg');
+    expect(foreign).not.toContain('rise/questionBanks/NEWBANK/q.png');
+  });
+
+  it('keeps cdn/embeds out of scope', () => {
+    const doc = { cover: 'https://cdn.articulate.com/x.jpg', e: 'https://youtu.be/1' };
+    expect(findForeignMediaKeys(doc, ['TGT'])).toEqual([]);
   });
 });

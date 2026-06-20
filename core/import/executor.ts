@@ -10,7 +10,7 @@
 
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 import { IdMap, newId } from './ids';
-import { remapIds, blankUploadedMediaKeys, remapMediaKeys, findSurvivingSourceKeys } from './remap';
+import { remapIds, blankUploadedMediaKeys, remapMediaKeys, findForeignMediaKeys } from './remap';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
 import { findBankRef, type PlanStep, type PlanInput, type SourceBank } from './plan';
@@ -46,7 +46,12 @@ export interface ExecutorDeps {
 }
 
 export interface ManualFlag {
-  kind: 'storyline' | 'orphan-media' | 'missing-bank-ref' | 'typeface';
+  kind:
+    | 'storyline'
+    | 'orphan-media'
+    | 'unsupported-media'
+    | 'missing-bank-ref'
+    | 'typeface';
   sourceBlockId?: string;
   sourceKey?: string;
   detail: string;
@@ -143,8 +148,6 @@ export async function executePlan(
   const keyMap = new Map<string, string>();
   // sourceBankId → ordered new question ids (for INSERT_QUESTION_BANK_QUESTIONS).
   const bankQuestionIds = new Map<string, string[]>();
-  // pending transcode jobs to poll before finishing.
-  const pendingJobs: string[] = [];
 
   // Relay + loud-fail wrapper. In dry-run, record the envelope and return a
   // synthetic empty body (callers synthesize ids separately).
@@ -219,7 +222,11 @@ export async function executePlan(
           break;
         }
         case 'set-theme': {
-          const theme = deps.input.course.course?.theme;
+          // Theme round-trips verbatim EXCEPT any user-uploaded cover/header key
+          // (rise/courses/<srcId>/…) which would be a dead source key on target —
+          // blank those (flagged as unsupported-media); built-in cdn/asset theme
+          // images are kept as-is.
+          const theme = blankUploadedMediaKeys(deps.input.course.course?.theme ?? {});
           await send(env.updateCourseTheme(newCourseId, theme), step.kind);
           break;
         }
@@ -253,13 +260,17 @@ export async function executePlan(
           for (const k of ['headerImage', 'description', 'settings', 'media', 'piles']) {
             if (src && k in src) extra[k] = (src as Record<string, unknown>)[k];
           }
+          // Lesson-level uploaded media (headerImage/media) isn't re-uploaded by
+          // the captured write path — blank those keys (flagged unsupported) so a
+          // dead source key is never written to the target lesson.
+          const safeExtra = blankUploadedMediaKeys(extra) as Record<string, unknown>;
           await send(
             env.updateLesson({
               id: newLessonId,
               courseId: newCourseId,
               type: step.lessonType,
               icon: step.icon,
-              extra,
+              extra: safeExtra,
             }),
             step.kind,
           );
@@ -407,7 +418,6 @@ export async function executePlan(
             );
             const jobId = dryRun ? `dry-job-${mint()}` : String(tr.jobId ?? '');
             if (jobId) {
-              pendingJobs.push(jobId);
               await send(env.registerJobs(newCourseId, [jobId]), step.kind);
               await pollStatus(jobId, step.kind);
             }
@@ -449,23 +459,35 @@ export async function executePlan(
           });
           break;
         }
+        case 'flag-unsupported-media': {
+          result.flags.push({
+            kind: 'unsupported-media',
+            sourceKey: step.sourceKey,
+            detail: `Media at ${step.location} has no captured write path — attach manually (not written as a source key)`,
+          });
+          break;
+        }
       }
       result.idMap = ids.toJSON();
       deps.onProgress?.(++done, steps.length);
     }
 
-    // Final invariant (protocol §8/§12): no SOURCE media key may survive in the
-    // rebuilt course. Re-scan every block's patched output against keyMap.
-    const sourceOwnerIds = new Set<string>();
-    const cid = deps.input.course.course?.id;
-    if (typeof cid === 'string') sourceOwnerIds.add(cid);
-    for (const bankId of deps.input.banksById.keys()) sourceOwnerIds.add(bankId);
+    // Final invariant (protocol §8/§12): every uploaded media key in the rebuilt
+    // course must belong to a TARGET owner (new course id / new bank ids) — any
+    // other is a source/foreign key that wasn't remapped. Flagged keys (orphan /
+    // unsupported-location) are intentionally shipped without media, so excluded.
+    const targetOwners = new Set<string>();
+    if (newCourseId) targetOwners.add(newCourseId);
+    for (const bankId of deps.input.banksById.keys()) {
+      const nb = ids.get(bankId);
+      if (nb) targetOwners.add(nb);
+    }
     const rebuilt = remapMediaKeys(deps.input.course, keyMap);
-    // Only keys we actually uploaded are remapped; orphans are intentionally
-    // excluded (flagged, shipped without media), so ignore flagged keys.
-    const orphaned = new Set(result.flags.filter((f) => f.sourceKey).map((f) => f.sourceKey));
-    result.survivingKeys = findSurvivingSourceKeys(rebuilt, sourceOwnerIds).filter(
-      (k) => !orphaned.has(k),
+    const flagged = new Set(
+      result.flags.map((f) => f.sourceKey).filter((k): k is string => !!k),
+    );
+    result.survivingKeys = findForeignMediaKeys(rebuilt, targetOwners).filter(
+      (k) => !flagged.has(k),
     );
 
     result.ok = dryRun || result.survivingKeys.length === 0;

@@ -170,6 +170,48 @@ describe('executePlan — multi-key block (key + crushedKey)', () => {
   });
 });
 
+describe('executePlan — course with a cover image', () => {
+  it('flags course-level media (no captured write path) without false-failing', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [{ key: 'rise/courses/SRC/cover.jpg', kind: 'media-image', file: 'assets/c.jpg', ext: 'jpg' }],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          coverImage: { key: 'rise/courses/SRC/cover.jpg' },
+          theme: { themeId: 't', coverImage: 'rise/courses/SRC/cover.jpg' },
+        },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            headerImage: { key: 'rise/courses/SRC/hdr.jpg' },
+            items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }],
+          },
+        ],
+      },
+    };
+    const steps = buildPlan(input);
+    const { relay } = mockRelay(happyHandlers);
+    const res = await executePlan(steps, {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    // The run succeeds: course/lesson/theme media is flagged, not shipped as a key.
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    expect(res.flags.some((f) => f.kind === 'unsupported-media')).toBe(true);
+  });
+});
+
 describe('executePlan — dry run', () => {
   it('collects every envelope without relaying', async () => {
     const input = imageCourse();

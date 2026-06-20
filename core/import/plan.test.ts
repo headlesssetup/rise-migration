@@ -187,6 +187,26 @@ describe('buildPlan media + flags', () => {
     expect(steps.some((s) => s.kind === 'upload-asset')).toBe(false);
   });
 
+  it('flags course-level (cover) media as unsupported, not on a block', () => {
+    const steps = buildPlan(
+      input({
+        assets: [{ key: 'rise/courses/SRC/cover.jpg', kind: 'media-image', file: 'assets/c.jpg' }],
+        course: {
+          course: { id: 'SRC', title: 'C', coverImage: { key: 'rise/courses/SRC/cover.jpg' } },
+          lessons: [
+            { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }] },
+          ],
+        },
+      }),
+    );
+    const flag = steps.find((s) => s.kind === 'flag-unsupported-media') as
+      | { sourceKey: string }
+      | undefined;
+    expect(flag?.sourceKey).toBe('rise/courses/SRC/cover.jpg');
+    // not emitted as a block upload
+    expect(steps.some((s) => s.kind === 'upload-asset')).toBe(false);
+  });
+
   it('flags storyline blocks for manual handling', () => {
     const steps = buildPlan(
       input({

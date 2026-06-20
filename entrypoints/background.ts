@@ -20,6 +20,7 @@ import {
   type RequestSpec,
 } from '@/core/rise-client';
 import type { WriteSpec } from '@/core/import/envelopes';
+import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
   BackgroundRequest,
@@ -295,14 +296,18 @@ export default defineBackground(() => {
     switch (msg.type) {
       case 'GET_SESSION_STATE': {
         // Live tab query is authoritative (survives SW restarts; the content
-        // script ping only updates the cached flag).
+        // script ping only updates the cached flag). Derive the plane from the
+        // SAME tab writes target (active/last-focused first, then any Rise tab)
+        // so a US-source + EU-target multi-tab setup reports the plane writes
+        // actually go to — the Source ≠ Target guard depends on it.
         let present = risePresent;
         let plane: 'us' | 'eu' | null = null;
         try {
-          const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
-          present = tabs.some((t) => typeof t.id === 'number');
-          const url = tabs.find((t) => typeof t.url === 'string')?.url;
-          if (url) plane = /\.eu\.articulate\.com/i.test(url) ? 'eu' : 'us';
+          const all = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
+          present = all.some((t) => typeof t.id === 'number');
+          const writeTab = await findRiseTab();
+          const url = writeTab?.url ?? all.find((t) => typeof t.url === 'string')?.url;
+          plane = planeFromHost(url);
         } catch {
           /* keep the ping-based value */
         }

@@ -109,6 +109,16 @@ export type PlanStep =
       sourceBlockId: string;
       sourceKey: string;
       summary: string;
+    }
+  | {
+      // Uploaded media that isn't attached to a recreatable content block —
+      // course cover/card/theme images, lesson header images, bank question
+      // media. The captured write path doesn't cover writing these, so they are
+      // flagged for manual handling and NOT written as source keys (protocol §8).
+      kind: 'flag-unsupported-media';
+      sourceKey: string;
+      location: string;
+      summary: string;
     };
 
 const STORYLINE = new Set(['360/storyline']);
@@ -178,6 +188,9 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   const lessons = Array.isArray(input.course.lessons) ? input.course.lessons : [];
 
   const assetByKey = new Map(input.assets.map((a) => [a.key, a]));
+  // Keys attached to a recreatable block (uploaded or orphan-flagged). Anything
+  // else (course/lesson/theme/bank media) is flagged unsupported at the end.
+  const handledKeys = new Set<string>();
 
   // Which banks are actually referenced by draw-from-bank blocks (dedup).
   const referencedBanks = new Set<string>();
@@ -325,6 +338,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       for (const ak of keys) {
         const entry = assetByKey.get(ak.key);
         if (entry?.orphaned || (entry && !entry.file)) {
+          handledKeys.add(ak.key);
           steps.push({
             kind: 'flag-orphan-media',
             sourceLessonId,
@@ -334,6 +348,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           });
           continue;
         }
+        handledKeys.add(ak.key);
         steps.push({
           kind: 'upload-asset',
           sourceLessonId,
@@ -363,6 +378,27 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Unlock lesson "${lTitle}"`,
     });
   });
+
+  // Media that isn't on a recreatable block — course cover/card/theme images,
+  // lesson header images, and bank question media. The captured write path
+  // doesn't cover writing these, so flag them (manual) rather than silently
+  // shipping a source key or failing the whole course.
+  const flagUnsupported = (doc: unknown, ownerId: string, where: string): void => {
+    for (const ak of collectAssetKeys(doc, ownerId)) {
+      if (handledKeys.has(ak.key)) continue;
+      handledKeys.add(ak.key);
+      steps.push({
+        kind: 'flag-unsupported-media',
+        sourceKey: ak.key,
+        location: where,
+        summary: `⚠ Unsupported media location (${where}) — attach manually: ${ak.key}`,
+      });
+    }
+  };
+  flagUnsupported(input.course, sourceCourseId, 'course/lesson/theme');
+  for (const [bankId, bank] of input.banksById) {
+    flagUnsupported(bank, bankId, `bank ${bankId}`);
+  }
 
   return steps;
 }

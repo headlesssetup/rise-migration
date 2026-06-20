@@ -62,7 +62,11 @@ export function checkSourceNotTarget(
     !!source.name &&
     !!target.name &&
     source.name.trim().toLowerCase() === target.name.trim().toLowerCase();
-  const sameAccount = sameSub || (!source.sub && !target.sub && sameName);
+  // Safety-biased: treat as same-account if the sub OR the display name matches.
+  // A destructive write guard should over-block (operator can override) rather
+  // than under-block — e.g. when the target tab's JWT identity isn't captured
+  // yet (target.sub null) but the names plainly match.
+  const sameAccount = sameSub || sameName;
   const samePlane =
     !!source.plane && !!target.plane && source.plane === target.plane;
 
