@@ -15,6 +15,8 @@ import {
 import {
   bankCatalogToCsv,
   bankCatalogToJson,
+  bankInventoryToCsv,
+  bankInventoryToJson,
   buildBankCatalog,
   type BankCatalog,
 } from '@/core/census/question-banks';
@@ -45,6 +47,7 @@ import {
   exportCourses,
   fetchFolders,
   fetchQuestionBanks,
+  buildBankInventoryRows,
   listAllCourses,
   scanSavedBanks,
   scanSavedCourses,
@@ -306,6 +309,17 @@ export function App() {
     const saved = await scanSavedBanks(storage, onEvent);
     const cat = buildBankCatalog(saved);
     await storage.writeBankCatalog(bankCatalogToJson(cat), bankCatalogToCsv(cat));
+
+    // Per-bank inventory (decision table: size, folder, usage, owner, status).
+    const inv = await buildBankInventoryRows(storage, saved);
+    await storage.writeBankInventory(
+      bankInventoryToJson(inv),
+      bankInventoryToCsv(inv),
+    );
+    addLog(
+      `Bank inventory: ${inv.length} bank(s) → question-banks-inventory.csv/json.`,
+    );
+
     setBanks(cat);
     setPhase('done');
     if (res.failed.length) {

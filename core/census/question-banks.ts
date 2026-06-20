@@ -218,6 +218,181 @@ export function buildBankCatalog(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Per-bank inventory — the decision table ("which banks to migrate"). Mirrors
+// the course inventory (core/census/inventory.ts): one row per bank with the
+// metadata a decision-maker needs (size, location, usage, owner, status).
+// ---------------------------------------------------------------------------
+
+export interface BankInventoryRow {
+  id: string;
+  title: string;
+  folderPath: string;
+  questionCount: number;
+  /** Per-type breakdown, e.g. `MULTIPLE_CHOICE:5 MATCHING:2`. */
+  types: string;
+  /** Uploaded-media references carried by the bank (assets to migrate). */
+  mediaCount: number;
+  /** How many exported courses reference this bank (draw-from-bank). */
+  usedByCourses: number;
+  exampleCourseIds: string[];
+  deleted: boolean;
+  /** Rise exposes no created_at — only updated_at. */
+  updatedAt: string;
+  version: string;
+  author: string;
+  authorEmail: string;
+  lastEditedBy: string;
+  folderId: string;
+}
+
+export interface BankUsage {
+  courseCount: number;
+  courseIds: string[];
+}
+
+export interface BankInventoryOptions {
+  /** Top-level `profiles` from the banks index (author/email resolution). */
+  profiles?: unknown;
+  /** Bank-folder id → resolved name-path (e.g. `shared / Team A`). */
+  folderPaths?: Record<string, string>;
+  /** bankId → which courses reference it (from collectBankReferences). */
+  usage?: Record<string, BankUsage>;
+}
+
+function str(v: unknown): string {
+  return v === null || v === undefined ? '' : String(v);
+}
+
+/** Build id → { name, email } from the index `profiles` (shape tolerant). */
+function buildProfileMap(profiles: unknown): Map<string, { name: string; email: string }> {
+  const map = new Map<string, { name: string; email: string }>();
+  for (const p of asObjArray(profiles)) {
+    const id = p.id ?? p.user_id ?? p.userId ?? p.sub ?? p.principal_id;
+    if (typeof id !== 'string') continue;
+    const name =
+      [p.first_name, p.last_name].filter((x) => typeof x === 'string').join(' ').trim() ||
+      str(p.name) ||
+      str(p.display_name);
+    map.set(id, { name, email: str(p.email) });
+  }
+  return map;
+}
+
+/**
+ * Recursively collect bank ids referenced by a course doc — every
+ * `questionBankId` (tolerant of `bankId` / `question_bank_id`) string value
+ * (draw-from-bank blocks). De-duplicated.
+ */
+export function collectBankReferences(courseDoc: unknown): string[] {
+  const out = new Set<string>();
+  const keys = new Set(['questionBankId', 'bankId', 'question_bank_id']);
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const c of node) walk(c);
+    } else if (isObj(node)) {
+      for (const [k, v] of Object.entries(node)) {
+        if (keys.has(k) && typeof v === 'string') out.add(v);
+        else walk(v);
+      }
+    }
+  };
+  walk(courseDoc);
+  return [...out];
+}
+
+export function buildBankInventory(
+  banks: { id: string; doc: unknown }[],
+  opts: BankInventoryOptions = {},
+): BankInventoryRow[] {
+  const profileMap = buildProfileMap(opts.profiles);
+  const folderPaths = opts.folderPaths ?? {};
+  const usage = opts.usage ?? {};
+  const nameOf = (id: unknown): string =>
+    (typeof id === 'string' ? profileMap.get(id)?.name : '') || str(id);
+
+  return banks
+    .map((b): BankInventoryRow => {
+      const doc = isObj(b.doc) ? b.doc : {};
+      const questions = extractQuestions(doc);
+      const byType = new Map<string, number>();
+      for (const q of questions) {
+        const t = typeof q.type === 'string' ? q.type : 'UNKNOWN';
+        byType.set(t, (byType.get(t) ?? 0) + 1);
+      }
+      const types = [...byType.entries()]
+        .sort((a, b2) => b2[1] - a[1] || a[0].localeCompare(b2[0]))
+        .map(([t, n]) => `${t}:${n}`)
+        .join(' ');
+      const mediaCount = scanRefs(doc, b.id).filter((r) =>
+        r.kind.startsWith('media-'),
+      ).length;
+      const u = usage[b.id];
+      const folderId = str(doc.folder_id);
+      const authorId = doc.author_id;
+      return {
+        id: b.id,
+        title: str(doc.title),
+        folderPath: folderPaths[folderId] ?? '',
+        questionCount: questions.length,
+        types,
+        mediaCount,
+        usedByCourses: u?.courseCount ?? 0,
+        exampleCourseIds: u?.courseIds.slice(0, 3) ?? [],
+        deleted: doc.deleted === true,
+        updatedAt: str(doc.updated_at),
+        version: str(doc.version),
+        author: nameOf(authorId),
+        authorEmail:
+          (typeof authorId === 'string' ? profileMap.get(authorId)?.email : '') || '',
+        lastEditedBy: nameOf(doc.last_edited_by),
+        folderId,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.usedByCourses - a.usedByCourses ||
+        b.questionCount - a.questionCount ||
+        a.title.localeCompare(b.title),
+    );
+}
+
+const BANK_INVENTORY_COLUMNS: (keyof BankInventoryRow)[] = [
+  'id',
+  'title',
+  'folderPath',
+  'questionCount',
+  'types',
+  'mediaCount',
+  'usedByCourses',
+  'exampleCourseIds',
+  'deleted',
+  'updatedAt',
+  'version',
+  'author',
+  'authorEmail',
+  'lastEditedBy',
+  'folderId',
+];
+
+export function bankInventoryToJson(rows: BankInventoryRow[]): string {
+  return JSON.stringify(rows, null, 2);
+}
+
+export function bankInventoryToCsv(rows: BankInventoryRow[]): string {
+  return toCsv(
+    BANK_INVENTORY_COLUMNS as string[],
+    rows.map((r) =>
+      BANK_INVENTORY_COLUMNS.map((c) => {
+        const v = r[c];
+        if (Array.isArray(v)) return v.join(' ');
+        if (typeof v === 'boolean') return v ? 'yes' : 'no';
+        return v ?? '';
+      }),
+    ),
+  );
+}
+
 export function bankCatalogToJson(c: BankCatalog): string {
   return JSON.stringify(c, null, 2);
 }

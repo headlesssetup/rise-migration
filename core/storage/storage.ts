@@ -37,6 +37,8 @@ export interface Storage {
   readBankIndex(): Promise<string | null>;
   /** Write the question-bank catalog (per-question-type field profiles). */
   writeBankCatalog(json: string, csv: string): Promise<void>;
+  /** Write the per-bank inventory (decision table: one row per bank). */
+  writeBankInventory(json: string, csv: string): Promise<void>;
   /** Write the raw folders list response. */
   writeFolders(raw: string): Promise<void>;
   /** Read the raw folders list response, or null. */

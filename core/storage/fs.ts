@@ -188,6 +188,11 @@ export class FileSystemStorage implements Storage {
     await this.writeFile(this.root, 'question-banks-catalog.csv', csv);
   }
 
+  async writeBankInventory(json: string, csv: string): Promise<void> {
+    await this.writeFile(this.root, 'question-banks-inventory.json', json);
+    await this.writeFile(this.root, 'question-banks-inventory.csv', csv);
+  }
+
   async writeFolders(raw: string): Promise<void> {
     await this.writeFile(this.root, 'folders.json', raw);
   }

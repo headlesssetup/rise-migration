@@ -25,7 +25,8 @@ relative URLs. Account identity from the header avatar.
 **Outputs** (to a user-picked folder, persisted via IndexedDB):
 `inventory.*`, `folders.json` + `folders-inventory.*`, `census.*`,
 `catalog.*` (per-variant field profiles), `novelty.*` (new variants/fields vs
-catalog), `question-banks/*` + `question-banks-catalog.*`, `manifest.json`.
+catalog), `question-banks/*` + `question-banks-catalog.*` (per-type schema) +
+`question-banks-inventory.*` (per-bank decision table), `manifest.json`.
 
 **Tier-1 loud-fail gating and the novelty accept-UI are intentionally deferred** —
 catalog curation is done **by hand** (send a run's `catalog.json`; we regenerate

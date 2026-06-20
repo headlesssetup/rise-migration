@@ -1,11 +1,22 @@
 // Question-bank orchestration: paced fetch + save of reusable banks (API ref §9),
 // then load them back from disk for profiling.
 
-import { extractBanks, hasInlineQuestions } from '@/core/census/question-banks';
+import {
+  extractBankFolders,
+  buildFolderInventory,
+} from '@/core/census/folders';
+import {
+  buildBankInventory,
+  collectBankReferences,
+  extractBanks,
+  hasInlineQuestions,
+  type BankInventoryRow,
+  type BankUsage,
+} from '@/core/census/question-banks';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import { rpc } from '../rpc';
-import { describeShape, type ProgressEvent } from './shared';
+import { describeShape, unwrap, type ProgressEvent } from './shared';
 
 export interface BankFetchResult {
   bankCount: number;
@@ -90,4 +101,52 @@ export async function scanSavedBanks(
     }
   }
   return out;
+}
+
+/**
+ * Build the per-bank inventory (decision table) from saved banks, enriched with
+ * folder name-paths + author profiles (from the banks index) and usage counts
+ * (how many saved courses reference each bank via draw-from-bank).
+ */
+export async function buildBankInventoryRows(
+  storage: Storage,
+  banks: { id: string; doc: unknown }[],
+): Promise<BankInventoryRow[]> {
+  // Profiles + folder name-paths from the saved banks index.
+  let profiles: unknown;
+  const folderPaths: Record<string, string> = {};
+  const indexRaw = await storage.readBankIndex();
+  if (indexRaw) {
+    try {
+      const index = JSON.parse(indexRaw);
+      profiles = (index as Record<string, unknown>)?.profiles;
+      for (const f of buildFolderInventory(extractBankFolders(index))) {
+        folderPaths[f.id] = f.path;
+      }
+    } catch {
+      /* tolerate malformed index */
+    }
+  }
+
+  // Usage: which saved courses reference each bank (draw-from-bank).
+  const usage: Record<string, BankUsage> = {};
+  for (const id of await storage.listSaved()) {
+    const raw = await storage.readCourse(id);
+    if (!raw) continue;
+    let refs: string[] = [];
+    try {
+      refs = collectBankReferences(unwrap(raw));
+    } catch {
+      continue;
+    }
+    for (const bankId of refs) {
+      const u = (usage[bankId] ??= { courseCount: 0, courseIds: [] });
+      if (!u.courseIds.includes(id)) {
+        u.courseIds.push(id);
+        u.courseCount += 1;
+      }
+    }
+  }
+
+  return buildBankInventory(banks, { profiles, folderPaths, usage });
 }
