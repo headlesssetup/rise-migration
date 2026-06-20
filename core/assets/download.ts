@@ -177,6 +177,7 @@ export async function downloadAssetsFor(
             error: res.error ?? `HTTP ${res.status ?? 0}`,
             status: res.status,
             urlTried: res.urlTried,
+            paths: ak.paths,
           },
         };
       }

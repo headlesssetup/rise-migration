@@ -13,7 +13,10 @@ import {
   collectAssetKeys,
   downloadAssetsFor,
   findUndownloadedKeys,
+  formatLocation,
+  isOrphanStatus,
   keyPathCandidates,
+  locateKey,
   assetManifestToJson,
   type AssetManifest,
   type DownloadOutcome,
@@ -70,10 +73,18 @@ export const cdnDownload: Downloader = async (
   return { ok: false, status: lastStatus, error: lastError, urlTried: lastUrl };
 };
 
+interface FailedKey {
+  key: string;
+  /** Human location in the source doc, e.g. `Chapter 2 › image/hero`. */
+  location?: string;
+}
+
 interface UndownloadedOwner {
   ownerType: 'course' | 'bank';
   ownerId: string;
-  keys: string[];
+  /** Course/bank title, to locate it in Rise. */
+  title?: string;
+  keys: FailedKey[];
 }
 
 export interface AssetsSummary {
@@ -87,7 +98,8 @@ export interface AssetsSummary {
   failed: number;
   /** HTTP status → count, across all failed keys (diagnostics). */
   statusHistogram: Record<string, number>;
-  /** Owners with keys that 404'd after every encoding variant — likely deleted. */
+  /** Owners with keys that returned 403/404 after every encoding variant —
+   *  missing/inaccessible at source (likely deleted). Flagged, not retried. */
   orphaned: UndownloadedOwner[];
   /** Owners with keys that failed for other (transient/network) reasons. */
   undownloaded: UndownloadedOwner[];
@@ -99,6 +111,22 @@ interface Owner {
   ownerType: 'course' | 'bank';
   id: string;
   doc: unknown;
+}
+
+/** Best-effort course/bank title from its doc (for locating it in Rise). */
+function ownerTitle(owner: Owner): string | undefined {
+  const d = owner.doc;
+  if (!d || typeof d !== 'object') return undefined;
+  const rec = d as Record<string, unknown>;
+  if (owner.ownerType === 'course') {
+    const course = rec.course;
+    const t = course && typeof course === 'object'
+      ? (course as Record<string, unknown>).title
+      : undefined;
+    return typeof t === 'string' ? t : undefined;
+  }
+  const t = rec.name ?? rec.title;
+  return typeof t === 'string' ? t : undefined;
 }
 
 /** Read a prior per-owner manifest, or null if absent/unreadable. */
@@ -201,19 +229,23 @@ export async function downloadAllAssets(
     summary.reused += stats.reused;
     summary.failed += stats.failed;
 
-    // Split this owner's failures into orphaned (404 after all variants) vs other.
-    const orphanKeys: string[] = [];
-    const otherKeys: string[] = [];
+    // Split failures into orphaned (403/404 — missing at source) vs retryable,
+    // tagging each with where it lives so it can be found in Rise.
+    const title = ownerTitle(owner);
+    const orphanKeys: FailedKey[] = [];
+    const otherKeys: FailedKey[] = [];
     for (const f of manifest.failed) {
-      const code = f.status ?? 0;
-      const bucket = String(code || 'network');
+      const bucket = String(f.status || 'network');
       summary.statusHistogram[bucket] = (summary.statusHistogram[bucket] ?? 0) + 1;
-      (code === 404 ? orphanKeys : otherKeys).push(f.key);
+      const path = f.paths?.[0];
+      const location = path ? formatLocation(locateKey(owner.doc, path)) : undefined;
+      (isOrphanStatus(f.status) ? orphanKeys : otherKeys).push({ key: f.key, location });
     }
     if (orphanKeys.length) {
       summary.orphaned.push({
         ownerType: owner.ownerType,
         ownerId: owner.id,
+        title,
         keys: orphanKeys,
       });
     }
@@ -222,6 +254,7 @@ export async function downloadAllAssets(
       summary.undownloaded.push({
         ownerType: owner.ownerType,
         ownerId: owner.id,
+        title,
         keys: otherKeys,
       });
     }

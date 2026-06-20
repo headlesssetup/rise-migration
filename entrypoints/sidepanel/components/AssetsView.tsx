@@ -1,23 +1,21 @@
 import type { AssetsSummary } from '../orchestrator';
 
-function ownerTable(
-  rows: AssetsSummary['undownloaded'],
-): React.ReactElement {
+function ownerTable(rows: AssetsSummary['orphaned']): React.ReactElement {
   return (
     <table>
       <thead>
         <tr>
-          <th>owner</th>
-          <th>type</th>
+          <th>course / bank</th>
           <th>keys</th>
+          <th>first location</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((o) => (
           <tr key={`${o.ownerType}:${o.ownerId}`}>
-            <td>{o.ownerId}</td>
-            <td>{o.ownerType}</td>
+            <td>{o.title ?? o.ownerId}</td>
             <td>{o.keys.length}</td>
+            <td>{o.keys[0]?.location ?? '—'}</td>
           </tr>
         ))}
       </tbody>
@@ -39,13 +37,13 @@ export function AssetsView({ summary }: { summary: AssetsSummary }) {
         <p className="hint">
           All reachable media downloaded — archive is self-sufficient
           {orphanCount > 0
-            ? ` (${orphanCount} orphaned/deleted asset(s) skipped).`
+            ? ` (${orphanCount} asset(s) missing at source — see below).`
             : '.'}
         </p>
       ) : (
         <p style={{ color: '#b00', fontWeight: 600 }}>
           ⚠ {failCount} key(s) across {summary.undownloaded.length} owner(s) failed
-          (non-404) and may be retryable — click Download assets again.
+          (non-403/404) and may be retryable — click Download assets again.
         </p>
       )}
       {Object.keys(summary.statusHistogram).length > 0 && (
@@ -64,7 +62,11 @@ export function AssetsView({ summary }: { summary: AssetsSummary }) {
       )}
       {summary.orphaned.length > 0 && (
         <>
-          <h3>orphaned (404 — likely deleted)</h3>
+          <h3>missing at source (403/404 — likely deleted)</h3>
+          <p className="hint">
+            Referenced by the course but gone from the CDN — flag for manual
+            handling at import. Full list + per-key locations in assets-summary.json.
+          </p>
           {ownerTable(summary.orphaned)}
         </>
       )}

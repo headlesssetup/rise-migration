@@ -14,11 +14,13 @@ export {
   buildAssetManifest,
   assetManifestToJson,
   findUndownloadedKeys,
+  isOrphanStatus,
   type AssetManifest,
   type AssetManifestEntry,
   type AssetFailure,
   type OwnerType,
 } from './manifest';
+export { locateKey, formatLocation, type KeyLocation } from './locate';
 export {
   downloadAssetsFor,
   keyPathCandidates,

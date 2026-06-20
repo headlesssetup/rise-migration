@@ -66,16 +66,21 @@ from the public CDN and stored content-addressed.
   verbatim → single-encoded (fixes `%2520`) → NFC (fixes NFD unicode) URL forms.
   `priorAssets` lets a re-run reuse downloaded keys without re-fetching (resume).
 - `core/assets/manifest.ts` — per-owner `AssetManifest` + `findUndownloadedKeys`
-  (the loud-fail assertion: every collected key must resolve to a stored asset).
+  (assertion: every collected key resolves to a stored asset) + `isOrphanStatus`
+  (403/404 ⇒ missing at source). `core/assets/locate.ts` resolves a key's JSON
+  path → `lessonTitle / family/variant / blockId` so a missing asset is findable.
 - Panel: `orchestrator/assets.ts` (`cdnDownload` tries the encoding variants +
   retries transient 429/5xx; `downloadAllAssets` resumes incomplete owners and
-  splits failures into `orphaned` (404 after all variants) vs retryable) + the
-  "Assets (Phase 2)" card in `App.tsx`.
+  splits failures into `orphaned` (403/404 — missing at source, tagged with
+  course title + location) vs retryable) + the "Assets (Phase 2)" card.
 
 **Resume:** re-running "Download assets" skips owners whose manifest is already
 complete, reuses successful keys for incomplete ones, and retries only the
 failures — so a re-run is cheap and self-healing. (An early full-library run hit
-1,498 failures from a `)`-truncation + double-encoding bug, since fixed.)
+1,498 failures from a `)`-truncation + double-encoding bug, since fixed; the
+~500 residual were all **403/AccessDenied = deleted at source** — S3 returns 403
+for absent keys on a bucket without public `ListBucket` — now classified as
+`orphaned`, not failures.)
 
 **Archive layout (new):**
 - `assets/<sha256>.<ext>` — content-addressed media bytes, deduped across the run.
@@ -111,6 +116,10 @@ checksums → fidelity report.
   upload chain. Need a real mitm capture of each before Phase 3.
 - **Storyline reachability** — only recreatable if the target can reach the same
   Review 360 item; otherwise flag for manual handling.
+- **Orphaned media** — some courses reference media keys that are 403/deleted at
+  source (`assets-summary.json → orphaned`). They can't be re-uploaded; import
+  must read the asset manifest and flag/skip the referencing block (with the
+  recorded location) rather than ship a dead key.
 - **Folder team/subscription scoping** (`ownerPrincipalId`, `subscriptionId`,
   shared vs private) may not map 1:1 across accounts.
 

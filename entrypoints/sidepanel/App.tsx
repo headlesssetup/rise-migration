@@ -344,11 +344,13 @@ export function App() {
       }. → assets/, *.assets.json, assets-summary.json.`,
     );
     if (orphan) {
-      addLog(`${orphan} asset(s) orphaned (404 — likely deleted); not blocking.`);
+      addLog(
+        `${orphan} asset(s) missing at source (403/404 — likely deleted); flagged in assets-summary.json, not blocking.`,
+      );
     }
     if (!summary.complete) {
       const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
-      addLog(`⚠ ${n} key(s) failed (non-404) — click Download assets again to retry.`);
+      addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
     }
   }, [storage, onEvent, addLog]);
 

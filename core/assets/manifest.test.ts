@@ -3,6 +3,7 @@ import type { AssetKey } from './keys';
 import {
   buildAssetManifest,
   findUndownloadedKeys,
+  isOrphanStatus,
   type AssetManifestEntry,
 } from './manifest';
 
@@ -31,6 +32,19 @@ describe('buildAssetManifest', () => {
     ]);
     expect(bad.complete).toBe(false);
     expect(bad.failed).toHaveLength(1);
+  });
+});
+
+describe('isOrphanStatus', () => {
+  it('treats 403 and 404 as missing-at-source (S3 denies ListBucket)', () => {
+    expect(isOrphanStatus(404)).toBe(true);
+    expect(isOrphanStatus(403)).toBe(true);
+  });
+  it('does not treat transient/network statuses as orphaned', () => {
+    expect(isOrphanStatus(429)).toBe(false);
+    expect(isOrphanStatus(500)).toBe(false);
+    expect(isOrphanStatus(0)).toBe(false);
+    expect(isOrphanStatus(undefined)).toBe(false);
   });
 });
 

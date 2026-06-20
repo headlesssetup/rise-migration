@@ -28,6 +28,19 @@ export interface AssetFailure {
   status?: number;
   /** The key-path variant last tried against the CDN (diagnostics). */
   urlTried?: string;
+  /** JSON path(s) in the source doc where this key was referenced (locating). */
+  paths?: string[];
+}
+
+/**
+ * A GET that returns 404 or 403 on the public bucket means the object is
+ * missing/inaccessible. `articulateusercontent.com` denies public `ListBucket`,
+ * so S3 returns **403 AccessDenied** (not 404) for absent keys — confirmed by
+ * probing failing keys (AccessDenied logged-in AND incognito). Such keys are
+ * orphaned: unrecoverable via the public CDN, flagged rather than retried.
+ */
+export function isOrphanStatus(status: number | undefined): boolean {
+  return status === 404 || status === 403;
 }
 
 export interface AssetManifest {
