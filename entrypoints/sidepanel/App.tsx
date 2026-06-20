@@ -32,6 +32,7 @@ import type { SearchResultItem } from '@/shared/types/rise';
 import { AssetsView } from './components/AssetsView';
 import { BanksView } from './components/BanksView';
 import { CensusView } from './components/CensusView';
+import { ImportView } from './components/ImportView';
 import { NoveltyView } from './components/NoveltyView';
 import { SessionView } from './components/SessionView';
 import {
@@ -62,11 +63,13 @@ type DirPicker = (opts?: {
 }) => Promise<FileSystemDirectoryHandle>;
 
 type Phase = 'idle' | 'listing' | 'listed' | 'exporting' | 'done';
+type Mode = 'export' | 'import';
 
 const PAGE = 16;
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
+  const [mode, setMode] = useState<Mode>('export');
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [storage, setStorage] = useState<Storage | null>(null);
   const [folderName, setFolderName] = useState<string | null>(null);
@@ -281,6 +284,14 @@ export function App() {
 
     await storage.writeManifest({
       generatedAt: new Date().toISOString(),
+      // Source account identity — the import side's Source ≠ Target guard reads
+      // this to refuse writing back into the account the archive came from.
+      sourceAccount: {
+        name: session?.accountName ?? session?.identity?.name ?? null,
+        sub: session?.identity?.sub ?? null,
+        email: session?.identity?.email ?? null,
+        plane: session?.plane ?? null,
+      },
       courseCount: scans.length,
       saved,
       skipped,
@@ -299,7 +310,7 @@ export function App() {
     addLog(
       `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s).`,
     );
-  }, [storage, selectedCourses, onEvent, addLog]);
+  }, [storage, selectedCourses, onEvent, addLog, session]);
 
   const runBanks = useCallback(async () => {
     if (!storage) return;
@@ -386,7 +397,26 @@ export function App() {
 
   return (
     <div className="app">
-      <h1>Rise Migration — Exporter</h1>
+      <h1>Rise Migration — {mode === 'export' ? 'Exporter' : 'Importer'}</h1>
+
+      <div className="row" role="tablist" style={{ marginBottom: 8 }}>
+        <button
+          onClick={() => setMode('export')}
+          disabled={busy}
+          aria-pressed={mode === 'export'}
+          style={mode === 'export' ? { fontWeight: 700 } : undefined}
+        >
+          Export (read-only)
+        </button>
+        <button
+          onClick={() => setMode('import')}
+          disabled={busy}
+          aria-pressed={mode === 'import'}
+          style={mode === 'import' ? { fontWeight: 700, color: '#b00' } : undefined}
+        >
+          Import (write)
+        </button>
+      </div>
 
       <section className="card">
         <h2>Session</h2>
@@ -413,6 +443,12 @@ export function App() {
         )}
       </section>
 
+      {mode === 'import' && (
+        <ImportView storage={storage} session={session} addLog={addLog} />
+      )}
+
+      {mode === 'export' && (
+      <>
       <section className="card">
         <h2>Courses</h2>
         <div className="row">
@@ -537,6 +573,8 @@ export function App() {
           _metadata/.
         </p>
       </section>
+      </>
+      )}
 
       {progress && (
         <section className="card">

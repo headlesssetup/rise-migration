@@ -108,6 +108,68 @@ describe('executePlan — image course happy path', () => {
   });
 });
 
+describe('executePlan — multi-key block (key + crushedKey)', () => {
+  it('uploads + remaps BOTH keys so no source key survives', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [
+        { key: 'rise/courses/SRC/orig.jpg', kind: 'media-image', file: 'assets/a.jpg', ext: 'jpg' },
+        { key: 'rise/courses/SRC/crush.jpg', kind: 'media-image', file: 'assets/b.jpg', ext: 'jpg' },
+      ],
+      banksById: new Map(),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: [
+              {
+                id: 'cblock00000000000000000000',
+                family: 'image',
+                variant: 'hero',
+                items: [
+                  {
+                    id: 'citem000000000000000000000',
+                    media: {
+                      image: {
+                        key: 'rise/courses/SRC/orig.jpg',
+                        crushedKey: 'rise/courses/SRC/crush.jpg',
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const steps = buildPlan(input);
+    let yurlN = 0;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      'GET_YURL': () => ({
+        payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.jpg`, url: 'https://s3/put', type: 'image/jpeg' },
+      }),
+    });
+    const res = await executePlan(steps, {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    // two uploads happened (orig + crushed)
+    expect(res.envelopes.filter((e) => e.label === 'S3 PUT (upload bytes)').length).toBe(2);
+  });
+});
+
 describe('executePlan — dry run', () => {
   it('collects every envelope without relaying', async () => {
     const input = imageCourse();

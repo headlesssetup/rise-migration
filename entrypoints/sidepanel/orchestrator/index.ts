@@ -22,3 +22,10 @@ export {
 } from './banks';
 export { cdnDownload, downloadAllAssets, type AssetsSummary } from './assets';
 export { fetchAccountExtras, type AccountExtrasSummary } from './account';
+export {
+  runImport,
+  readSourceIdentity,
+  type ImportOptions,
+  type ImportRunResult,
+  type CourseImportOutcome,
+} from './import';

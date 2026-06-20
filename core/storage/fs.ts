@@ -115,6 +115,15 @@ export class FileSystemStorage implements Storage {
     );
   }
 
+  async readManifest(): Promise<string | null> {
+    try {
+      const handle = await this.root.getFileHandle('manifest.json');
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
   async writeInventory(json: string, csv: string): Promise<void> {
     await this.writeMetaPair('inventory', json, csv);
   }
@@ -279,6 +288,17 @@ export class FileSystemStorage implements Storage {
     await this.writeFile(dir, name, bytes as BufferSource);
   }
 
+  async readAsset(name: string): Promise<Uint8Array | null> {
+    try {
+      const dir = await this.assetsDir();
+      const handle = await dir.getFileHandle(name);
+      const buf = await (await handle.getFile()).arrayBuffer();
+      return new Uint8Array(buf);
+    } catch {
+      return null;
+    }
+  }
+
   async hasAsset(name: string): Promise<boolean> {
     try {
       const dir = await this.assetsDir();
@@ -327,5 +347,26 @@ export class FileSystemStorage implements Storage {
   async writeAssetsSummary(json: string): Promise<void> {
     const dir = await this.metaDir();
     await this.writeFile(dir, 'assets-summary.json', json);
+  }
+
+  // --- Phase 3: import artifacts (under _import/, separate from the archive) ---
+
+  private importDir(): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('_import', { create: true });
+  }
+
+  async writeImportArtifact(name: string, contents: string): Promise<void> {
+    const dir = await this.importDir();
+    await this.writeFile(dir, name, contents);
+  }
+
+  async readImportArtifact(name: string): Promise<string | null> {
+    try {
+      const dir = await this.importDir();
+      const handle = await dir.getFileHandle(name);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
   }
 }

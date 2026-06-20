@@ -19,6 +19,7 @@ import {
   REFRESH_URL,
   type RequestSpec,
 } from '@/core/rise-client';
+import type { WriteSpec } from '@/core/import/envelopes';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
   BackgroundRequest,
@@ -26,6 +27,7 @@ import type {
   ContentMessage,
   FetchResult,
   RawKind,
+  WriteRelayResult,
 } from '@/shared/messaging';
 
 const TOKEN_KEY = 'riseToken';
@@ -37,22 +39,59 @@ interface InPageResult {
   error?: string;
 }
 
+/** What relayFetch needs from a spec — RequestSpec (reads) or WriteSpec (writes).
+ *  Write-only fields are optional so a read RequestSpec is assignable. */
+interface RelaySpec {
+  url: string;
+  method: string;
+  body?: string;
+  base64Body?: string;
+  contentType?: string;
+  noAuth?: boolean;
+}
+
 // Executed INSIDE the Rise tab (isolated world) — a same-origin fetch that
 // rides the live session's first-party cookies, plus the bearer if we have it.
 // Must be self-contained (no closures): it is serialized by executeScript.
+//
+// Phase 3 adds write support: PUT/DELETE, a base64 binary body (presigned S3
+// upload — the same cross-origin PUT the real editor issues from the Rise page),
+// an explicit Content-Type, and `noAuth` (the presigned url carries its own
+// signature, so no bearer/cookies on the S3 PUT).
 async function fetchInRiseTab(
-  spec: { url: string; method: string; body?: string },
+  spec: {
+    url: string;
+    method: string;
+    body?: string;
+    base64Body?: string;
+    contentType?: string;
+    noAuth?: boolean;
+  },
   token: string | null,
 ): Promise<InPageResult> {
   try {
     const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (spec.body) headers['Content-Type'] = 'application/json';
+    if (token && !spec.noAuth) headers.Authorization = `Bearer ${token}`;
+
+    let body: BodyInit | undefined;
+    if (spec.base64Body !== undefined) {
+      const bin = atob(spec.base64Body);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      body = new Blob([bytes], { type: spec.contentType || 'application/octet-stream' });
+      if (spec.contentType) headers['Content-Type'] = spec.contentType;
+    } else if (spec.body !== undefined) {
+      body = spec.body;
+      headers['Content-Type'] = spec.contentType || 'application/json';
+    }
+
     const res = await fetch(spec.url, {
       method: spec.method,
       headers,
-      body: spec.body,
-      credentials: 'include',
+      body,
+      // Presigned S3 PUT is cross-origin and must NOT send cookies; rise.* calls
+      // need first-party cookies. Gate credentials on noAuth.
+      credentials: spec.noAuth ? 'omit' : 'include',
     });
     return { ok: res.ok, status: res.status, text: await res.text() };
   } catch (e) {
@@ -125,7 +164,7 @@ export default defineBackground(() => {
   }
 
   // Locate the live Rise tab and run the fetch inside it (first-party cookies).
-  async function relayFetch(spec: RequestSpec): Promise<InPageResult> {
+  async function relayFetch(spec: RelaySpec): Promise<InPageResult> {
     const tab = await findRiseTab();
     if (!tab || typeof tab.id !== 'number') {
       return {
@@ -140,7 +179,17 @@ export default defineBackground(() => {
         target: { tabId: tab.id },
         world: 'ISOLATED',
         func: fetchInRiseTab,
-        args: [{ url: spec.url, method: spec.method, body: spec.body }, token],
+        args: [
+          {
+            url: spec.url,
+            method: spec.method,
+            body: spec.body,
+            base64Body: spec.base64Body,
+            contentType: spec.contentType,
+            noAuth: spec.noAuth,
+          },
+          token,
+        ],
       });
       return (
         (injection?.result as InPageResult | undefined) ?? {
@@ -184,6 +233,17 @@ export default defineBackground(() => {
       };
     }
     return { ok: true, status: r.status, data: r.text ?? '' };
+  }
+
+  // Relay one WRITE envelope through the live Rise tab. Unlike rawFetch, it
+  // returns the raw body even on non-2xx so the importer can loud-fail with the
+  // server's message (protocol §12). One-shot 401 refresh + retry.
+  async function relayWrite(spec: WriteSpec): Promise<WriteRelayResult> {
+    let r = await relayFetch(spec);
+    if (r.status === 401 && (await tryRefresh())) {
+      r = await relayFetch(spec);
+    }
+    return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
   }
 
   // Best-effort refresh (rides the id.articulate.com session cookie). The fresh
@@ -237,15 +297,18 @@ export default defineBackground(() => {
         // Live tab query is authoritative (survives SW restarts; the content
         // script ping only updates the cached flag).
         let present = risePresent;
+        let plane: 'us' | 'eu' | null = null;
         try {
           const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
           present = tabs.some((t) => typeof t.id === 'number');
+          const url = tabs.find((t) => typeof t.url === 'string')?.url;
+          if (url) plane = /\.eu\.articulate\.com/i.test(url) ? 'eu' : 'us';
         } catch {
           /* keep the ping-based value */
         }
         return {
           type: 'SESSION_STATE',
-          state: { hasToken: !!token, risePresent: present, identity, accountName },
+          state: { hasToken: !!token, risePresent: present, identity, accountName, plane },
         };
       }
 
@@ -386,6 +449,9 @@ export default defineBackground(() => {
           buildReviewItemsRequest(),
           'Review items response',
         );
+
+      case 'RELAY_WRITE':
+        return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
     }
   }
 

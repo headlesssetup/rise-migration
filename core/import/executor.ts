@@ -379,12 +379,16 @@ export async function executePlan(
           } else {
             result.envelopes.push({ step: step.kind, label: 'S3 PUT (upload bytes)' });
           }
-          // 3) image → CRUSH; a/v → TRANSCODE + register job + poll.
+          // Map this source key → its new target key. Every distinct uploaded
+          // key on a block (including a separate `crushedKey`) is its own
+          // upload step, so a uniform per-key mapping covers them all and the
+          // patch step swaps each — guaranteeing no source key survives.
+          keyMap.set(step.sourceKey, newKey);
+          // 3) Mirror the editor's post-processing for the main media: image →
+          // CRUSH (output not needed for mapping, the bytes already round-trip);
+          // a/v → TRANSCODE + register job + poll until done.
           if (step.mediaKind === 'media-image') {
-            const crush = payloadOf(await send(env.crushImage(newCourseId, newKey), step.kind));
-            const crushedKey = dryRun ? `${newKey}.crushed` : String(crush.key ?? newKey);
-            keyMap.set(step.sourceKey, newKey);
-            keyMap.set(`${step.sourceKey}::crushed`, crushedKey);
+            await send(env.crushImage(newCourseId, newKey), step.kind);
           } else if (step.mediaKind === 'media-video' || step.mediaKind === 'media-audio') {
             const refs = meta ? `items:${meta.newId}` : `items:${step.sourceBlockId}`;
             const tr = payloadOf(
@@ -407,9 +411,6 @@ export async function executePlan(
               await send(env.registerJobs(newCourseId, [jobId]), step.kind);
               await pollStatus(jobId, step.kind);
             }
-            keyMap.set(step.sourceKey, newKey);
-          } else {
-            keyMap.set(step.sourceKey, newKey);
           }
           break;
         }

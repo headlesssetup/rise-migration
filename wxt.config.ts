@@ -6,9 +6,9 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
-    name: 'Rise Migration — Exporter',
+    name: 'Rise Migration',
     description:
-      'Export a Rise account (courses, question banks, folders, assets, account extras) for migration.',
+      'Export a Rise account (courses, question banks, folders, assets, account extras) and re-import it into another account. Export is read-only; Import (write mode) is gated.',
     permissions: ['sidePanel', 'storage', 'webRequest', 'scripting'],
     // Covers both Rise planes (rise.articulate.com / rise.eu.articulate.com),
     // the auth host (id[.eu].articulate.com), and any other Articulate subdomain
