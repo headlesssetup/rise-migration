@@ -9,3 +9,4 @@ export * from './plan';
 export * from './executor';
 export * from './guards';
 export * from './fidelity';
+export * from './verify';

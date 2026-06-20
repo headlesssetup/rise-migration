@@ -150,7 +150,14 @@ blocks directly.)
   DRY-RUN collects envelopes without sending. Final assertion: no source media
   key survives.
 - `guards.ts` — Source ≠ Target identity gate + plane detection.
-- `fidelity.ts` — parity/flags/surviving-key report (JSON + markdown).
+- `fidelity.ts` — plan-based parity/flags/surviving-key report (JSON + markdown).
+- `verify.ts` (**Phase 4 read-back parity**) — canonicalize source + a read-back
+  `GET_COURSE` of the new course (tokenize ids/media keys, drop server/derived
+  fields, normalize HTML) and structurally diff them. The *true* round-trip check:
+  reports per-block missing/extra/type-changed/content-changed/media-missing,
+  classifying flagged (storyline/orphan/unsupported-media) + draw-from-bank
+  divergences as **expected**. Wired into the live import (paced read-back after a
+  successful course) → `_import/<id>.parity.md` + a parity column in the panel.
 
 **Wiring:** `background` gained a `RELAY_WRITE` handler + binary/PUT/noAuth
 support (S3 upload rides the tab, same cross-origin PUT the editor issues);

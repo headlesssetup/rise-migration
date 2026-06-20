@@ -13,11 +13,14 @@ import {
   checkSourceNotTarget,
   IdMap,
   findBankRef,
+  verifyParity,
+  parityReportToMarkdown,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
   type AccountIdentity,
   type FidelityReport,
+  type ParityReport,
   type Relay,
 } from '@/core/import';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
@@ -130,6 +133,8 @@ export interface CourseImportOutcome {
   courseId: string;
   title?: string;
   report: FidelityReport;
+  /** Read-back parity (live runs only): GET_COURSE the new course + diff vs source. */
+  parity?: ParityReport;
 }
 
 export interface ImportRunResult {
@@ -227,10 +232,32 @@ export async function runImport(
       JSON.stringify(res.idMap, null, 2),
     );
 
+    // Read-back parity (live, successful runs only): paced GET_COURSE of the new
+    // course → structural diff vs the archived source. The true round-trip check.
+    let parity: ParityReport | undefined;
+    if (!opts.dryRun && res.ok && res.newCourseId) {
+      await pacedDelay(pacing);
+      onEvent({ kind: 'log', message: `Verifying parity (read-back GET_COURSE ${res.newCourseId})…` });
+      const rb = await rpc({ type: 'GET_COURSE', courseId: res.newCourseId });
+      if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
+        parity = verifyParity(course, rb.result.data.doc, res.flags);
+        await storage.writeImportArtifact(`${courseId}.parity.md`, parityReportToMarkdown(parity));
+        onEvent({
+          kind: 'log',
+          message: parity.ok
+            ? `Parity OK — ${parity.blocks.compared} block(s) match (${parity.expectedDivergences.length} expected divergence(s))`
+            : `Parity DIVERGENCES — ${parity.issues.length} unexpected (see ${courseId}.parity.md)`,
+        });
+      } else {
+        onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
+      }
+    }
+
     outcomes.push({
       courseId,
       title: typeof course.course?.title === 'string' ? course.course.title : undefined,
       report,
+      parity,
     });
     onEvent({
       kind: 'log',

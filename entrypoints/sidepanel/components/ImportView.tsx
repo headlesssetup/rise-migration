@@ -237,6 +237,7 @@ function OutcomeTable({ outcomes }: { outcomes: CourseImportOutcome[] }) {
           <th>uploads</th>
           <th>flags</th>
           <th>survivingKeys</th>
+          <th>parity</th>
         </tr>
       </thead>
       <tbody>
@@ -252,6 +253,13 @@ function OutcomeTable({ outcomes }: { outcomes: CourseImportOutcome[] }) {
             <td>{o.report.flags.length}</td>
             <td style={{ color: o.report.survivingSourceKeys.length ? '#b00' : undefined }}>
               {o.report.survivingSourceKeys.length}
+            </td>
+            <td
+              style={
+                o.parity && !o.parity.ok ? { color: '#b00', fontWeight: 600 } : undefined
+              }
+            >
+              {o.parity ? (o.parity.ok ? '✓' : `${o.parity.issues.length} diff`) : '—'}
             </td>
           </tr>
         ))}
