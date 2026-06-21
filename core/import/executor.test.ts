@@ -335,4 +335,63 @@ describe('executePlan — draw-from-bank', () => {
     expect(bankPut).toBeGreaterThanOrEqual(0);
     expect(bind).toBeGreaterThan(bankPut);
   });
+
+  it('creates the bank with folderId:null (NOT the course `all` sentinel)', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all', // course folder — must NOT leak into the bank POST
+      assets: [],
+      banksById: new Map([['bank1', { id: 'bank1', title: 'Bank', questions: [] }]]),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: [
+              {
+                id: 'cb1aaaaaaaaaaaaaaaaaaaaaa',
+                family: 'knowledgeCheck',
+                variant: 'draw from question bank',
+                items: [{ id: 'ci1aaaaaaaaaaaaaaaaaaaaaa', type: 'DRAW_FROM_QUESTION_BANK', questionBankId: 'bank1' }],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const steps = buildPlan(input);
+    let bankBody: any = null;
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/question-banks')) {
+        bankBody = JSON.parse(spec.body!);
+        return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWBANK' }) };
+      }
+      if (spec.label.includes('question_banks/')) return { ok: true, status: 200, text: JSON.stringify({ version: 1 }) };
+      if (spec.label.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) {
+        const id = JSON.parse(spec.body!).payload.blocks[0].id;
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) };
+      }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(steps, { input, relay, readAsset: async () => null, ids: new IdMap(counterMint()), mintId: counterMint() });
+    expect(res.ok).toBe(true);
+    expect(bankBody).toEqual({ folderId: null, title: 'Bank' });
+  });
+
+  it('surfaces the server response body on a write failure', async () => {
+    const input = imageCourse();
+    const steps = buildPlan(input);
+    const relay: Relay = async (spec) =>
+      spec.label.includes('/manage/api/content')
+        ? { ok: false, status: 500, text: '{"error":"folder not found"}' }
+        : { ok: true, status: 200, text: '{}' };
+    const res = await executePlan(steps, { input, relay, readAsset: async () => null, ids: new IdMap(counterMint()), mintId: counterMint() });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('folder not found'); // body snippet surfaced
+  });
 });

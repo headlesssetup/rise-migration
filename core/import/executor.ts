@@ -177,7 +177,10 @@ export async function executePlan(
         case 'create-bank': {
           const bank = deps.input.banksById.get(step.sourceBankId);
           const resp = await send(
-            env.postBank({ folderId: deps.input.targetFolderId ?? null, title: step.title }),
+            // Banks live in their OWN folder namespace — NOT the course-content
+            // `all` sentinel (which 500s here). Until bank-folder mapping exists
+            // (protocol §5), create at the bank root with folderId: null.
+            env.postBank({ folderId: null, title: step.title }),
             step.kind,
           );
           const newBankId = dryRun ? ids.remap(step.sourceBankId) : String(resp.id ?? '');
@@ -499,7 +502,14 @@ export async function executePlan(
   } catch (e) {
     result.ok = false;
     result.idMap = ids.toJSON();
-    result.error = e instanceof WriteError ? `[${e.step}] ${e.message}` : String(e);
+    if (e instanceof WriteError) {
+      // Surface a snippet of the server's response body — a 4xx/5xx body usually
+      // says exactly what it rejected (the live diagnostic).
+      const body = e.raw ? ` — body: ${e.raw.slice(0, 300)}` : '';
+      result.error = `[${e.step}] ${e.message}${body}`;
+    } else {
+      result.error = String(e);
+    }
     return result;
   }
 
