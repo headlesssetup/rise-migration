@@ -43,8 +43,10 @@ import {
 } from './folder-store';
 import {
   buildFolders,
+  cdnBasesForPlane,
   countCourses,
   downloadAllAssets,
+  makeCdnDownloader,
   exportCourses,
   fetchAccountExtras,
   fetchFolders,
@@ -80,6 +82,7 @@ export function App() {
   const [courses, setCourses] = useState<SearchResultItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<string[]>([]);
+  const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -88,6 +91,16 @@ export function App() {
   const [banks, setBanks] = useState<BankCatalog | null>(null);
   const [assets, setAssets] = useState<AssetsSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const copyLog = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(log.join('\n'));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable — ignore */
+    }
+  }, [log]);
 
   const addLog = useCallback((message: string) => {
     setLog((l) => [...l, message]);
@@ -359,8 +372,20 @@ export function App() {
     setPhase('exporting');
     setAssets(null);
     setProgress(null);
-    addLog('Downloading assets from articulateusercontent.com (parallel)…');
-    const summary = await downloadAllAssets(storage, onEvent);
+    // Plane-aware CDN host: prefer the account plane recorded in the archive
+    // manifest (the account the media belongs to), else the live tab's plane,
+    // else try both (US then EU).
+    let plane: 'us' | 'eu' | null = session?.plane ?? null;
+    try {
+      const m = await storage.readManifest();
+      const recorded = m ? (JSON.parse(m).sourceAccount?.plane as typeof plane) : null;
+      if (recorded === 'us' || recorded === 'eu') plane = recorded;
+    } catch {
+      /* fall back to the live session plane / both */
+    }
+    const bases = cdnBasesForPlane(plane);
+    addLog(`Downloading assets from ${bases.join(' / ')} (parallel)…`);
+    const summary = await downloadAllAssets(storage, onEvent, makeCdnDownloader(bases));
     setAssets(summary);
     setPhase('done');
     const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
@@ -378,7 +403,7 @@ export function App() {
       const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
       addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
     }
-  }, [storage, onEvent, addLog]);
+  }, [storage, onEvent, addLog, session]);
 
   const runAccount = useCallback(async () => {
     if (!storage) return;
@@ -602,8 +627,37 @@ export function App() {
         </details>
       )}
 
-      <section className="card">
-        <h2>Log</h2>
+      <section className="card log-card">
+        <div className="log-header">
+          <h2>Log</h2>
+          <button
+            className="copy-btn"
+            onClick={copyLog}
+            disabled={log.length === 0}
+            title="Copy log to clipboard"
+            aria-label="Copy log to clipboard"
+          >
+            {copied ? (
+              '✓ Copied'
+            ) : (
+              <>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>{' '}
+                Copy
+              </>
+            )}
+          </button>
+        </div>
         <div className="log" ref={logRef}>
           {log.map((line, i) => (
             <div key={i}>{line}</div>

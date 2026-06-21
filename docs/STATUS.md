@@ -193,11 +193,11 @@ preview, and gated live import.
   US**; the successful EU S3 PUT sent only `Content-Type` (no `x-amz-acl` header),
   so our upload path works on EU unchanged. The importer is genuinely plane-
   agnostic (relative URLs + GET_YURL-returned host). The capture also fixed the
-  **title** envelope (`UPDATE_COURSE_FIELD_THROTTLE` `{course:{id,title}}`).
-  Remaining EU **export-side** gap: the asset *download* host is hard-coded to
-  `articulateusercontent.com`; an EU export must hit `articulateusercontent.eu`
-  (keys still parse — `rise/courses/…` is host-agnostic — only the download base
-  differs). Not an import blocker.
+  **title** envelope (`UPDATE_COURSE_FIELD_THROTTLE` `{course:{id,title}}`). The
+  EU **export downloader** is now plane-aware (`makeCdnDownloader`/
+  `cdnBasesForPlane`): a known plane hits exactly one usercontent host
+  (`articulateusercontent.com`/`.eu`), an unknown plane tries both;
+  `articulateusercontent.eu` added to host_permissions.
 - **Storyline reachability** — only recreatable if the target can reach the same
   Review 360 item; otherwise flag for manual handling.
 - **Orphaned media** — some courses reference media keys that are 403/deleted at

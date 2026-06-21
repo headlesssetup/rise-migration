@@ -5,9 +5,10 @@
 // sequential + human-paced), the public CDN is fetched through a bounded
 // parallel pool — that pacing invariant does not apply here (STATUS.md).
 //
-// The side panel is an extension page; with `articulateusercontent.com` in
-// host_permissions it can fetch the CDN cross-origin, and FileSystemStorage
-// lives panel-side too — so download + write happen here, no background relay.
+// The side panel is an extension page; with `articulateusercontent.com` AND
+// `articulateusercontent.eu` in host_permissions it can fetch either plane's CDN
+// cross-origin, and FileSystemStorage lives panel-side too — so download + write
+// happen here, no background relay.
 
 import {
   collectAssetKeys,
@@ -25,53 +26,68 @@ import {
 import type { Storage } from '@/core/storage/storage';
 import { unwrap, type ProgressEvent } from './shared';
 
-const CDN_BASE = 'https://articulateusercontent.com/';
+const CDN_US = 'https://articulateusercontent.com/';
+const CDN_EU = 'https://articulateusercontent.eu/';
 const MAX_RETRIES = 2; // for transient 429 / 5xx
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Real downloader: GET the public-read CDN object for a key. Tries encoding
- *  variants (verbatim → normalized → NFC) so keys with `(n)`, double-encoding,
- *  or NFD unicode resolve; retries transient 429/5xx with backoff. */
-export const cdnDownload: Downloader = async (
-  key: string,
-): Promise<DownloadOutcome> => {
-  let lastStatus: number | undefined;
-  let lastError: string | undefined;
-  let lastUrl: string | undefined;
+/** Usercontent base hosts to try, in order, for a given plane. A known plane
+ *  hits exactly one host (no waste); an unknown plane tries US then EU so an
+ *  archive whose plane wasn't recorded still resolves. */
+export function cdnBasesForPlane(plane: 'us' | 'eu' | null | undefined): string[] {
+  if (plane === 'eu') return [CDN_EU];
+  if (plane === 'us') return [CDN_US];
+  return [CDN_US, CDN_EU]; // unknown → try both
+}
 
-  for (const path of keyPathCandidates(key)) {
-    lastUrl = path;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const res = await fetch(CDN_BASE + path);
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          return {
-            ok: true,
-            status: res.status,
-            bytes: new Uint8Array(buf),
-            contentType: res.headers.get('content-type') ?? undefined,
-            urlTried: path,
-          };
+/** Build a downloader over the given usercontent base hosts. GETs the public-read
+ *  CDN object for a key, trying encoding variants (verbatim → normalized → NFC)
+ *  so keys with `(n)`, double-encoding, or NFD unicode resolve, and falling
+ *  through to the next host base on a miss; retries transient 429/5xx. */
+export function makeCdnDownloader(bases: string[]): Downloader {
+  return async (key: string): Promise<DownloadOutcome> => {
+    let lastStatus: number | undefined;
+    let lastError: string | undefined;
+    let lastUrl: string | undefined;
+
+    for (const base of bases) {
+      for (const path of keyPathCandidates(key)) {
+        lastUrl = base + path;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            const res = await fetch(base + path);
+            if (res.ok) {
+              const buf = await res.arrayBuffer();
+              return {
+                ok: true,
+                status: res.status,
+                bytes: new Uint8Array(buf),
+                contentType: res.headers.get('content-type') ?? undefined,
+                urlTried: base + path,
+              };
+            }
+            lastStatus = res.status;
+            lastError = undefined;
+            if (res.status === 429 || res.status >= 500) {
+              if (attempt < MAX_RETRIES) await sleep(500 * (attempt + 1));
+              continue;
+            }
+            break; // 4xx (e.g. 404) → try the next encoding variant / host
+          } catch (e) {
+            lastError = String(e);
+            lastStatus = undefined;
+            if (attempt < MAX_RETRIES) await sleep(500 * (attempt + 1));
+          }
         }
-        lastStatus = res.status;
-        lastError = undefined;
-        // Retry only transient statuses; otherwise move to the next variant.
-        if (res.status === 429 || res.status >= 500) {
-          if (attempt < MAX_RETRIES) await sleep(500 * (attempt + 1));
-          continue;
-        }
-        break; // 4xx (e.g. 404) → try the next encoding variant
-      } catch (e) {
-        lastError = String(e);
-        lastStatus = undefined;
-        if (attempt < MAX_RETRIES) await sleep(500 * (attempt + 1));
       }
     }
-  }
-  return { ok: false, status: lastStatus, error: lastError, urlTried: lastUrl };
-};
+    return { ok: false, status: lastStatus, error: lastError, urlTried: lastUrl };
+  };
+}
+
+/** Default downloader (US plane); plane-aware callers use makeCdnDownloader. */
+export const cdnDownload: Downloader = makeCdnDownloader([CDN_US]);
 
 interface FailedKey {
   key: string;
