@@ -55,14 +55,13 @@ export function updateCourseTheme(
   return ducks('courses', 'UPDATE_COURSE', { id: courseId, theme });
 }
 
-/** UPDATE_COURSE_FIELD {id, field, value} — single scalar field (e.g. title).
- *  ⚠️ Payload shape not in the write capture — confirm on a live target. */
-export function updateCourseField(
-  courseId: string,
-  field: string,
-  value: unknown,
-): WriteSpec {
-  return ducks('courses', 'UPDATE_COURSE_FIELD', { id: courseId, field, value });
+/** Set the course title. ⚠️ The dedicated `UPDATE_COURSE_FIELD` ducks action
+ *  returns 404 (doesn't exist); the title is set through the general
+ *  `UPDATE_COURSE {id, title}` envelope instead. Still best-effort — the title
+ *  may be a catalog-side field, so callers must not abort the import if it
+ *  fails (confirm the real rename call on a live target). */
+export function updateCourseTitle(courseId: string, title: string): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE', { id: courseId, title });
 }
 
 /** UPDATE_COURSE {id, jobs} — register transcode job ids on the course (§8). */

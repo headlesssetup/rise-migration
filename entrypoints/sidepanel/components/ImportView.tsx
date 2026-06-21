@@ -38,6 +38,7 @@ export function ImportView({
   const [source, setSource] = useState<AccountIdentity | undefined>(undefined);
   const [confirmTarget, setConfirmTarget] = useState(false);
   const [override, setOverride] = useState(false);
+  const [recreateBanks, setRecreateBanks] = useState(false);
   const [running, setRunning] = useState(false);
   const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -118,7 +119,7 @@ export function ImportView({
           storage,
           [...selected],
           target,
-          { dryRun, override },
+          { dryRun, override, recreateBanks },
           onEvent,
         );
         if (res.blocked) setBlocked(res.blocked);
@@ -127,7 +128,7 @@ export function ImportView({
         setRunning(false);
       }
     },
-    [storage, selected, target, override, onEvent],
+    [storage, selected, target, override, recreateBanks, onEvent],
   );
 
   const canLive =
@@ -198,6 +199,15 @@ export function ImportView({
           </ul>
         </>
       )}
+
+      <label title="Off: draw-from-bank blocks are created as unbound placeholders (like Storyline) — no banks are created in the target.">
+        <input
+          type="checkbox"
+          checked={recreateBanks}
+          onChange={(e) => setRecreateBanks(e.target.checked)}
+        />{' '}
+        Recreate question banks (default off → placeholders)
+      </label>
 
       <div className="row">
         <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>

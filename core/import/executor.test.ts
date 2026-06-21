@@ -282,6 +282,7 @@ describe('executePlan — draw-from-bank', () => {
     const input: PlanInput = {
       author: 'auth0|t',
       targetFolderId: 'all',
+      recreateBanks: true,
       assets: [],
       banksById: new Map([
         ['bank1', { id: 'bank1', title: 'Bank', questions: [{ id: 'q1aaaaaaaaaaaaaaaaaaaaaaa', answers: [] }] }],
@@ -340,6 +341,7 @@ describe('executePlan — draw-from-bank', () => {
     const input: PlanInput = {
       author: 'auth0|t',
       targetFolderId: 'all', // course folder — must NOT leak into the bank POST
+      recreateBanks: true,
       assets: [],
       banksById: new Map([['bank1', { id: 'bank1', title: 'Bank', questions: [] }]]),
       course: {

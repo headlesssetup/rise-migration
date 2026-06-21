@@ -18,6 +18,7 @@ describe('buildPlan ordering', () => {
   it('emits banks → course → theme → title → lessons', () => {
     const steps = buildPlan(
       input({
+        recreateBanks: true, // opt in to bank recreation for this ordering test
         banksById: new Map([['bank1', { id: 'bank1', title: 'B', questions: [{}, {}] }]]),
         course: {
           course: { id: 'SRC', title: 'My Course', theme: { themeId: 'x' } },
@@ -58,6 +59,39 @@ describe('buildPlan ordering', () => {
     expect(kinds.indexOf('bind-draw-from-bank')).toBeGreaterThan(
       kinds.indexOf('create-block'),
     );
+  });
+
+  it('by DEFAULT leaves draw-from-bank as an unbound placeholder (no bank created)', () => {
+    const steps = buildPlan(
+      input({
+        // recreateBanks omitted → default off
+        banksById: new Map([['bank1', { id: 'bank1', title: 'B', questions: [{}] }]]),
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              items: [
+                {
+                  id: 'cblk1',
+                  family: 'knowledgeCheck',
+                  variant: 'draw from question bank',
+                  items: [{ id: 'cit1', type: 'DRAW_FROM_QUESTION_BANK', questionBankId: 'bank1' }],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    const kinds = steps.map((s) => s.kind);
+    expect(kinds).toContain('create-block'); // the placeholder block IS created
+    expect(kinds).toContain('flag-draw-from-bank');
+    expect(kinds).not.toContain('create-bank');
+    expect(kinds).not.toContain('bind-draw-from-bank');
   });
 
   it('orders lessons by ascending position', () => {

@@ -48,9 +48,11 @@ export interface ExecutorDeps {
 export interface ManualFlag {
   kind:
     | 'storyline'
+    | 'draw-from-bank'
     | 'orphan-media'
     | 'unsupported-media'
     | 'missing-bank-ref'
+    | 'title'
     | 'typeface';
   sourceBlockId?: string;
   sourceKey?: string;
@@ -234,7 +236,18 @@ export async function executePlan(
           break;
         }
         case 'set-title': {
-          await send(env.updateCourseField(newCourseId, 'title', step.title), step.kind);
+          // Best-effort: the title may be a catalog-side field with an
+          // uncaptured rename call — never abort a whole course import over a
+          // cosmetic title. Flag it if it doesn't take.
+          try {
+            await send(env.updateCourseTitle(newCourseId, step.title), step.kind);
+          } catch (e) {
+            log(`WARN title not set (continuing): ${(e as Error).message}`);
+            result.flags.push({
+              kind: 'title',
+              detail: `Course title "${step.title}" could not be set automatically — rename manually`,
+            });
+          }
           break;
         }
         case 'create-lesson': {
@@ -450,6 +463,15 @@ export async function executePlan(
             kind: 'storyline',
             sourceBlockId: step.sourceBlockId,
             detail: 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
+          });
+          break;
+        }
+        case 'flag-draw-from-bank': {
+          result.flags.push({
+            kind: 'draw-from-bank',
+            sourceBlockId: step.sourceBlockId,
+            detail:
+              'Draw-from-bank block created as an unbound placeholder — attach a question bank manually (bank recreation is off)',
           });
           break;
         }

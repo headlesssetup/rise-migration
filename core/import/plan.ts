@@ -38,6 +38,11 @@ export interface PlanInput {
   author: string;
   /** Mapped target folder id for the course, or null/'all' for the root. */
   targetFolderId?: string | null;
+  /** Recreate referenced question banks (POST→PUT) and bind draw-from-bank
+   *  blocks to them. Default OFF: draw-from-bank blocks are created as unbound
+   *  placeholders and flagged for manual handling (like Storyline/Mighty) — a
+   *  course import does not silently spawn banks in the target account. */
+  recreateBanks?: boolean;
 }
 
 export type PlanStep =
@@ -99,6 +104,14 @@ export type PlanStep =
   | { kind: 'unlock-lesson'; sourceLessonId: string; summary: string }
   | {
       kind: 'flag-storyline';
+      sourceLessonId: string;
+      sourceBlockId: string;
+      summary: string;
+    }
+  | {
+      // Draw-from-bank block created as an unbound placeholder (bank recreation
+      // off) — flagged for manual handling, like Storyline/Mighty.
+      kind: 'flag-draw-from-bank';
       sourceLessonId: string;
       sourceBlockId: string;
       summary: string;
@@ -192,34 +205,36 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // else (course/lesson/theme/bank media) is flagged unsupported at the end.
   const handledKeys = new Set<string>();
 
-  // Which banks are actually referenced by draw-from-bank blocks (dedup).
-  const referencedBanks = new Set<string>();
-  for (const l of lessons) {
-    for (const b of (l.items ?? []) as Block[]) {
-      if (isDrawFromBank(b)) {
-        const { bankId } = findBankRef(b);
-        if (bankId) referencedBanks.add(bankId);
+  // 1. Banks first (a draw-from-bank block needs the new bank id) — ONLY when
+  // bank recreation is explicitly enabled. Default: draw-from-bank blocks become
+  // unbound placeholders (see the block loop), so no bank is created.
+  if (input.recreateBanks) {
+    const referencedBanks = new Set<string>();
+    for (const l of lessons) {
+      for (const b of (l.items ?? []) as Block[]) {
+        if (isDrawFromBank(b)) {
+          const { bankId } = findBankRef(b);
+          if (bankId) referencedBanks.add(bankId);
+        }
       }
     }
-  }
-
-  // 1. Banks first (a draw-from-bank block needs the new bank id).
-  for (const bankId of referencedBanks) {
-    const bank = input.banksById.get(bankId);
-    const bTitle = bank?.title ?? bankId;
-    const qCount = Array.isArray(bank?.questions) ? bank!.questions!.length : 0;
-    steps.push({
-      kind: 'create-bank',
-      sourceBankId: bankId,
-      title: bTitle,
-      summary: `Create question bank "${bTitle}"`,
-    });
-    steps.push({
-      kind: 'put-bank',
-      sourceBankId: bankId,
-      questionCount: qCount,
-      summary: `Write ${qCount} question(s) to bank "${bTitle}"`,
-    });
+    for (const bankId of referencedBanks) {
+      const bank = input.banksById.get(bankId);
+      const bTitle = bank?.title ?? bankId;
+      const qCount = Array.isArray(bank?.questions) ? bank!.questions!.length : 0;
+      steps.push({
+        kind: 'create-bank',
+        sourceBankId: bankId,
+        title: bTitle,
+        summary: `Create question bank "${bTitle}"`,
+      });
+      steps.push({
+        kind: 'put-bank',
+        sourceBankId: bankId,
+        questionCount: qCount,
+        summary: `Write ${qCount} question(s) to bank "${bTitle}"`,
+      });
+    }
   }
 
   // 2. Course shell → theme → title.
@@ -316,18 +331,28 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       });
 
       if (isDrawFromBank(block)) {
-        const { bankId, drawCount, questionDrawType } = findBankRef(block);
-        steps.push({
-          kind: 'bind-draw-from-bank',
-          sourceLessonId,
-          sourceBlockId,
-          sourceBankId: bankId,
-          drawCount,
-          questionDrawType,
-          summary: bankId
-            ? `Bind draw-from-bank → bank ${bankId} (draw ${drawCount})`
-            : `⚠ draw-from-bank block missing a bank reference`,
-        });
+        if (input.recreateBanks) {
+          const { bankId, drawCount, questionDrawType } = findBankRef(block);
+          steps.push({
+            kind: 'bind-draw-from-bank',
+            sourceLessonId,
+            sourceBlockId,
+            sourceBankId: bankId,
+            drawCount,
+            questionDrawType,
+            summary: bankId
+              ? `Bind draw-from-bank → bank ${bankId} (draw ${drawCount})`
+              : `⚠ draw-from-bank block missing a bank reference`,
+          });
+        } else {
+          // Default: leave the block as an unbound placeholder (no bank created).
+          steps.push({
+            kind: 'flag-draw-from-bank',
+            sourceLessonId,
+            sourceBlockId,
+            summary: `⚠ Draw-from-bank placeholder — attach a question bank manually`,
+          });
+        }
         prev = sourceBlockId;
         continue;
       }

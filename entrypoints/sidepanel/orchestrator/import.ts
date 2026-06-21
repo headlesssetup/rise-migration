@@ -127,6 +127,9 @@ export interface ImportOptions {
   override?: boolean;
   pacing?: PacingConfig;
   targetFolderId?: string | null;
+  /** Recreate referenced question banks + bind draw-from-bank blocks. Default
+   *  OFF — draw-from-bank blocks become unbound placeholders (manual). */
+  recreateBanks?: boolean;
 }
 
 export interface CourseImportOutcome {
@@ -188,6 +191,7 @@ export async function runImport(
       banksById,
       author: target?.sub ?? 'unknown',
       targetFolderId: opts.targetFolderId ?? 'all',
+      recreateBanks: opts.recreateBanks ?? false,
     };
     const steps = buildPlan(input);
 

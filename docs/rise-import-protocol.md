@@ -193,8 +193,10 @@ Two separate things: (a) recreating a reusable **bank**, (b) **linking** a block
    ```
    (`category` is `questionBanks/<a uuid>`; `session`/`id` are client cuids. Best-effort,
    same as lesson locks.)
-2. `POST /manage/api/question-banks` `{folderId:<mapped or null>, title}` → `{id}` —
-   the **new bank id** (cuid). Record old→new.
+2. `POST /manage/api/question-banks` `{folderId:null, title}` → `{id}` — the **new
+   bank id** (cuid). Record old→new. ⚠️ **Confirmed live:** `folderId` must be
+   `null` (or a real *bank*-folder id) — passing the course-content `"all"`
+   sentinel **500س**. Banks have their own folder namespace.
 3. `PUT /api/rise-authoring/question_banks/<newBankId>`:
    ```jsonc
    { "id":"<newBankId>", "questions":[ …whole array, ids regenerated… ],
@@ -214,7 +216,12 @@ Two separate things: (a) recreating a reusable **bank**, (b) **linking** a block
 
 ### 4b. Link a draw-from-bank block — `INSERT_QUESTION_BANK_QUESTIONS`
 The `knowledgeCheck / draw from question bank` block is created **empty** via
-`CREATE_BLOCKS` (`items:[{id, type:"DRAW_FROM_QUESTION_BANK"}]`), then bound:
+`CREATE_BLOCKS` (`items:[{id, type:"DRAW_FROM_QUESTION_BANK"}]`). Binding it to a
+bank is **optional and OFF by default** (`recreateBanks`): a course import should
+not silently spawn banks in the target account. By default the empty block is
+left as an **unbound placeholder** and flagged for manual handling (same posture
+as Storyline/Mighty). Only when bank recreation is explicitly enabled do we run
+§4a + the bind below:
 
 **`POST …/ducks/rise/lessons/INSERT_QUESTION_BANK_QUESTIONS`**
 ```jsonc
@@ -312,9 +319,14 @@ the **create** call is taken from `rise-api-reference.md` / `rise-folders.md`:
    read `source.course.theme` and POST it straight back. Built-in cover/header images
    are `cdn.articulate.com/…` / `articulateusercontent.com/assets/rise/…` URLs —
    **referenced, not re-uploaded**.
-3. **Scalar fields** (title, etc.): `UPDATE_COURSE_FIELD {id, field, value}` (ref §4.2)
-   — single-field updates. (`UPDATE_COURSE` also accepts a `{jobs:[…]}` payload to
-   register transcode jobs, §8 — same envelope, different field.)
+3. **Title.** ⚠️ **Confirmed live:** the `rise/courses/UPDATE_COURSE_FIELD` ducks
+   action **404s** (doesn't exist) — the old §4.2 guess was wrong. The title is
+   set through the general `UPDATE_COURSE {id, title}` envelope (the action that
+   exists). Treat as **best-effort**: the title may actually be a *catalog*-side
+   field (`manage/api/content`) with an uncaptured rename call, so never abort the
+   course import if it doesn't take — flag it and let the operator rename. Capture
+   the real rename call on a live target to make it authoritative.
+   (`UPDATE_COURSE` also accepts `{jobs:[…]}` to register transcode jobs, §8.)
 4. **Typefaces / theme constants** are account/subscription-level — reuse the **same
    ids** rather than recreating (the export captured custom typefaces incl. font files
    for reference; provisioning custom fonts on the target is a manual/account step).
