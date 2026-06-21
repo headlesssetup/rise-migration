@@ -6,14 +6,32 @@
 > covers the read side and the high-level recreate sketch in §4–§9). **Never infer
 > the write API from memory — this file + the captures are the source of truth.**
 >
-> **Plane.** All hosts below are the **US** plane (`rise.articulate.com`,
+> **Plane.** Hosts below are the **US** plane (`rise.articulate.com`,
 > `articulate-us.s3.amazonaws.com`, `articulateusercontent.com`, `id.articulate.com`).
 > URLs to `rise.articulate.com` are issued **relative** so they ride whichever Rise
-> tab is open (US or EU). The two **absolute** hosts that may differ on EU — the S3
-> upload bucket (`articulate-us.s3…`) and the usercontent read host — come back
-> **inside** the `GET_YURL` response (`url`, `key`), so the upload target is
-> server-dictated, not hard-coded. EU `CRUSH_IMAGE`/`TRANSCODE_ASSET` behaviour is
-> uncaptured; build/verify **US→US first** (decision at kickoff).
+> tab is open (US or EU). The two **absolute** hosts that differ on EU — the S3
+> upload bucket and the usercontent read host — come back **inside** the `GET_YURL`
+> response (`url`, `key`), so the upload target is server-dictated, not hard-coded.
+>
+> **EU plane — now captured & validated** (`2390d5ff-capture.mitm`):
+>
+> | role | US | EU |
+> |---|---|---|
+> | Rise authoring | `rise.articulate.com` | `rise.eu.articulate.com` |
+> | account API | `api.articulate.com` | `api.eu.articulate.com` |
+> | S3 upload bucket (from `GET_YURL.url`) | `articulate-us.s3.amazonaws.com` (SigV2) | `360-prod-eu-central-1-213152736482.s3.eu-central-1.amazonaws.com` (**SigV4**) |
+> | usercontent (read) | `articulateusercontent.com` | **`articulateusercontent.eu`** (`.eu` TLD) |
+> | CDN | `cdn.articulate.com` | `cdn.eu.articulate.com` |
+> | auth (Okta) | `id.articulate.com` | `id.articulate.com` (**global**) |
+>
+> **Key validation:** every EU authoring envelope is **byte-identical** to US —
+> `CREATE_LESSON`, `CREATE_BLOCKS`, `CRUSH_IMAGE`, `GET_YURL`→S3 PUT,
+> `UPDATE_BLOCK_DEBOUNCE`, `PUT_LOCK`/`DEL_LOCK`. The EU **S3 PUT that succeeded
+> sent only `Content-Type`** — no `x-amz-acl` header, no `Authorization` (the
+> `x-amz-acl=public-read` rides the presigned query even though SigV4 lists it in
+> `SignedHeaders`; the browser omits the header and S3 still returns 200). So the
+> US-built upload path works on EU **unchanged**. Relative URLs + the
+> GET_YURL-returned host make the importer genuinely plane-agnostic.
 
 ---
 

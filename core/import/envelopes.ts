@@ -55,13 +55,26 @@ export function updateCourseTheme(
   return ducks('courses', 'UPDATE_COURSE', { id: courseId, theme });
 }
 
-/** Set the course title. ⚠️ The dedicated `UPDATE_COURSE_FIELD` ducks action
- *  returns 404 (doesn't exist); the title is set through the general
- *  `UPDATE_COURSE {id, title}` envelope instead. Still best-effort — the title
- *  may be a catalog-side field, so callers must not abort the import if it
- *  fails (confirm the real rename call on a live target). */
+/** Set the course title. ✅ Confirmed against an EU capture: the action is
+ *  `UPDATE_COURSE_FIELD_THROTTLE` (the plain `UPDATE_COURSE_FIELD` route 404s)
+ *  and the payload nests the field under `course` — `{course:{id, title}}`. The
+ *  same envelope sets `description` (and other scalar course fields). */
 export function updateCourseTitle(courseId: string, title: string): WriteSpec {
-  return ducks('courses', 'UPDATE_COURSE', { id: courseId, title });
+  return ducks('courses', 'UPDATE_COURSE_FIELD_THROTTLE', {
+    course: { id: courseId, title },
+  });
+}
+
+/** Set a single scalar course field (title/description/…) via the confirmed
+ *  `UPDATE_COURSE_FIELD_THROTTLE` envelope. */
+export function updateCourseFieldThrottle(
+  courseId: string,
+  field: string,
+  value: unknown,
+): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE_FIELD_THROTTLE', {
+    course: { id: courseId, [field]: value },
+  });
 }
 
 /** UPDATE_COURSE {id, jobs} — register transcode job ids on the course (§8). */

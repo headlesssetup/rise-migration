@@ -236,13 +236,19 @@ export async function executePlan(
           break;
         }
         case 'set-title': {
-          // Best-effort: the title may be a catalog-side field with an
-          // uncaptured rename call — never abort a whole course import over a
-          // cosmetic title. Flag it if it doesn't take.
+          // Best-effort: never abort a whole course import over a cosmetic
+          // title/description (confirmed envelope, but flag if it doesn't take).
           try {
             await send(env.updateCourseTitle(newCourseId, step.title), step.kind);
+            const desc = deps.input.course.course?.description;
+            if (typeof desc === 'string' && desc) {
+              await send(
+                env.updateCourseFieldThrottle(newCourseId, 'description', desc),
+                step.kind,
+              );
+            }
           } catch (e) {
-            log(`WARN title not set (continuing): ${(e as Error).message}`);
+            log(`WARN title/description not set (continuing): ${(e as Error).message}`);
             result.flags.push({
               kind: 'title',
               detail: `Course title "${step.title}" could not be set automatically — rename manually`,
