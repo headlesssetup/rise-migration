@@ -81,3 +81,25 @@ export function orderForCreation(folders: Map<string, SourceFolder>): SourceFold
     .filter((f) => !f.isRoot && !f.deleted)
     .sort((a, b) => depth(a) - depth(b));
 }
+
+/** Owner `permissions` for a folder — the importing admin as owner (`roleId:3`).
+ *  The principal MUST be the account-local Rise user id (`_articulate_user_id`);
+ *  the token `sub` is rejected "Invalid users" on a cross-plane session, and a
+ *  folder created with NO owner breaks the dashboard's folder-content query
+ *  (500). Returns [] if we can't source a principal (then skip the owner write).
+ *  Sharing with OTHER team members stays a manual post-migration step. */
+export function ownerPermissions(identity: {
+  userId?: string | null;
+  sub?: string | null;
+}): unknown[] {
+  const principalId = identity.userId ?? identity.sub;
+  if (!principalId) return [];
+  return [
+    {
+      principalId,
+      principalType: 0,
+      roleId: 3,
+      profile: { user_id: principalId },
+    },
+  ];
+}

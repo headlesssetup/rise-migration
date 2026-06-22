@@ -349,6 +349,20 @@ export function createFolder(args: {
   };
 }
 
+/** PATCH /manage/api/folders/{id}/permissions — set a folder's owner/ACL. We set
+ *  the importing admin as owner (`roleId:3`); a folder with NO owner 500s the
+ *  dashboard's folder-content listing. Idempotent — also REPAIRS folders we
+ *  previously created owner-less. See docs/rise-import-protocol.md §10b. */
+export function patchFolderPermissions(folderId: string, permissions: unknown[]): WriteSpec {
+  return {
+    url: `/manage/api/folders/${encodeURIComponent(folderId)}/permissions`,
+    method: 'PATCH',
+    body: JSON.stringify({ permissions }),
+    contentType: 'application/json',
+    label: 'PATCH /manage/api/folders/{id}/permissions',
+  };
+}
+
 /** PATCH /manage/api/content/{courseId}/move — move a course into a folder. The
  *  body is the folder id as a BARE text/plain string (confirmed in capture). */
 export function moveCourseToFolder(courseId: string, folderId: string): WriteSpec {

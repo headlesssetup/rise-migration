@@ -18,6 +18,10 @@ export interface SessionState {
   accountName: string | null;
   /** Which Rise plane the live tab is on, derived from its host. */
   plane: 'us' | 'eu' | null;
+  /** The ACCOUNT-LOCAL Rise user id (the `_articulate_user_id` cookie). This is
+   *  the valid principal for folder ownership — NOT the token `sub`, which on a
+   *  cross-plane session is a different (Okta) id the folders API rejects. */
+  userId: string | null;
 }
 
 /** Requests the panel sends to the background. */

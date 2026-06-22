@@ -9,6 +9,10 @@ export interface AccountIdentity {
   name?: string | null;
   /** JWT `sub` (stable user id), when available. */
   sub?: string | null;
+  /** Account-local Rise user id (`_articulate_user_id` cookie) — the valid
+   *  principal for folder ownership (differs from `sub` on a cross-plane
+   *  session). Target side only. */
+  userId?: string | null;
   /** Email, when available. */
   email?: string | null;
   /** 'us' | 'eu' — derived from the Rise tab host. */

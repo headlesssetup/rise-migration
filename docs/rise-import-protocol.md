@@ -540,19 +540,23 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
 **Folders** (`/manage/api/folders`) — captured CRUD:
 - **Create:** `POST /manage/api/folders {name, parentFolderId, permissions?}` →
   `{id, folderType, parentFolderId, ownerPrincipalId, subscriptionId, roleId, …}`.
-  - A **shared** folder *may* include `permissions:[{principalId, principalType:0,
-    roleId:3, profile:{user_id, …}}]` (the creating user as owner). A **private**
-    folder sends **no** `permissions`.
-  - ⚠ **`permissions` is NOT portable across accounts.** The `principalId` must be
-    a user that exists **on the target account**. The bearer token's `sub`/`aid`
-    (the global Okta subject, e.g. `auth0|5c5c…`) is **not** the same as the
-    account-local Rise user id (in the `_articulate_user_id` cookie, e.g.
-    `auth0|671e…`) — sending the Okta subject is rejected `400 {"message":"Error
-    creating folder with permissions - Invalid users", errors:[{principalId,
-    error:true}]}`. On a US→EU migration these always differ. **We therefore
-    create every folder WITHOUT a `permissions` array** — it's then owned by the
-    authenticated admin (identical to a private-folder create). Folder-level
-    sharing/ACLs are **not replicated**; re-share in the UI if needed.
+  - A folder's owner ACL is `permissions:[{principalId, principalType:0, roleId:3,
+    profile:{user_id}}]` (the creating user as owner).
+  - ⚠ **A folder MUST have an owner.** Creating one with **no** `permissions`
+    leaves it owner-less, which then **500s the dashboard's folder-content query**
+    (`GET /manage/api/folders/{id}?…&ownerUserIds=` → `{"status":500}`) — it breaks
+    the whole account view. So always set the owner.
+  - ⚠ **The owner `principalId` must be the ACCOUNT-LOCAL user id**, NOT the token
+    `sub`/`aid`. The bearer's `sub` is the global **Okta** subject (e.g.
+    `auth0|5c5c…`); the account-local Rise user id is in the **`_articulate_user_id`
+    cookie** (e.g. `auth0|671e…`). On a cross-plane session they differ, and
+    sending the Okta subject is rejected `400 {"message":"Error creating folder
+    with permissions - Invalid users"}`. Read `_articulate_user_id` (Cookies API)
+    and use that as the principal.
+  - **How we do it:** create the folder (no permissions), then `PATCH
+    .../permissions` with the account-local owner — applied to **every** mapped
+    folder, created OR reused, so it also **repairs** any folder previously created
+    owner-less. (Sharing with OTHER team members stays a manual step.)
   - There are **two roots** (both `isRoot:true`): a **shared** root and a
     **private** root. A top-level folder's `parentFolderId` is the matching root
     id; nested folders use their parent's id.
@@ -564,7 +568,7 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
 **Recreation algorithm:** read the source `account/folders.json`; `GET
 /manage/api/folders` on the **target** to find its two root ids by `folderType`;
 create source folders **parent-first** (top-level → matching target root;
-nested → mapped parent) **without a `permissions` ACL** (see the cross-account
+nested → mapped parent), set the account-local owner on each (see the owner
 caveat above), recording old→new; then for each imported course,
 `PATCH content/{newCourseId}/move` to its
 **mapped** folder id (course→source-folderId comes from `_metadata/inventory.*`,

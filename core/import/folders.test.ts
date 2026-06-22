@@ -3,6 +3,7 @@ import {
   parseFolders,
   rootIdsByType,
   orderForCreation,
+  ownerPermissions,
 } from './folders';
 
 // id-keyed map shape (the documented GET /manage/api/folders response)
@@ -43,5 +44,22 @@ describe('orderForCreation', () => {
     expect(ordered.indexOf('a')).toBeLessThan(ordered.indexOf('b'));
     expect(ordered.indexOf('b')).toBeLessThan(ordered.indexOf('c'));
     expect(ordered).toContain('p');
+  });
+});
+
+describe('ownerPermissions', () => {
+  it('uses the account-local userId as the owner principal (NOT the token sub)', () => {
+    const [p] = ownerPermissions({ userId: 'auth0|local', sub: 'auth0|okta' }) as Array<Record<string, unknown>>;
+    expect(p).toBeDefined();
+    expect(p!.principalId).toBe('auth0|local');
+    expect(p!.roleId).toBe(3);
+    expect((p!.profile as { user_id: string }).user_id).toBe('auth0|local');
+  });
+  it('falls back to sub when no account-local userId is known', () => {
+    const [p] = ownerPermissions({ sub: 'auth0|okta' }) as Array<Record<string, unknown>>;
+    expect(p!.principalId).toBe('auth0|okta');
+  });
+  it('is empty when no principal can be sourced (skip the owner write)', () => {
+    expect(ownerPermissions({})).toEqual([]);
   });
 });

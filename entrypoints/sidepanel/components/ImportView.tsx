@@ -56,6 +56,7 @@ export function ImportView({
         ? {
             name: session.accountName ?? session.identity?.name ?? null,
             sub: session.identity?.sub ?? null,
+            userId: session.userId ?? null,
             email: session.identity?.email ?? null,
             plane: session.plane ?? null,
           }

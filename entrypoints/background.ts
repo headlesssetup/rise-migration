@@ -186,6 +186,22 @@ export default defineBackground(() => {
     return false;
   }
 
+  // The account-local Rise user id (`_articulate_user_id` cookie) — the valid
+  // principal for folder ownership. May be URL-encoded (`auth0%7C…`).
+  async function readAccountUserId(): Promise<string | null> {
+    const tab = await findRiseTab();
+    const url = tab?.url;
+    if (!url) return null;
+    try {
+      const c = await browser.cookies.get({ url, name: '_articulate_user_id' });
+      const raw = c?.value?.trim();
+      if (!raw) return null;
+      return decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+  }
+
   // Locate the live Rise tab and run the fetch inside it (first-party cookies).
   async function relayFetch(spec: RelaySpec): Promise<InPageResult> {
     const tab = await findRiseTab();
@@ -362,9 +378,10 @@ export default defineBackground(() => {
         // one yet — so the panel shows a ready session without the operator
         // clicking "grab token" or opening a course.
         if (!token && present) await grabTokenFromCookie();
+        const userId = present ? await readAccountUserId() : null;
         return {
           type: 'SESSION_STATE',
-          state: { hasToken: !!token, risePresent: present, identity, accountName, plane },
+          state: { hasToken: !!token, risePresent: present, identity, accountName, plane, userId },
         };
       }
 

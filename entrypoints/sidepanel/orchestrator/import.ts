@@ -29,7 +29,9 @@ import {
   parseFolders,
   rootIdsByType,
   orderForCreation,
+  ownerPermissions,
   createFolder,
+  patchFolderPermissions,
   fetchFolders,
   moveCourseToFolder,
   type PlanInput,
@@ -252,7 +254,7 @@ export async function runImport(
       ? accountMap.folders
       : opts.recreateFolders === false
         ? new Map<string, string>()
-        : await setupFolders(storage, opts.dryRun, pacing, onEvent);
+        : await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
   const typefaceSeed = accountMap.typefaces;
   if (boundBanks.size > 0) {
     onEvent({ kind: 'log', message: `Auto-binding draw-from-bank to ${boundBanks.size} imported bank(s).` });
@@ -426,15 +428,17 @@ async function readCourseFolders(storage: Storage): Promise<Map<string, string>>
  * name+parent against the target's existing folders so re-runs don't spawn
  * duplicates. Returns source folderId → target folderId.
  */
-// Folders are created WITHOUT an explicit `permissions` ACL. The owner principal
-// would be the operator's account-local user id, but on a US→EU migration the
-// bearer token's `sub` (the global Okta subject) is NOT a valid principal on the
-// target account — the folders API rejects it ("Invalid users", 400). Created
-// without an ACL, a folder is simply owned by the authenticated admin (same as
-// every private folder). Folder-level sharing is not replicated across accounts
-// — re-share in the Rise UI if needed. See docs/rise-import-protocol.md §10b.
+// Folders are created without permissions, then the importing admin is set as
+// OWNER via PATCH .../permissions — applied to every mapped folder, created OR
+// reused. The owner principal is the account-local Rise user id
+// (`_articulate_user_id`); the token `sub` is rejected "Invalid users" on a
+// cross-plane session, and a folder with NO owner 500s the dashboard's
+// folder-content listing — so the PATCH also REPAIRS folders we previously
+// created owner-less. Sharing with other team members stays manual.
+// See docs/rise-import-protocol.md §10b.
 async function setupFolders(
   storage: Storage,
+  target: AccountIdentity | undefined,
   dryRun: boolean,
   pacing: PacingConfig,
   onEvent: (e: ProgressEvent) => void,
@@ -445,6 +449,14 @@ async function setupFolders(
   const source = parseFolders(safeJson(raw));
   const toCreate = orderForCreation(source);
   if (!toCreate.length) return map;
+
+  const owner = ownerPermissions(target ?? {});
+  if (owner.length === 0 && !dryRun) {
+    onEvent({
+      kind: 'log',
+      message: 'WARN no account-local user id (open a logged-in Rise tab) — folders will have no owner.',
+    });
+  }
 
   // Target roots + an existing-folder index (parent|name → id) for dedup.
   let roots: { shared?: string; private?: string } = { shared: 'dry-shared', private: 'dry-private' };
@@ -462,8 +474,19 @@ async function setupFolders(
     }
   }
 
+  // Set (or repair) the owner on a mapped folder — idempotent; skipped in dry-run.
+  const setOwner = async (folderId: string, name: string): Promise<void> => {
+    if (dryRun || owner.length === 0) return;
+    await pacedDelay(pacing);
+    const pr = await relayThroughTab(patchFolderPermissions(folderId, owner));
+    if (!pr.ok) {
+      onEvent({ kind: 'log', message: `WARN set-owner failed for "${name}" (HTTP ${pr.status})` });
+    }
+  };
+
   let created = 0;
   let reused = 0;
+  let owned = 0;
   for (const f of toCreate) {
     const parentTarget =
       (f.parentFolderId && map.get(f.parentFolderId)) ||
@@ -495,10 +518,13 @@ async function setupFolders(
       created += 1;
     }
     map.set(f.id, newId);
+    // Set/repair owner on EVERY mapped folder (new + reused) so none is owner-less.
+    await setOwner(newId, f.name);
+    if (!dryRun && owner.length > 0) owned += 1;
   }
   onEvent({
     kind: 'log',
-    message: `Folders: ${created} created, ${reused} reused (${map.size} mapped).`,
+    message: `Folders: ${created} created, ${reused} reused, ${owned} owner-set (${map.size} mapped).`,
   });
   return map;
 }
@@ -741,7 +767,7 @@ export async function importAccountSettings(
   });
 
   // Folders (always included in this step).
-  const folderIdMap = await setupFolders(storage, opts.dryRun, pacing, onEvent);
+  const folderIdMap = await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
 
   // Custom fonts (uploaded once, account-level).
   const tfRaw = await storage.readTypefaces();
