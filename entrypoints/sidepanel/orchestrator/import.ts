@@ -31,7 +31,8 @@ import {
   orderForCreation,
   ownerPermissions,
   createFolder,
-  patchFolderPermissions,
+  deleteFolder,
+  deleteCourse,
   fetchFolders,
   moveCourseToFolder,
   type PlanInput,
@@ -428,13 +429,12 @@ async function readCourseFolders(storage: Storage): Promise<Map<string, string>>
  * name+parent against the target's existing folders so re-runs don't spawn
  * duplicates. Returns source folderId → target folderId.
  */
-// Folders are created without permissions, then the importing admin is set as
-// OWNER via PATCH .../permissions — applied to every mapped folder, created OR
-// reused. The owner principal is the account-local Rise user id
-// (`_articulate_user_id`); the token `sub` is rejected "Invalid users" on a
-// cross-plane session, and a folder with NO owner 500s the dashboard's
-// folder-content listing — so the PATCH also REPAIRS folders we previously
-// created owner-less. Sharing with other team members stays manual.
+// Folders are created WITH an owner ACL in the create call (the importing admin
+// as owner). A folder with NO owner 500s the dashboard's content query — and the
+// repair PATCH .../permissions ALSO 500s on an already-broken folder, so we must
+// never create one owner-less. The owner principal is the account-local Rise user
+// id (`_articulate_user_id`); the token `sub` is rejected "Invalid users" on a
+// cross-plane session. Sharing with other team members stays manual.
 // See docs/rise-import-protocol.md §10b.
 async function setupFolders(
   storage: Storage,
@@ -454,8 +454,9 @@ async function setupFolders(
   if (owner.length === 0 && !dryRun) {
     onEvent({
       kind: 'log',
-      message: 'WARN no account-local user id (open a logged-in Rise tab) — folders will have no owner.',
+      message: 'Folders skipped: no account-local user id to own them (open a logged-in Rise tab).',
     });
+    return map;
   }
 
   // Target roots + an existing-folder index (parent|name → id) for dedup.
@@ -474,19 +475,8 @@ async function setupFolders(
     }
   }
 
-  // Set (or repair) the owner on a mapped folder — idempotent; skipped in dry-run.
-  const setOwner = async (folderId: string, name: string): Promise<void> => {
-    if (dryRun || owner.length === 0) return;
-    await pacedDelay(pacing);
-    const pr = await relayThroughTab(patchFolderPermissions(folderId, owner));
-    if (!pr.ok) {
-      onEvent({ kind: 'log', message: `WARN set-owner failed for "${name}" (HTTP ${pr.status})` });
-    }
-  };
-
   let created = 0;
   let reused = 0;
-  let owned = 0;
   for (const f of toCreate) {
     const parentTarget =
       (f.parentFolderId && map.get(f.parentFolderId)) ||
@@ -505,8 +495,9 @@ async function setupFolders(
       newId = `dry-folder-${f.id}`;
     } else {
       await pacedDelay(pacing);
+      // Create WITH the owner ACL — never leave a folder owner-less.
       const r = await relayThroughTab(
-        createFolder({ name: f.name, parentFolderId: parentTarget }),
+        createFolder({ name: f.name, parentFolderId: parentTarget, permissions: owner }),
       );
       if (!r.ok) {
         onEvent({ kind: 'log', message: `WARN folder "${f.name}" create failed (HTTP ${r.status})` });
@@ -518,13 +509,10 @@ async function setupFolders(
       created += 1;
     }
     map.set(f.id, newId);
-    // Set/repair owner on EVERY mapped folder (new + reused) so none is owner-less.
-    await setOwner(newId, f.name);
-    if (!dryRun && owner.length > 0) owned += 1;
   }
   onEvent({
     kind: 'log',
-    message: `Folders: ${created} created, ${reused} reused, ${owned} owner-set (${map.size} mapped).`,
+    message: `Folders: ${created} created, ${reused} reused (${map.size} mapped).`,
   });
   return map;
 }
@@ -1023,4 +1011,137 @@ export async function importBanks(
   // Persist the merged map (skip in dry-run so a preview never alters state).
   if (!opts.dryRun) await writeBankIdMap(storage, bound);
   return { outcomes };
+}
+
+// --- Cleanup: purge everything this tool created on the target ----------------
+
+export interface PurgeOutcome {
+  foldersDeleted: number;
+  foldersFailed: number;
+  coursesDeleted: number;
+  coursesFailed: number;
+}
+
+/** TARGET course ids this tool created, from each course's joblog id-map. */
+async function importedCourseTargetIds(storage: Storage): Promise<string[]> {
+  let srcIds: string[] = [];
+  const manifestRaw = await storage.readManifest();
+  if (manifestRaw) {
+    try {
+      const m = JSON.parse(manifestRaw) as { courses?: { id?: string }[] };
+      if (Array.isArray(m.courses)) srcIds = m.courses.map((c) => c.id ?? '').filter(Boolean);
+    } catch {
+      /* fall through */
+    }
+  }
+  if (srcIds.length === 0) srcIds = await storage.listSaved();
+
+  const out: string[] = [];
+  for (const src of srcIds) {
+    const log = await storage.readImportArtifact(`${src}.joblog.json`);
+    if (!log) continue;
+    try {
+      const m = JSON.parse(log) as Record<string, string>;
+      const newId = m[src];
+      if (newId && newId !== src) out.push(newId);
+    } catch {
+      /* tolerate */
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** TARGET folder ids this tool created, CHILD-FIRST (so a parent isn't deleted
+ *  before its children). */
+async function importedFolderTargetIds(
+  storage: Storage,
+  folderMap: Map<string, string>,
+): Promise<string[]> {
+  let srcOrder = [...folderMap.keys()];
+  const raw = await storage.readFolders();
+  if (raw) {
+    // orderForCreation is parent-first; reverse → child-first for deletion.
+    srcOrder = orderForCreation(parseFolders(safeJson(raw))).map((f) => f.id).reverse();
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const s of srcOrder) {
+    const t = folderMap.get(s);
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
+ * Cleanup — delete everything this tool created on the TARGET (the courses from
+ * the per-course job logs, then the folders from `account.idmap.json`,
+ * child-first). Recovers an account broken by owner-less folders. Best-effort:
+ * a 404 counts as already-gone. Clears the persisted folder map afterward so a
+ * fresh import recreates folders correctly (owned).
+ */
+export async function purgeImported(
+  storage: Storage,
+  opts: { dryRun: boolean; pacing?: PacingConfig },
+  onEvent: (e: ProgressEvent) => void,
+): Promise<PurgeOutcome> {
+  const pacing = opts.pacing ?? DEFAULT_PACING;
+  const out: PurgeOutcome = { foldersDeleted: 0, foldersFailed: 0, coursesDeleted: 0, coursesFailed: 0 };
+
+  // 1) Courses we created (half-imported shells litter the content list).
+  const courseIds = await importedCourseTargetIds(storage);
+  if (courseIds.length) {
+    onEvent({ kind: 'log', message: `Purge: ${courseIds.length} imported course(s)…` });
+  }
+  for (const id of courseIds) {
+    if (opts.dryRun) {
+      onEvent({ kind: 'log', message: `DRY  delete course ${id}` });
+      out.coursesDeleted += 1;
+      continue;
+    }
+    await pacedDelay(pacing);
+    const r = await relayThroughTab(deleteCourse(id));
+    if (r.ok || r.status === 404) {
+      out.coursesDeleted += 1;
+      onEvent({ kind: 'log', message: `OK   deleted course ${id}` });
+    } else {
+      out.coursesFailed += 1;
+      onEvent({ kind: 'log', message: `WARN delete course ${id} failed (HTTP ${r.status})` });
+    }
+  }
+
+  // 2) Folders we created, child-first (the owner-less ones break the dashboard).
+  const accountMap = await readAccountIdMap(storage);
+  const folderIds = await importedFolderTargetIds(storage, accountMap.folders);
+  if (folderIds.length) {
+    onEvent({ kind: 'log', message: `Purge: ${folderIds.length} imported folder(s)…` });
+  }
+  for (const id of folderIds) {
+    if (opts.dryRun) {
+      onEvent({ kind: 'log', message: `DRY  delete folder ${id}` });
+      out.foldersDeleted += 1;
+      continue;
+    }
+    await pacedDelay(pacing);
+    const r = await relayThroughTab(deleteFolder(id));
+    if (r.ok || r.status === 404) {
+      out.foldersDeleted += 1;
+      onEvent({ kind: 'log', message: `OK   deleted folder ${id}` });
+    } else {
+      out.foldersFailed += 1;
+      onEvent({ kind: 'log', message: `WARN delete folder ${id} failed (HTTP ${r.status})` });
+    }
+  }
+
+  // Clear the persisted folder map so a fresh import recreates folders (owned).
+  if (!opts.dryRun && out.foldersFailed === 0) {
+    await writeAccountIdMap(storage, new Map(), accountMap.typefaces);
+  }
+  onEvent({
+    kind: 'log',
+    message: `Purge ${opts.dryRun ? 'preview' : 'done'}: ${out.coursesDeleted} course(s), ${out.foldersDeleted} folder(s) deleted; ${out.coursesFailed + out.foldersFailed} failed.`,
+  });
+  return out;
 }

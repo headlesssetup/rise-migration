@@ -35,6 +35,8 @@ export {
   importAccountSettings,
   listLocalBanks,
   importBanks,
+  purgeImported,
+  type PurgeOutcome,
   type ImportOptions,
   type ImportRunResult,
   type CourseImportOutcome,

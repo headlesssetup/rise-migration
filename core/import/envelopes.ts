@@ -337,6 +337,10 @@ export function fetchFolders(): WriteSpec {
 export function createFolder(args: {
   name: string;
   parentFolderId: string;
+  /** Owner ACL — REQUIRED for a valid folder. A folder created with no owner
+   *  500s the dashboard's content query. Principal must be the account-local
+   *  user id (see ownerPermissions). */
+  permissions?: unknown[];
 }): WriteSpec {
   return {
     url: '/manage/api/folders',
@@ -344,22 +348,30 @@ export function createFolder(args: {
     body: JSON.stringify({
       name: args.name,
       parentFolderId: args.parentFolderId,
+      ...(args.permissions && args.permissions.length ? { permissions: args.permissions } : {}),
     }),
     label: 'POST /manage/api/folders (create folder)',
   };
 }
 
-/** PATCH /manage/api/folders/{id}/permissions — set a folder's owner/ACL. We set
- *  the importing admin as owner (`roleId:3`); a folder with NO owner 500s the
- *  dashboard's folder-content listing. Idempotent — also REPAIRS folders we
- *  previously created owner-less. See docs/rise-import-protocol.md §10b. */
-export function patchFolderPermissions(folderId: string, permissions: unknown[]): WriteSpec {
+/** DELETE /manage/api/folders/{id} — remove a folder. Used by the cleanup/purge
+ *  action to undo folders this tool created (e.g. owner-less folders that 500 the
+ *  dashboard). Contents (if any) fall back to the parent/uncategorized. */
+export function deleteFolder(folderId: string): WriteSpec {
   return {
-    url: `/manage/api/folders/${encodeURIComponent(folderId)}/permissions`,
-    method: 'PATCH',
-    body: JSON.stringify({ permissions }),
-    contentType: 'application/json',
-    label: 'PATCH /manage/api/folders/{id}/permissions',
+    url: `/manage/api/folders/${encodeURIComponent(folderId)}`,
+    method: 'DELETE',
+    label: 'DELETE /manage/api/folders/{id}',
+  };
+}
+
+/** DELETE /manage/api/content/{id} — remove a course we created (cleanup of a
+ *  half-imported course shell). */
+export function deleteCourse(courseId: string): WriteSpec {
+  return {
+    url: `/manage/api/content/${encodeURIComponent(courseId)}`,
+    method: 'DELETE',
+    label: 'DELETE /manage/api/content/{id}',
   };
 }
 

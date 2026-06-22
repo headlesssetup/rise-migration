@@ -543,9 +543,12 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
   - A folder's owner ACL is `permissions:[{principalId, principalType:0, roleId:3,
     profile:{user_id}}]` (the creating user as owner).
   - ⚠ **A folder MUST have an owner.** Creating one with **no** `permissions`
-    leaves it owner-less, which then **500s the dashboard's folder-content query**
-    (`GET /manage/api/folders/{id}?…&ownerUserIds=` → `{"status":500}`) — it breaks
-    the whole account view. So always set the owner.
+    leaves it owner-less, which then **500s the content service ACCOUNT-WIDE** —
+    `getContent({folderId})`, `content/search`, even `PATCH .../permissions`
+    itself all return `{"status":500}` (the content/folder join NPEs on the null
+    owner). It is NOT recoverable in place (the repair PATCH 500s too) — the only
+    fix is to **delete** the owner-less folders. So **never create one owner-less**:
+    set the owner in the create call.
   - ⚠ **The owner `principalId` must be the ACCOUNT-LOCAL user id**, NOT the token
     `sub`/`aid`. The bearer's `sub` is the global **Okta** subject (e.g.
     `auth0|5c5c…`); the account-local Rise user id is in the **`_articulate_user_id`
@@ -553,10 +556,13 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
     sending the Okta subject is rejected `400 {"message":"Error creating folder
     with permissions - Invalid users"}`. Read `_articulate_user_id` (Cookies API)
     and use that as the principal.
-  - **How we do it:** create the folder (no permissions), then `PATCH
-    .../permissions` with the account-local owner — applied to **every** mapped
-    folder, created OR reused, so it also **repairs** any folder previously created
-    owner-less. (Sharing with OTHER team members stays a manual step.)
+  - **How we do it:** include the owner `permissions` in the **create call**
+    (`POST /manage/api/folders {name, parentFolderId, permissions:[owner]}`) so a
+    folder is born owned — never owner-less. (Sharing with OTHER team members
+    stays a manual step.)
+- **Delete (cleanup):** `DELETE /manage/api/folders/{id}` removes a folder;
+  `DELETE /manage/api/content/{id}` removes a course. Used by the purge action to
+  undo what the tool created (e.g. owner-less folders from a bad earlier run).
   - There are **two roots** (both `isRoot:true`): a **shared** root and a
     **private** root. A top-level folder's `parentFolderId` is the matching root
     id; nested folders use their parent's id.
