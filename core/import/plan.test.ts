@@ -143,6 +143,28 @@ describe('buildPlan ordering', () => {
       'First',
       'Second',
     ]);
+    // Slots are re-indexed 0..n-1 in display order (an append each time), not the
+    // raw source position — so a non-0-based / gappy source can't reorder them.
+    expect(lessonSteps.map((s) => (s as { position: number }).position)).toEqual([0, 1]);
+  });
+
+  it('re-indexes gappy/non-0-based source positions to sequential slots', () => {
+    const steps = buildPlan(
+      input({
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            { id: 'L1', position: 10, type: 'blocks', title: 'A', items: [] },
+            { id: 'L2', position: 25, type: 'blocks', title: 'B', items: [] },
+            { id: 'L3', position: 40, type: 'blocks', title: 'C', items: [] },
+          ],
+        },
+      }),
+    );
+    const positions = steps
+      .filter((s) => s.kind === 'create-lesson')
+      .map((s) => (s as { position: number }).position);
+    expect(positions).toEqual([0, 1, 2]);
   });
 
   it('section lessons skip locks/blocks', () => {

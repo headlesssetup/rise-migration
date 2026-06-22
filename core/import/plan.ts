@@ -291,7 +291,11 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     steps.push({
       kind: 'create-lesson',
       sourceLessonId,
-      position: typeof lesson.position === 'number' ? lesson.position : idx,
+      // Sequential 0-based slot in display order — NOT the raw source `position`.
+      // We create lessons in this order, so slot == current length == an append;
+      // sending the raw (possibly gappy/non-0-based) source position let the
+      // server place lessons out of order. `idx` keeps each insert an append.
+      position: idx,
       title: lTitle,
       lessonType: lType === 'section' ? 'section' : null, // type set on update
       summary: `Create lesson "${lTitle}" (${lType})`,

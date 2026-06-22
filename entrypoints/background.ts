@@ -230,22 +230,23 @@ export default defineBackground(() => {
     }
   }
 
-  // --- In-page fetch with one-shot 401 refresh ------------------------------
+  // --- In-page fetch with one-shot 401/403 re-auth --------------------------
   async function rawFetch(
     spec: RequestSpec,
     attempt = 0,
   ): Promise<FetchResult<string>> {
     const r = await relayFetch(spec);
 
-    if (r.status === 401 && attempt === 0 && (await tryRefresh())) {
+    // An expired bearer reads back as 401 OR 403 (the authoring endpoints answer
+    // 403 "Forbidden") — re-auth (refresh + re-grab the cookie) and retry once.
+    if ((r.status === 401 || r.status === 403) && attempt === 0 && (await reauth())) {
       return rawFetch(spec, 1);
     }
-    if (r.status === 401) {
+    if (r.status === 401 || r.status === 403) {
       return {
         ok: false,
-        status: 401,
-        error:
-          'Unauthorized (401) from Rise. Make sure you are logged into the open Rise tab, then retry.',
+        status: r.status,
+        error: `Unauthorized (${r.status}) from Rise. Make sure you are logged into the open Rise tab, then retry.`,
       };
     }
     if (!r.ok) {
@@ -262,8 +263,13 @@ export default defineBackground(() => {
   // returns the raw body even on non-2xx so the importer can loud-fail with the
   // server's message (protocol §12). One-shot 401 refresh + retry.
   async function relayWrite(spec: WriteSpec): Promise<WriteRelayResult> {
+    // Proactive: refresh before the token lapses so a long import never trips a
+    // mid-flight 403 (throttled, so a non-rotating token can't spam refresh).
+    if (tokenExpiringSoon() && Date.now() - lastReauthMs > 30_000) await reauth();
     let r = await relayFetch(spec);
-    if (r.status === 401 && (await tryRefresh())) {
+    // Reactive: Rise returns 401 OR 403 on an expired/invalid bearer — re-auth
+    // (refresh + re-grab the rotated cookie) and retry once.
+    if ((r.status === 401 || r.status === 403) && (await reauth())) {
       r = await relayFetch(spec);
     }
     return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
@@ -282,6 +288,25 @@ export default defineBackground(() => {
     } catch {
       return false;
     }
+  }
+
+  // Re-establish a fresh bearer mid-import: nudge the id.articulate.com session,
+  // THEN re-read the rotated `_articulate_rise_` cookie (during an import there's
+  // no page traffic for the webRequest observer to catch, so we must pull it
+  // ourselves). Throttled so a doomed token can't spam the refresh endpoint.
+  let lastReauthMs = 0;
+  async function reauth(): Promise<boolean> {
+    lastReauthMs = Date.now();
+    const refreshed = await tryRefresh();
+    const regrabbed = await grabTokenFromCookie();
+    return refreshed || regrabbed;
+  }
+
+  // The held bearer is short-lived (~15 min). On a long import it expires
+  // mid-run; Rise answers an expired token on the authoring endpoints with 403
+  // (not 401) — e.g. GET_YURL "Forbidden" — so we must treat 403 as re-auth too.
+  function tokenExpiringSoon(skewMs = 60_000): boolean {
+    return identity?.expiresAt !== undefined && identity.expiresAt - skewMs <= Date.now();
   }
 
   // Fetch a raw JSON resource and wrap it as a RAW_RESULT (shared by the

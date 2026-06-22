@@ -44,7 +44,13 @@
   cookies) exactly like the export path.
 - **Auth refresh.** The capture shows `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh`
   (→204) firing constantly between writes, and one `POST id.articulate.com/oauth2/default/v1/token`.
-  Treat as read side: refresh best-effort on `401`, retry once.
+  The bearer is short-lived (~15 min). ⚠ On a long import it expires mid-run and the
+  **authoring endpoints answer an expired token with `403 Forbidden`, NOT `401`** —
+  observed as `GET_YURL … HTTP 403 — body: Forbidden`. So **re-auth on BOTH `401` and
+  `403`**: hit the refresh endpoint, then **re-read the rotated `_articulate_rise_`
+  cookie** (during an import there's no page traffic for the webRequest observer to
+  catch the new bearer), and retry once. Also refresh **proactively** when the held
+  token is within ~60s of `exp`, so a long run never trips the 403 at all.
 - **The websocket carries no document writes.** `conveyor.articulate.com/socket.io`
   is collaboration mirror only (presence + lock broadcast). A single-author importer
   ignores it. (It DOES carry a mirror of each write for live co-editing, but the HTTP
@@ -145,7 +151,11 @@ for lesson in source.lessons (ASC position):
 identity / `locks` profile). `type` is sent **null** here and set on the follow-up
 `UPDATE_LESSON`. Response returns `payload.course.lessons[]` (the full **ordered** id
 list, server-authoritative) and `payload.lesson.id` — the **server-assigned lessonId**
-(record it old→new). `position` is the 0-based slot; send source order ascending.
+(record it old→new). `position` is the 0-based slot; **send a re-indexed sequential
+slot `0,1,2,…` in display order — NOT the raw source `position`.** We create lessons
+in order, so slot == current length == an append; a gappy/non-0-based source position
+otherwise lets the server place lessons out of order (same class of bug as block
+ordering — fix by making each insert a deterministic append).
 
 **`POST …/ducks/rise/lessons/UPDATE_LESSON`** sets the real lesson fields:
 ```jsonc
@@ -625,7 +635,7 @@ envelope + raw response) on a mismatch — never ships a half-written course sil
 - `GET_YURL` → `key` + `url`; S3 `PUT` → HTTP 200.
 - `CRUSH_IMAGE`/`TRANSCODE_ASSET` → `key`/`jobId` present.
 - bank `PUT` → echoed bank with `version`.
-- Any `4xx`/`5xx` (other than the one-shot `401`-refresh-retry) → abort + report.
+- Any `4xx`/`5xx` (other than the one-shot `401`/`403` re-auth-retry) → abort + report.
 - Final assertion per course: **no source media key survives** (§8) and every old→new
   mapping the plan declared got fulfilled.
 
