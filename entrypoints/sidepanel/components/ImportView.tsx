@@ -40,10 +40,13 @@ export function ImportView({
   storage,
   session,
   addLog,
+  onStatus,
 }: {
   storage: Storage | null;
   session: SessionState | null;
   addLog: (m: string) => void;
+  /** Live import status for the log-header countdown. */
+  onStatus?: (e: Extract<ProgressEvent, { kind: 'import-status' }>) => void;
 }) {
   const [source, setSource] = useState<AccountIdentity | undefined>(undefined);
   const [confirmTarget, setConfirmTarget] = useState(false);
@@ -86,8 +89,9 @@ export function ImportView({
     (e: ProgressEvent) => {
       if (e.kind === 'log') addLog(e.message);
       else if (e.kind === 'course') addLog(`[${e.index + 1}/${e.total}] ${e.courseId}`);
+      else if (e.kind === 'import-status') onStatus?.(e);
     },
-    [addLog],
+    [addLog, onStatus],
   );
 
   // Live runs need an explicit target confirmation + the guard + a Rise tab.
@@ -188,6 +192,43 @@ const STEP_STYLE: React.CSSProperties = {
   marginTop: 10,
 };
 
+/** A step card whose body collapses when its heading is clicked. */
+function CollapsibleStep({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={STEP_STYLE}>
+      <h3
+        onClick={() => setOpen((o) => !o)}
+        role="button"
+        aria-expanded={open}
+        style={{
+          marginTop: 0,
+          marginBottom: open ? undefined : 0,
+          cursor: 'pointer',
+          userSelect: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        <span style={{ fontSize: '0.7em', opacity: 0.7, width: '0.9em', display: 'inline-block' }}>
+          {open ? '▾' : '▸'}
+        </span>
+        {title}
+      </h3>
+      {open && children}
+    </div>
+  );
+}
+
 // --- A) Account settings ------------------------------------------------------
 
 function AccountSettingsSection({
@@ -235,8 +276,7 @@ function AccountSettingsSection({
   );
 
   return (
-    <div style={STEP_STYLE}>
-      <h3 style={{ marginTop: 0 }}>A · Account settings</h3>
+    <CollapsibleStep title="A · Account settings">
       {info ? (
         <p className="hint">
           Archive{info.sourceName ? ` (${info.sourceName})` : ''}: {info.folders} folder(s),{' '}
@@ -268,7 +308,7 @@ function AccountSettingsSection({
           {summary.fonts.created} created, {summary.fonts.unresolved} unresolved.
         </p>
       )}
-    </div>
+    </CollapsibleStep>
   );
 }
 
@@ -318,8 +358,7 @@ function BanksSection({
   );
 
   return (
-    <div style={STEP_STYLE}>
-      <h3 style={{ marginTop: 0 }}>B · Question banks</h3>
+    <CollapsibleStep title="B · Question banks">
       {banks.length === 0 ? (
         <p className="hint">No question banks in this archive.</p>
       ) : (
@@ -370,7 +409,7 @@ function BanksSection({
           )}
         </>
       )}
-    </div>
+    </CollapsibleStep>
   );
 }
 
@@ -448,8 +487,7 @@ function CoursesSection({
   );
 
   return (
-    <div style={STEP_STYLE}>
-      <h3 style={{ marginTop: 0 }}>C · Courses</h3>
+    <CollapsibleStep title="C · Courses">
       {courses.length === 0 ? (
         <p className="hint">No courses in this archive folder. Export some first.</p>
       ) : (
@@ -494,7 +532,7 @@ function CoursesSection({
       )}
       {blocked && <p style={{ color: '#b00', fontWeight: 600 }}>BLOCKED: {blocked}</p>}
       {outcomes.length > 0 && <OutcomeTable outcomes={outcomes} />}
-    </div>
+    </CollapsibleStep>
   );
 }
 

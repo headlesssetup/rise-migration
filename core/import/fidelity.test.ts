@@ -55,15 +55,17 @@ describe('buildFidelityReport', () => {
       dryRun: true,
       ids: new IdMap(),
     });
-    const report = buildFidelityReport(steps, res, 'SRC', '2026-06-20T00:00:00Z');
+    const report = buildFidelityReport(steps, res, 'SRC', 'My Course', '2026-06-20T00:00:00Z');
     expect(report.dryRun).toBe(true);
     expect(report.ok).toBe(true);
     expect(report.sourceCourseId).toBe('SRC');
+    expect(report.title).toBe('My Course');
     expect(report.flags.some((f) => f.kind === 'storyline')).toBe(true);
     expect(report.survivingSourceKeys).toEqual([]);
 
     const md = fidelityReportToMarkdown(report);
     expect(md).toContain('DRY RUN');
+    expect(md).toContain('My Course');
     expect(md).toContain('storyline');
     expect(md).toContain('surviving');
 

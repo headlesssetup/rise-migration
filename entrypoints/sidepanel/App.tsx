@@ -79,6 +79,15 @@ function logLineClass(line: string): string {
   return 'log-line';
 }
 
+/** Format a remaining-duration (ms) as HH:MM:SS for the log-header countdown. */
+function fmtRemaining(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return [h, m, sec].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [mode, setMode] = useState<Mode>('export');
@@ -93,6 +102,11 @@ export function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  // Live import status for the log-header countdown (set via ImportView).
+  const [importStatus, setImportStatus] = useState<
+    { label: string; finishAt: number | null } | null
+  >(null);
+  const [, forceTick] = useState(0);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -124,6 +138,30 @@ export function App() {
   const addLog = useCallback((message: string) => {
     setLog((l) => [...l, message]);
   }, []);
+
+  const clearLog = useCallback(() => setLog([]), []);
+
+  const onImportStatus = useCallback(
+    (e: Extract<ProgressEvent, { kind: 'import-status' }>) => {
+      setImportStatus(
+        e.done
+          ? { label: e.label, finishAt: null }
+          : {
+              label: e.label,
+              finishAt: e.etaSeconds != null ? Date.now() + e.etaSeconds * 1000 : null,
+            },
+      );
+    },
+    [],
+  );
+
+  // Tick once a second while a countdown is live, so the remaining time updates
+  // between the (slower) status events.
+  useEffect(() => {
+    if (!importStatus || importStatus.finishAt == null) return;
+    const id = setInterval(() => forceTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [importStatus]);
 
   // Poll session state (identity + token + Rise tab presence + account name).
   useEffect(() => {
@@ -501,7 +539,12 @@ export function App() {
       </section>
 
       {ready && mode === 'import' && (
-        <ImportView storage={storage} session={session} addLog={addLog} />
+        <ImportView
+          storage={storage}
+          session={session}
+          addLog={addLog}
+          onStatus={onImportStatus}
+        />
       )}
 
       {ready && mode === 'export' && (
@@ -657,34 +700,55 @@ export function App() {
 
       <section className="card log-card">
         <div className="log-header">
-          <h2>Log</h2>
-          <button
-            className="copy-btn"
-            onClick={copyLog}
-            disabled={log.length === 0}
-            title="Copy log to clipboard"
-            aria-label="Copy log to clipboard"
-          >
-            {copied ? (
-              '✓ Copied'
-            ) : (
-              <>
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  aria-hidden="true"
-                >
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>{' '}
-                Copy
-              </>
+          <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
+            <h2>Log</h2>
+            {importStatus && (
+              <span className="hint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                {importStatus.label}
+                {importStatus.finishAt != null
+                  ? ` · ${fmtRemaining(importStatus.finishAt - Date.now())} remaining`
+                  : ''}
+              </span>
             )}
-          </button>
+          </span>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button
+              className="copy-btn"
+              onClick={copyLog}
+              disabled={log.length === 0}
+              title="Copy log to clipboard"
+              aria-label="Copy log to clipboard"
+            >
+              {copied ? (
+                '✓ Copied'
+              ) : (
+                <>
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    aria-hidden="true"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>{' '}
+                  Copy
+                </>
+              )}
+            </button>
+            <button
+              className="copy-btn"
+              onClick={clearLog}
+              disabled={log.length === 0}
+              title="Clear log"
+              aria-label="Clear log"
+            >
+              Clear
+            </button>
+          </span>
         </div>
         <div className="log" ref={logRef} onScroll={onLogScroll}>
           {log.map((line, i) => (

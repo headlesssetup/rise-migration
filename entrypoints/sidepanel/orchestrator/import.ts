@@ -292,8 +292,26 @@ export async function runImport(
   }
   const courseFolders = await readCourseFolders(storage);
 
+  // ETA: project remaining time from elapsed wall-clock and the fraction of work
+  // done (course index + within-course step fraction). Self-correcting and pacing-
+  // agnostic — no need to hardcode per-block/asset times. Live runs only.
+  const numCourses = courseIds.length;
+  const runStart = Date.now();
+  const emitStatus = (i: number, done: number, total: number): void => {
+    if (opts.dryRun) return;
+    const fraction = (i + (total ? done / total : 0)) / Math.max(1, numCourses);
+    const elapsed = Date.now() - runStart;
+    // Wait for a little signal before showing a time (early fractions are noisy).
+    const etaSeconds =
+      fraction > 0.02 && elapsed > 3000
+        ? Math.round((elapsed * (1 - fraction)) / fraction / 1000)
+        : null;
+    onEvent({ kind: 'import-status', label: `Importing ${i + 1}/${numCourses}`, etaSeconds, done: false });
+  };
+
   for (const [i, courseId] of courseIds.entries()) {
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId });
+    emitStatus(i, 0, 1);
 
     // Refresh the bearer before EACH course: every course is many paced writes,
     // and the first ducks call (UPDATE_COURSE_FIELD_THROTTLE / CREATE_LESSON)
@@ -307,6 +325,8 @@ export async function runImport(
       continue;
     }
     const course = unwrap(raw);
+    const courseTitle =
+      typeof course.course?.title === 'string' ? course.course.title : undefined;
     const { entries, fileByKey } = await readCourseAssets(storage, courseId);
     const banksById = await readReferencedBanks(storage, course);
 
@@ -326,9 +346,12 @@ export async function runImport(
 
     // Resume: rehydrate a prior job log so a retry never double-creates.
     const priorLog = await storage.readImportArtifact(`${courseId}.joblog.json`);
-    const ids = priorLog
-      ? IdMap.fromJSON(JSON.parse(priorLog) as Record<string, string>)
-      : new IdMap();
+    let ids = new IdMap();
+    if (priorLog) {
+      const parsed = JSON.parse(priorLog) as Record<string, string>;
+      delete parsed._courseTitle; // informational header only — not an id mapping
+      ids = IdMap.fromJSON(parsed);
+    }
 
     const readAsset = async (sourceKey: string) => {
       const file = fileByKey.get(sourceKey);
@@ -352,6 +375,7 @@ export async function runImport(
       dryRun: opts.dryRun,
       pace: () => pacedDelay(pacing),
       log: (m) => onEvent({ kind: 'log', message: m }),
+      onProgress: (done, total) => emitStatus(i, done, total),
     });
 
     // Place the new course into its mapped folder (the course was created at
@@ -374,7 +398,7 @@ export async function runImport(
       }
     }
 
-    const report = buildFidelityReport(steps, res, courseId);
+    const report = buildFidelityReport(steps, res, courseId, courseTitle);
     // Persist outputs (never into the read-only archive dirs).
     await storage.writeImportArtifact(
       `${courseId}.report.md`,
@@ -386,7 +410,9 @@ export async function runImport(
     );
     await storage.writeImportArtifact(
       `${courseId}.joblog.json`,
-      JSON.stringify(res.idMap, null, 2),
+      // Lead with a human-readable name so even the id-map file says which course
+      // it is; the resume reader above strips `_courseTitle` before rehydrating.
+      JSON.stringify({ _courseTitle: courseTitle ?? courseId, ...res.idMap }, null, 2),
     );
 
     // Read-back parity (live, successful runs only): paced GET_COURSE of the new
@@ -398,7 +424,14 @@ export async function runImport(
       const rb = await rpc({ type: 'GET_COURSE', courseId: res.newCourseId });
       if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
         parity = verifyParity(course, rb.result.data.doc, res.flags);
-        await storage.writeImportArtifact(`${courseId}.parity.md`, parityReportToMarkdown(parity));
+        await storage.writeImportArtifact(
+          `${courseId}.parity.md`,
+          parityReportToMarkdown(parity, {
+            title: courseTitle,
+            sourceCourseId: courseId,
+            newCourseId: res.newCourseId,
+          }),
+        );
         onEvent({
           kind: 'log',
           message: parity.ok
@@ -412,7 +445,7 @@ export async function runImport(
 
     outcomes.push({
       courseId,
-      title: typeof course.course?.title === 'string' ? course.course.title : undefined,
+      title: courseTitle,
       report,
       parity,
     });
@@ -431,6 +464,9 @@ export async function runImport(
     if (i < courseIds.length - 1) await pacedDelay(pacing);
   }
 
+  if (!opts.dryRun) {
+    onEvent({ kind: 'import-status', label: 'Import complete', etaSeconds: null, done: true });
+  }
   return { outcomes };
 }
 

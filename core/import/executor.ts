@@ -208,8 +208,14 @@ export async function executePlan(
   // synthetic empty body (callers synthesize ids separately).
   async function send(spec: WriteSpec, step: PlanStep['kind']): Promise<Record<string, unknown>> {
     result.envelopes.push({ step, label: spec.label });
+    // REST envelopes already embed the method in their label ("POST /manage/api/…");
+    // ducks labels are bare ("rise/lessons/CREATE_LESSON"). Only prepend the method
+    // when it isn't already there, so we don't log "POST POST /manage/api/…".
+    const where = spec.label.startsWith(`${spec.method} `)
+      ? spec.label
+      : `${spec.method} ${spec.label}`;
     if (dryRun) {
-      log(`${pfx()} DRY  ${spec.method} ${spec.label}`);
+      log(`${pfx()} DRY  ${where}`);
       return {};
     }
     await pace();
@@ -221,7 +227,7 @@ export async function executePlan(
         r.text,
       );
     }
-    log(`${pfx()} OK   ${spec.method} ${spec.label}`);
+    log(`${pfx()} OK   ${where}`);
     return parseJson(r.text);
   }
 

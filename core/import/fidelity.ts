@@ -11,6 +11,8 @@ export interface FidelityReport {
   dryRun: boolean;
   ok: boolean;
   sourceCourseId?: string;
+  /** Human-readable course title — so a report file names the course, not just ids. */
+  title?: string;
   newCourseId?: string;
   /** Planned vs executed counts. */
   planned: ReturnType<typeof planStats>;
@@ -27,6 +29,7 @@ export function buildFidelityReport(
   steps: PlanStep[],
   result: ExecResult,
   sourceCourseId?: string,
+  title?: string,
   generatedAt: string = new Date().toISOString(),
 ): FidelityReport {
   return {
@@ -34,6 +37,7 @@ export function buildFidelityReport(
     dryRun: result.dryRun,
     ok: result.ok,
     sourceCourseId,
+    title,
     newCourseId: result.newCourseId,
     planned: planStats(steps),
     flags: result.flags,
@@ -50,8 +54,9 @@ export function fidelityReportToJson(r: FidelityReport): string {
 /** A short human-readable summary for the panel + the migration log. */
 export function fidelityReportToMarkdown(r: FidelityReport): string {
   const lines: string[] = [];
-  lines.push(`# Import fidelity report${r.dryRun ? ' (DRY RUN)' : ''}`);
+  lines.push(`# Import fidelity report${r.title ? ` — ${r.title}` : ''}${r.dryRun ? ' (DRY RUN)' : ''}`);
   lines.push('');
+  if (r.title) lines.push(`- Course: **${r.title}**`);
   lines.push(`- Status: **${r.ok ? 'OK' : 'FAILED'}**${r.error ? ` — ${r.error}` : ''}`);
   if (r.sourceCourseId) lines.push(`- Source course: \`${r.sourceCourseId}\``);
   if (r.newCourseId) lines.push(`- Target course: \`${r.newCourseId}\``);
