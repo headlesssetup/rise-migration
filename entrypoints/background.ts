@@ -164,6 +164,28 @@ export default defineBackground(() => {
     return any.find((t) => typeof t.id === 'number');
   }
 
+  // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
+  // the access token Rise sends as `Authorization: Bearer`. This needs no course
+  // navigation and no page reload: the Cookies API reads it (even httpOnly) for
+  // the live tab's plane. Returns true if a JWT-shaped value was captured.
+  async function grabTokenFromCookie(): Promise<boolean> {
+    const tab = await findRiseTab();
+    const url = tab?.url;
+    if (!url) return false;
+    try {
+      const c = await browser.cookies.get({ url, name: '_articulate_rise_' });
+      const value = c?.value?.trim();
+      // A JWT has three dot-separated segments; guard against a stray cookie.
+      if (value && value.split('.').length === 3) {
+        setToken(value);
+        return true;
+      }
+    } catch {
+      /* cookies permission/host missing — fall back to the reload path */
+    }
+    return false;
+  }
+
   // Locate the live Rise tab and run the fetch inside it (first-party cookies).
   async function relayFetch(spec: RelaySpec): Promise<InPageResult> {
     const tab = await findRiseTab();
@@ -311,6 +333,10 @@ export default defineBackground(() => {
         } catch {
           /* keep the ping-based value */
         }
+        // Opportunistically grab the bearer from the cookie when we don't have
+        // one yet — so the panel shows a ready session without the operator
+        // clicking "grab token" or opening a course.
+        if (!token && present) await grabTokenFromCookie();
         return {
           type: 'SESSION_STATE',
           state: { hasToken: !!token, risePresent: present, identity, accountName, plane },
@@ -465,8 +491,6 @@ export default defineBackground(() => {
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
 
       case 'GRAB_TOKEN': {
-        // Reload the Rise tab; the app's boot requests carry the bearer, which
-        // the webRequest observer captures — no manual course-opening needed.
         const tab = await findRiseTab();
         if (!tab || typeof tab.id !== 'number') {
           return {
@@ -475,6 +499,15 @@ export default defineBackground(() => {
             error: 'No open Rise tab — open and log into Rise first.',
           };
         }
+        // Read the bearer directly from the `_articulate_rise_` cookie — no
+        // reload, no course navigation. (A plain list-page reload does NOT carry
+        // the bearer; only the course runtime does, which is why reloading alone
+        // never grabbed it.)
+        if (await grabTokenFromCookie()) {
+          return { type: 'GRAB_TOKEN_RESULT', ok: true };
+        }
+        // Fallback: reload so the app re-issues authed requests the observer can
+        // catch (covers a missing/renamed cookie).
         try {
           await chrome.tabs.reload(tab.id);
           return { type: 'GRAB_TOKEN_RESULT', ok: true };

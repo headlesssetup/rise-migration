@@ -9,7 +9,10 @@ export default defineConfig({
     name: 'Rise Migration',
     description:
       'Export a Rise account (courses, question banks, folders, assets, account extras) and re-import it into another account. Export is read-only; Import (write mode) is gated.',
-    permissions: ['sidePanel', 'storage', 'webRequest', 'scripting'],
+    // `cookies` lets us read the bearer straight from the `_articulate_rise_`
+    // cookie (it IS the access token) — no need to observe a request or have the
+    // operator open a course to grab the token.
+    permissions: ['sidePanel', 'storage', 'webRequest', 'scripting', 'cookies'],
     // Covers both Rise planes (rise.articulate.com / rise.eu.articulate.com),
     // the auth host (id[.eu].articulate.com), and any other Articulate subdomain
     // — needed for in-tab fetch injection, token capture, and refresh.
