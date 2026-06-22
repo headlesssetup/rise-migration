@@ -62,6 +62,11 @@ export interface Storage {
   writeFontManifest(json: string): Promise<void>;
   /** Read the font key→archive-file map, or null. */
   readFontManifest(): Promise<string | null>;
+  /** Account-level binaries (fonts) live under `account/assets/` — kept separate
+   *  from the (often huge) content-addressed course `assets/` store. */
+  writeAccountAsset(name: string, bytes: Uint8Array): Promise<void>;
+  hasAccountAsset(name: string): Promise<boolean>;
+  readAccountAsset(name: string): Promise<Uint8Array | null>;
   /** Write the typefaces inventory. */
   writeTypefaceInventory(json: string, csv: string): Promise<void>;
   /** Write the raw Review-360 items response. */

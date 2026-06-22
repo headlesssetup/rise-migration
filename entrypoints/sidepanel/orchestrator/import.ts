@@ -184,7 +184,12 @@ export async function runImport(
   const readFontBytes = async (fontKey: string) => {
     const file = fontManifest.get(fontKey);
     if (!file) return null;
-    const bytes = await storage.readAsset(file.replace(/^assets\//, ''));
+    // Fonts live under account/assets/ (new) — fall back to assets/ for archives
+    // exported before the split.
+    const name = file.split('/').pop() ?? file;
+    const bytes = file.startsWith('account/assets/')
+      ? await storage.readAccountAsset(name)
+      : await storage.readAsset(name);
     if (!bytes) return null;
     const ext = file.split('.').pop() ?? 'woff';
     return { base64: bytesToBase64(bytes), contentType: contentTypeForExt(ext) };

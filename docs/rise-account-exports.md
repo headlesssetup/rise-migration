@@ -14,7 +14,7 @@ Companion to `rise-api-reference.md`; schemas for the big resources live in
 | Folders | `GET /manage/api/folders` (course) + `private_folders`/`shared_folders` in the banks index | `account/folders.json` + `_metadata/folders-inventory.*` |
 | Uploaded media | `GET https://articulateusercontent.com/{key}` (public-read) | `assets/<sha256>.<ext>`, per-owner `*.assets.json`, `_metadata/assets-summary.json` |
 | **Block templates** | `POST …/ducks/rise/blockTemplates/FETCH_BLOCK_TEMPLATES` (payload `null`) | `account/block-templates.json` + `_metadata/block-templates-inventory.*` |
-| **Custom typefaces** | `POST …/ducks/rise/typefaces/FETCH_TYPEFACES` (payload = a courseId) | `account/typefaces.json` + `_metadata/typefaces-inventory.*`; font files (`rise/fonts/{author}/…woff`) downloaded into `assets/` |
+| **Custom typefaces** | `POST …/ducks/rise/typefaces/FETCH_TYPEFACES` (payload = a **live** courseId — must exist on the tab's account) | `account/typefaces.json` + `account/typefaces.assets.json` (font key→file map) + `_metadata/typefaces-inventory.*`; font `.woff` files downloaded into **`account/assets/`** (separate from the content-addressed course `assets/`) |
 | **Review-360 items** | `GET https://api.articulate.com/review/items?includeStackItems=true&productFilter=storyline` (cross-origin, bearer) | `account/review-items.json` + `_metadata/review-items-inventory.*` (flags `mighty`) |
 
 ## Mighty

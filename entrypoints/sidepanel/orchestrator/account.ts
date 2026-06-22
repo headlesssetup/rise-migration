@@ -2,7 +2,7 @@
 // the Review-360 items inventory (which flags Mighty bundles). Raw docs go to
 // account/, inventories to _metadata/, fonts into the shared assets/ store.
 
-import { downloadKeyList } from '@/core/assets';
+import { downloadKeyList, type AssetSink } from '@/core/assets';
 import {
   buildBlockTemplateInventory,
   blockTemplatesToCsv,
@@ -109,7 +109,19 @@ export async function fetchAccountExtras(
 
       const fontKeys = collectFontKeys(tf.doc);
       if (fontKeys.length) {
-        const res = await downloadKeyList(fontKeys, storage, cdnDownload);
+        // Fonts are account-level — store them under account/assets/ (separate
+        // from the huge content-addressed course assets/ store).
+        const fontSink: AssetSink = {
+          hasAsset: (n) => storage.hasAccountAsset(n),
+          writeAsset: (n, b) => storage.writeAccountAsset(n, b),
+        };
+        const res = await downloadKeyList(
+          fontKeys,
+          fontSink,
+          cdnDownload,
+          undefined,
+          'account/assets/',
+        );
         summary.fonts = { written: res.written, deduped: res.deduped, failed: res.failed.length };
         // Persist the font key→archive-file map so the import can re-upload
         // custom font bytes by their source key (CREATE_TYPEFACE on the target).

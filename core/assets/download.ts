@@ -141,6 +141,9 @@ export async function downloadKeyList(
   sink: AssetSink,
   downloader: Downloader,
   concurrency = DEFAULT_CONCURRENCY,
+  /** Path prefix recorded in each entry's `file` (where the sink stores it).
+   *  Account fonts use `account/assets/`; course media uses `assets/`. */
+  filePrefix = 'assets/',
 ): Promise<KeyDownloadResult> {
   const results = await runPool(keys, concurrency, async (key): Promise<PerKeyResult> => {
     const res = await downloader(key);
@@ -154,7 +157,7 @@ export async function downloadKeyList(
     if (!existed) await sink.writeAsset(name, res.bytes);
     return {
       wrote: !existed,
-      entry: { key, kind: 'media-other', hash, ext, file: `assets/${name}`, size: res.bytes.byteLength },
+      entry: { key, kind: 'media-other', hash, ext, file: `${filePrefix}${name}`, size: res.bytes.byteLength },
     };
   });
 

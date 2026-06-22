@@ -279,6 +279,36 @@ export class FileSystemStorage implements Storage {
     }
   }
 
+  // Account-level binaries (fonts) → account/assets/<name> (separate from the
+  // content-addressed course assets/ store).
+  private async accountAssetsDir(): Promise<FileSystemDirectoryHandle> {
+    const account = await this.accountDir();
+    return account.getDirectoryHandle('assets', { create: true });
+  }
+
+  async writeAccountAsset(name: string, bytes: Uint8Array): Promise<void> {
+    const dir = await this.accountAssetsDir();
+    await this.writeFile(dir, name, bytes as BufferSource);
+  }
+
+  async hasAccountAsset(name: string): Promise<boolean> {
+    try {
+      await (await this.accountAssetsDir()).getFileHandle(name);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async readAccountAsset(name: string): Promise<Uint8Array | null> {
+    try {
+      const handle = await (await this.accountAssetsDir()).getFileHandle(name);
+      return new Uint8Array(await (await handle.getFile()).arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
+
   async writeTypefaceInventory(json: string, csv: string): Promise<void> {
     await this.writeMetaPair('typefaces-inventory', json, csv);
   }
