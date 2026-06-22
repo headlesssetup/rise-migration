@@ -560,9 +560,12 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
     (`POST /manage/api/folders {name, parentFolderId, permissions:[owner]}`) so a
     folder is born owned — never owner-less. (Sharing with OTHER team members
     stays a manual step.)
-- **Delete (cleanup):** `DELETE /manage/api/folders/{id}` removes a folder;
-  `DELETE /manage/api/content/{id}` removes a course. Used by the purge action to
-  undo what the tool created (e.g. owner-less folders from a bad earlier run).
+- **Delete (cleanup):**
+  - Course: **`POST /manage/api/content/soft-delete {ids:[…]}`** (captured; 200
+    echoes `{ids}`) — a **batch** soft-delete that moves courses to the bin; empty
+    the bin to remove permanently. ⚠ There is **no `DELETE /content/{id}`** (405).
+  - Folder: `DELETE /manage/api/folders/{id}` (conventional; not yet capture-
+    confirmed). Used by the purge action to undo owner-less folders from a bad run.
   - There are **two roots** (both `isRoot:true`): a **shared** root and a
     **private** root. A top-level folder's `parentFolderId` is the matching root
     id; nested folders use their parent's id.

@@ -32,7 +32,7 @@ import {
   ownerPermissions,
   createFolder,
   deleteFolder,
-  deleteCourse,
+  softDeleteCourses,
   fetchFolders,
   moveCourseToFolder,
   type PlanInput,
@@ -314,6 +314,10 @@ export async function runImport(
       pace: () => pacedDelay(pacing),
       log: (m) => onEvent({ kind: 'log', message: m }),
     });
+
+    // Record the created course id (append-only) so a later Purge can clean up
+    // this shell even if a retry overwrites the per-course joblog. Live only.
+    if (!opts.dryRun && res.newCourseId) await recordCreatedCourse(storage, res.newCourseId);
 
     // Place the new course into its mapped folder (the course was created at
     // root; folders are recreated account-level above). Best-effort + paced.
@@ -622,6 +626,28 @@ async function writeAccountIdMap(
       2,
     ),
   );
+}
+
+/** Append-only ledger of EVERY target course id this tool created — across all
+ *  runs and RETRIES (a per-source joblog only keeps the latest attempt, so a
+ *  retried course leaves orphan shells the joblog forgets). Purge reads this to
+ *  clean up all of them. `_import/created-courses.json` = string[]. */
+async function recordCreatedCourse(storage: Storage, newCourseId: string): Promise<void> {
+  const ids = await readCreatedCourses(storage);
+  if (ids.includes(newCourseId)) return;
+  ids.push(newCourseId);
+  await storage.writeImportArtifact('created-courses.json', JSON.stringify(ids, null, 2));
+}
+
+async function readCreatedCourses(storage: Storage): Promise<string[]> {
+  const raw = await storage.readImportArtifact('created-courses.json');
+  if (!raw) return [];
+  try {
+    const a = JSON.parse(raw) as unknown;
+    return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 async function readAccountIdMap(storage: Storage): Promise<AccountIdMap> {
@@ -1048,6 +1074,8 @@ async function importedCourseTargetIds(storage: Storage): Promise<string[]> {
       /* tolerate */
     }
   }
+  // Union the append-only ledger so RETRIED courses' orphan shells are caught.
+  out.push(...(await readCreatedCourses(storage)));
   return [...new Set(out)];
 }
 
@@ -1091,24 +1119,23 @@ export async function purgeImported(
   const out: PurgeOutcome = { foldersDeleted: 0, foldersFailed: 0, coursesDeleted: 0, coursesFailed: 0 };
 
   // 1) Courses we created (half-imported shells litter the content list).
+  //    soft-delete is a BATCH endpoint → one call moves them all to the bin.
   const courseIds = await importedCourseTargetIds(storage);
   if (courseIds.length) {
-    onEvent({ kind: 'log', message: `Purge: ${courseIds.length} imported course(s)…` });
-  }
-  for (const id of courseIds) {
+    onEvent({ kind: 'log', message: `Purge: soft-deleting ${courseIds.length} imported course(s)…` });
     if (opts.dryRun) {
-      onEvent({ kind: 'log', message: `DRY  delete course ${id}` });
-      out.coursesDeleted += 1;
-      continue;
-    }
-    await pacedDelay(pacing);
-    const r = await relayThroughTab(deleteCourse(id));
-    if (r.ok || r.status === 404) {
-      out.coursesDeleted += 1;
-      onEvent({ kind: 'log', message: `OK   deleted course ${id}` });
+      for (const id of courseIds) onEvent({ kind: 'log', message: `DRY  soft-delete course ${id}` });
+      out.coursesDeleted = courseIds.length;
     } else {
-      out.coursesFailed += 1;
-      onEvent({ kind: 'log', message: `WARN delete course ${id} failed (HTTP ${r.status})` });
+      await pacedDelay(pacing);
+      const r = await relayThroughTab(softDeleteCourses(courseIds));
+      if (r.ok) {
+        out.coursesDeleted = courseIds.length;
+        onEvent({ kind: 'log', message: `OK   soft-deleted ${courseIds.length} course(s) → bin (empty the bin to remove permanently)` });
+      } else {
+        out.coursesFailed = courseIds.length;
+        onEvent({ kind: 'log', message: `WARN soft-delete failed (HTTP ${r.status}) — ${r.text?.slice(0, 200) ?? ''}` });
+      }
     }
   }
 

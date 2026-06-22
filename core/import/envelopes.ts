@@ -365,13 +365,17 @@ export function deleteFolder(folderId: string): WriteSpec {
   };
 }
 
-/** DELETE /manage/api/content/{id} — remove a course we created (cleanup of a
- *  half-imported course shell). */
-export function deleteCourse(courseId: string): WriteSpec {
+/** POST /manage/api/content/soft-delete {ids:[…]} — move courses to the bin
+ *  (captured; 200 echoes {ids}). A BATCH endpoint — pass all ids at once. There
+ *  is NO `DELETE /content/{id}` (it 405s). Empty the bin to remove permanently.
+ *  Used by the cleanup/purge action to undo half-imported course shells. */
+export function softDeleteCourses(ids: string[]): WriteSpec {
   return {
-    url: `/manage/api/content/${encodeURIComponent(courseId)}`,
-    method: 'DELETE',
-    label: 'DELETE /manage/api/content/{id}',
+    url: '/manage/api/content/soft-delete',
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+    contentType: 'application/json',
+    label: 'POST /manage/api/content/soft-delete',
   };
 }
 
