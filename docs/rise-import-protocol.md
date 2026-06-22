@@ -85,7 +85,7 @@ for bank in banks referenced by draw-from-bank blocks (deduped by id):       # �
 # ---- per course ----
 newCourseId = POST /manage/api/content {createBookmark:false, folderId:mapped}  # ref §4.1 -> {id}
 UPDATE_COURSE_FIELD {id, field:"title", value}       # title FIRST — materializes the draft (see ⚠ below)
-UPDATE_COURSE {id:newCourseId, theme}                # theme round-trips verbatim (§7)
+# (theme comes AFTER the lessons — see ⚠ ordering rule 0b)
 
 for lesson in source.lessons (ASC position):
     {lessonId} = CREATE_LESSON {author, courseId:newCourseId, position, title, type:null}  # §2
@@ -119,6 +119,8 @@ for lesson in source.lessons (ASC position):
             … only if target reaches the same Review 360 item; else SKIP + flag
 
     DEL_LOCK {id:lessonId, courseId}                   # release the lesson lock
+
+UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a lesson (§7, rule 0b)
 ```
 
 > **Ordering rules that matter (from the capture):**
@@ -129,6 +131,11 @@ for lesson in source.lessons (ASC position):
 >    — `GET_COURSE` 404s on it, yet it still **500s `content/search`** and can't be
 >    soft-deleted (500). So write the **title first** (a cheap `UPDATE_COURSE_FIELD`)
 >    so a later failure leaves a real, deletable course, never a phantom.
+> 0b. ⚠ **Theme AFTER a lesson exists.** Rise rejects theming a lesson-less course
+>    ("add a lesson to your course before theming"). The original capture themed an
+>    *existing* (already-populated) course, so it shows theme-before-lessons — but
+>    for a NEW course the `UPDATE_COURSE {theme}` must come **after** at least one
+>    `CREATE_LESSON`. We apply it once, course-level, after the lessons loop.
 > 1. **Lesson exists → blocks → media.** A media block is first created with its
 >    *default/placeholder* media (or empty), THEN the real asset is uploaded and the
 >    block is patched via `UPDATE_BLOCK_DEBOUNCE`. You cannot upload to a course/lesson

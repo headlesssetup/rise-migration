@@ -265,23 +265,17 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     summary: `Create course "${title}"`,
   });
   // Set the title FIRST — the bare POST /content shell is a draft that only
-  // MATERIALIZES on its first content write; doing it before the theme/font step
-  // (which can fail, e.g. a font upload 403) means a failed import leaves a real,
-  // deletable course rather than a "never-born" phantom that 404s on GET_COURSE
-  // yet 500s the dashboard's content list.
+  // MATERIALIZES on its first content write; doing it before the heavier steps
+  // (which can fail) means a failed import leaves a real, deletable course rather
+  // than a "never-born" phantom that 404s on GET_COURSE yet 500s the dashboard.
   steps.push({
     kind: 'set-title',
     sourceCourseId,
     title,
     summary: `Set course title "${title}"`,
   });
-  if (course.theme && typeof course.theme === 'object') {
-    steps.push({
-      kind: 'set-theme',
-      sourceCourseId,
-      summary: 'Apply course theme (verbatim round-trip)',
-    });
-  }
+  // NOTE: the theme is applied AFTER the lessons (below) — Rise rejects theming a
+  // course that has no lesson yet ("add a lesson before theming").
 
   // 3. Lessons in ascending position; blocks chained by previousBlockId.
   const ordered = [...lessons].sort(
@@ -425,6 +419,16 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Unlock lesson "${lTitle}"`,
     });
   });
+
+  // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
+  // ("add a lesson to your course before theming"). Applied once, course-level.
+  if (course.theme && typeof course.theme === 'object') {
+    steps.push({
+      kind: 'set-theme',
+      sourceCourseId,
+      summary: 'Apply course theme + typefaces (verbatim round-trip)',
+    });
+  }
 
   // Course cover / card images (user-uploaded) — upload + set via UPDATE_COURSE.
   // Mark their keys handled so the flagger below skips them.

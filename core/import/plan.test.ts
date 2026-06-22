@@ -42,12 +42,13 @@ describe('buildPlan ordering', () => {
       }),
     );
     const kinds = steps.map((s) => s.kind);
-    expect(kinds.slice(0, 5)).toEqual([
+    // banks → course → title (materialize) → lessons → theme (theme is LAST of
+    // the course-level writes: Rise rejects theming a lesson-less course).
+    expect(kinds.slice(0, 4)).toEqual([
       'create-bank',
       'put-bank',
       'create-course',
       'set-title',
-      'set-theme',
     ]);
     // lesson lifecycle present
     expect(kinds).toContain('create-lesson');
@@ -59,6 +60,8 @@ describe('buildPlan ordering', () => {
     expect(kinds.indexOf('bind-draw-from-bank')).toBeGreaterThan(
       kinds.indexOf('create-blocks'),
     );
+    // theme is applied only AFTER at least one lesson exists
+    expect(kinds.indexOf('set-theme')).toBeGreaterThan(kinds.indexOf('create-lesson'));
   });
 
   it('by DEFAULT leaves draw-from-bank as an unbound placeholder (no bank created)', () => {
