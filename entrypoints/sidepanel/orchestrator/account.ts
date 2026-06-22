@@ -56,12 +56,14 @@ async function fetchRaw(
   req: BackgroundRequest,
   label: string,
   onEvent: (e: ProgressEvent) => void,
+  /** Map a failure to a custom log line (e.g. a known, non-error limitation). */
+  onFailNote?: (err: string) => string,
 ): Promise<{ raw: string; doc: unknown } | null> {
   const resp = await rpc(req);
   if (resp.type !== 'RAW_RESULT' || !resp.result.ok) {
     const err =
       resp.type === 'RAW_RESULT' && !resp.result.ok ? resp.result.error : 'unexpected response';
-    onEvent({ kind: 'log', message: `${label} unavailable: ${err}` });
+    onEvent({ kind: 'log', message: onFailNote ? onFailNote(err ?? '') : `${label} unavailable: ${err}` });
     return null;
   }
   return resp.result.data;
@@ -134,8 +136,20 @@ export async function fetchAccountExtras(
     }
   }
 
-  // 3) Review-360 items (flag Mighty).
-  const ri = await fetchRaw({ type: 'REVIEW_ITEMS' }, 'Review items', onEvent);
+  // 3) Review-360 items (flag Mighty). The Review API is a SEPARATE origin
+  // (api[.eu].articulate.com) that doesn't allow cross-origin fetch from the
+  // extension, so this expectedly fails "TypeError: Failed to fetch" — that's a
+  // known, parked limitation (Storyline/Mighty are flagged + handled separately),
+  // NOT an error. Surface it as such; real failures still log normally.
+  const ri = await fetchRaw(
+    { type: 'REVIEW_ITEMS' },
+    'Review items',
+    onEvent,
+    (err) =>
+      /failed to fetch/i.test(err)
+        ? 'Review items skipped — the Review 360 API is cross-origin and not reachable from the extension yet (Storyline/Mighty are flagged separately). Not an error.'
+        : `Review items unavailable: ${err}`,
+  );
   if (ri) {
     await storage.writeReviewItems(ri.raw);
     const rows = buildReviewItemsInventory(extractReviewItems(ri.doc));
