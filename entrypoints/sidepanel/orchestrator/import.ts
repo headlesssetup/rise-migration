@@ -1120,32 +1120,34 @@ export async function purgeImported(
   const out: PurgeOutcome = { foldersDeleted: 0, foldersFailed: 0, coursesDeleted: 0, coursesFailed: 0 };
 
   // 1) Courses we created (half-imported shells litter the content list).
-  //    soft-delete is a BATCH endpoint → one call moves them all to the bin.
+  //    Delete ONE id per call (matches the UI; a batch 500s if any single id is
+  //    bad). Two-step per course: soft-delete → bin, then hard-delete → gone.
   const courseIds = await importedCourseTargetIds(storage);
   if (courseIds.length) {
-    onEvent({ kind: 'log', message: `Purge: soft-deleting ${courseIds.length} imported course(s)…` });
+    onEvent({ kind: 'log', message: `Purge: deleting ${courseIds.length} imported course(s)…` });
+  }
+  for (const id of courseIds) {
     if (opts.dryRun) {
-      for (const id of courseIds) onEvent({ kind: 'log', message: `DRY  soft+hard delete course ${id}` });
-      out.coursesDeleted = courseIds.length;
-    } else {
-      // Two-step: soft-delete → bin, then hard-delete → permanently gone.
-      await pacedDelay(pacing);
-      const sr = await relayThroughTab(softDeleteCourses(courseIds));
-      if (!sr.ok) {
-        out.coursesFailed = courseIds.length;
-        onEvent({ kind: 'log', message: `WARN soft-delete failed (HTTP ${sr.status}) — ${sr.text?.slice(0, 200) ?? ''}` });
-      } else {
-        await pacedDelay(pacing);
-        const hr = await relayThroughTab(hardDeleteCourses(courseIds));
-        out.coursesDeleted = courseIds.length;
-        onEvent({
-          kind: 'log',
-          message: hr.ok
-            ? `OK   deleted ${courseIds.length} course(s) (soft + hard)`
-            : `OK   moved ${courseIds.length} course(s) to bin — empty it manually (hard-delete HTTP ${hr.status})`,
-        });
-      }
+      onEvent({ kind: 'log', message: `DRY  soft+hard delete course ${id}` });
+      out.coursesDeleted += 1;
+      continue;
     }
+    await pacedDelay(pacing);
+    const sr = await relayThroughTab(softDeleteCourses([id]));
+    if (!sr.ok) {
+      out.coursesFailed += 1;
+      onEvent({ kind: 'log', message: `WARN soft-delete ${id} failed (HTTP ${sr.status}) — ${sr.text?.slice(0, 150) ?? ''}` });
+      continue;
+    }
+    await pacedDelay(pacing);
+    const hr = await relayThroughTab(hardDeleteCourses([id]));
+    out.coursesDeleted += 1;
+    onEvent({
+      kind: 'log',
+      message: hr.ok
+        ? `OK   deleted course ${id} (soft + hard)`
+        : `OK   course ${id} → bin; empty manually (hard-delete HTTP ${hr.status})`,
+    });
   }
 
   // 2) Folders we created, child-first (the owner-less ones break the dashboard).
