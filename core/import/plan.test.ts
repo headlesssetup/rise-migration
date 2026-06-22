@@ -154,6 +154,27 @@ describe('buildPlan ordering', () => {
     expect(lessonSteps.map((s) => (s as { position: number }).position)).toEqual([0, 1, 2]);
   });
 
+  it('orders lessons by the course.lessons id list (NOT array order or position)', () => {
+    const steps = buildPlan(
+      input({
+        course: {
+          // Authoritative display order: B, A, C.
+          course: { id: 'SRC', title: 'C', lessons: ['B', 'A', 'C'] },
+          // Objects array + position deliberately disagree.
+          lessons: [
+            { id: 'A', position: 0, type: 'blocks', title: 'Alpha', items: [] },
+            { id: 'B', position: 1, type: 'blocks', title: 'Bravo', items: [] },
+            { id: 'C', position: 2, type: 'blocks', title: 'Charlie', items: [] },
+          ],
+        },
+      }),
+    );
+    const titles = steps
+      .filter((s) => s.kind === 'create-lesson')
+      .map((s) => (s as { title: string }).title);
+    expect(titles).toEqual(['Bravo', 'Alpha', 'Charlie']);
+  });
+
   it('re-indexes gappy/non-0-based source positions to sequential slots', () => {
     const steps = buildPlan(
       input({

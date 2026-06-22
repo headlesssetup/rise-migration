@@ -154,6 +154,40 @@ function lessonTitle(l: Lesson): string {
   return typeof l.title === 'string' ? l.title : (l.id ?? 'untitled');
 }
 
+/** Order the lesson OBJECTS by the course's authoritative ordered lesson-id list
+ *  (`course.lessons` — a list of ids, or objects with `id`). Falls back to the
+ *  objects' own array order when no usable id list is present. Any object missing
+ *  from the id list is appended (never dropped). */
+export function orderLessons(objs: Lesson[], orderField: unknown): Lesson[] {
+  const ids = Array.isArray(orderField)
+    ? orderField
+        .map((x) =>
+          typeof x === 'string'
+            ? x
+            : x && typeof x === 'object'
+              ? String((x as { id?: unknown }).id ?? '')
+              : '',
+        )
+        .filter(Boolean)
+    : [];
+  if (ids.length === 0) return objs;
+  const byId = new Map(objs.map((l) => [typeof l.id === 'string' ? l.id : '', l]));
+  const seen = new Set<string>();
+  const out: Lesson[] = [];
+  for (const id of ids) {
+    const l = byId.get(id);
+    if (l && !seen.has(id)) {
+      seen.add(id);
+      out.push(l);
+    }
+  }
+  for (const l of objs) {
+    const id = typeof l.id === 'string' ? l.id : '';
+    if (!seen.has(id)) out.push(l);
+  }
+  return out;
+}
+
 function fileBasename(key: string): string {
   return key.split('/').pop() || 'asset';
 }
@@ -218,7 +252,13 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   const course = input.course.course ?? {};
   const sourceCourseId = typeof course.id === 'string' ? course.id : 'course';
   const title = typeof course.title === 'string' ? course.title : sourceCourseId;
-  const lessons = Array.isArray(input.course.lessons) ? input.course.lessons : [];
+  // Display order comes from the course's authoritative ordered lesson-id list
+  // (`course.lessons`, protocol §2) — NOT the top-level lesson-objects array order
+  // and NOT the `position` field (both were observed to scramble a real course).
+  const lessons = orderLessons(
+    Array.isArray(input.course.lessons) ? input.course.lessons : [],
+    (course as Record<string, unknown>).lessons,
+  );
 
   const assetByKey = new Map(input.assets.map((a) => [a.key, a]));
   // Keys attached to a recreatable block (uploaded or orphan-flagged). Anything
