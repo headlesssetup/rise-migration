@@ -23,6 +23,12 @@ export default defineConfig({
       'https://*.articulate.com/*',
       'https://articulateusercontent.com/*',
       'https://articulateusercontent.eu/*',
+      // S3 upload buckets (presigned PUT). Listing them here exempts the side
+      // panel's direct upload fetch from CORS, so large assets PUT straight from
+      // the panel (raw bytes) instead of riding a 64MB chrome.runtime message via
+      // the background/tab. Covers global (`bucket.s3.amazonaws.com`) and regional
+      // (`bucket.s3.<region>.amazonaws.com`) S3 endpoints, US + EU planes.
+      'https://*.amazonaws.com/*',
     ],
     // Clicking the toolbar icon opens the side panel.
     action: {},

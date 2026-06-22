@@ -180,6 +180,16 @@ preview, and gated live import.
   flags now each log a `[i/N] ⚠ FLAG …` line, so the step counter is contiguous
   (no more silent gaps).
 
+**Large assets — 64MB cap lifted (large-assets branch):**
+- The S3 upload PUT now goes **direct from the side panel** (raw bytes), instead of
+  base64 riding two `chrome.runtime` message hops (panel→background→tab) that capped
+  at ~64MB. The S3 buckets are in `host_permissions` (`*.amazonaws.com`), which
+  exempts the panel fetch from CORS. The ceiling is now memory (`MAX_UPLOAD_BASE64`,
+  ~262MB raw) rather than messaging — so the 184MB GIFs that previously flagged now
+  migrate. ⚠ **Needs live verification:** confirm the panel→S3 PUT succeeds with
+  host_permissions (no CORS block) on both US and EU planes, and that very large
+  files don't OOM the panel.
+
 **TODO (open):**
 - ⏳ **Confirm video thumbnails/posters round-trip.** A multimedia/video block's
   `poster`/`thumbnail` are `images[.eu].articulate.com` transform URLs wrapping a

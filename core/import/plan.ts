@@ -22,17 +22,20 @@ export interface AssetEntry {
   orphaned?: boolean;
 }
 
-/** chrome.runtime messages cap at 64MiB; an asset's base64 body rides one, so we
- *  guard a bit under. Shared by the PLANNER (predict overflow from the manifest
- *  size, so dry-run previews the manual flag) and the EXECUTOR (runtime backstop on
- *  the actual base64 length, for assets whose size the manifest didn't record). */
-export const MAX_RELAY_BASE64 = 60 * 1024 * 1024;
+/** Upload size ceiling (as base64 length). The S3 PUT now goes DIRECT from the
+ *  side panel (host_permissions exempt it from CORS), so the bytes no longer cross
+ *  a 64MiB chrome.runtime message — the ceiling is memory (the base64 round-trip),
+ *  not messaging. Set generously so large media (e.g. animated GIFs) migrate, while
+ *  still flagging pathologically huge assets to avoid an out-of-memory crash.
+ *  Shared by the PLANNER (predict overflow from the manifest size → dry-run flag)
+ *  and the EXECUTOR (runtime backstop on the actual base64 length). */
+export const MAX_UPLOAD_BASE64 = 350 * 1024 * 1024; // ≈ 262MB of raw bytes
 
-/** Predict whether raw bytes of `size` exceed the relay cap once base64-encoded
+/** Predict whether raw bytes of `size` exceed the upload ceiling once base64-encoded
  *  (base64 inflates ~4/3). Unknown/zero size → not predicted (executor backstops). */
-export function exceedsRelayCap(size: number | undefined): boolean {
+export function exceedsUploadLimit(size: number | undefined): boolean {
   if (typeof size !== 'number' || size <= 0) return false;
-  return Math.ceil(size / 3) * 4 > MAX_RELAY_BASE64;
+  return Math.ceil(size / 3) * 4 > MAX_UPLOAD_BASE64;
 }
 
 /** ~MB for an oversize flag message. */
@@ -388,12 +391,12 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         });
         continue;
       }
-      if (exceedsRelayCap(entry?.size)) {
+      if (exceedsUploadLimit(entry?.size)) {
         steps.push({
           kind: 'flag-unsupported-media',
           sourceKey: ak.key,
           location: `lesson "${lTitle}" header/media`,
-          summary: `⚠ Lesson media ~${approxMb(entry!.size!)}MB exceeds the 64MB extension limit — attach manually: ${ak.key}`,
+          summary: `⚠ Lesson media ~${approxMb(entry!.size!)}MB too large to upload via the extension — attach manually: ${ak.key}`,
         });
         continue;
       }
@@ -499,12 +502,12 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         // Predict the 64MB relay-cap overflow from the manifest size — so a dry-run
         // flags it too. Oversize keys aren't uploaded; the executor blanks them
         // (keyMap → '') so no dead source key survives on the block.
-        if (exceedsRelayCap(entry?.size)) {
+        if (exceedsUploadLimit(entry?.size)) {
           steps.push({
             kind: 'flag-unsupported-media',
             sourceKey: ak.key,
             location: `block ${sourceBlockId}`,
-            summary: `⚠ Media ~${approxMb(entry!.size!)}MB exceeds the 64MB extension limit — attach manually: ${ak.key}`,
+            summary: `⚠ Media ~${approxMb(entry!.size!)}MB too large to upload via the extension — attach manually: ${ak.key}`,
           });
           continue;
         }

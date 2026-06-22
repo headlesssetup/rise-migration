@@ -19,7 +19,7 @@ import {
 } from './remap';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
-import { findBankRef, MAX_RELAY_BASE64, type PlanStep, type PlanInput, type SourceBank } from './plan';
+import { findBankRef, MAX_UPLOAD_BASE64, type PlanStep, type PlanInput, type SourceBank } from './plan';
 import {
   targetByName,
   usedTypefaceIds,
@@ -43,9 +43,10 @@ export interface AssetBytes {
   contentType: string;
 }
 
-// MAX_RELAY_BASE64 (the 64MiB chrome.runtime message cap, guarded a bit under) is
-// defined in ./plan and shared: the planner predicts overflow from the manifest
-// size; this executor backstops it on the actual base64 length (unknown-size assets).
+// MAX_UPLOAD_BASE64 (the upload size ceiling) is defined in ./plan and shared: the
+// planner predicts overflow from the manifest size; this executor backstops it on
+// the actual base64 length (unknown-size assets). The S3 PUT goes direct from the
+// panel (no 64MB message hop), so the ceiling is memory, not messaging.
 
 export interface ExecutorDeps {
   input: PlanInput;
@@ -272,13 +273,13 @@ export async function executePlan(
     if (!dryRun) {
       bytes = await deps.readAsset(sourceKey);
       if (!bytes) throw new WriteError(`Missing archived bytes for ${sourceKey}`, stepKind);
-      if (bytes.base64.length > MAX_RELAY_BASE64) {
-        const mb = Math.round(bytes.base64.length / (1024 * 1024));
-        log(`${pfx()} WARN ${sourceKey} too large to upload via the extension (~${mb}MB > 64MB message limit) — flagged, attach manually`);
+      if (bytes.base64.length > MAX_UPLOAD_BASE64) {
+        const mb = Math.round((bytes.base64.length * 0.75) / (1024 * 1024));
+        log(`${pfx()} WARN ${sourceKey} too large to upload via the extension (~${mb}MB) — flagged, attach manually`);
         result.flags.push({
           kind: 'unsupported-media',
           sourceKey,
-          detail: `Asset ~${mb}MB exceeds the 64MB extension message limit — upload it manually in Rise`,
+          detail: `Asset ~${mb}MB is too large to upload via the extension — upload it manually in Rise`,
         });
         keyMap.set(sourceKey, ''); // blank → no dead source key survives
         return;

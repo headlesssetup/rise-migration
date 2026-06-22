@@ -404,7 +404,7 @@ describe('buildPlan — lesson header media', () => {
     const key = 'rise/courses/SRC/huge.gif';
     const steps = buildPlan(
       input({
-        assets: [{ key, kind: 'media-image', file: 'assets/g.gif', ext: 'gif', size: 200 * 1024 * 1024 }],
+        assets: [{ key, kind: 'media-image', file: 'assets/g.gif', ext: 'gif', size: 400 * 1024 * 1024 }],
         course: {
           course: { id: 'SRC', title: 'C' },
           lessons: [
@@ -425,7 +425,7 @@ describe('buildPlan — oversize block media prediction (dry-run honest)', () =>
     const key = 'rise/courses/SRC/big.gif';
     const steps = buildPlan(
       input({
-        assets: [{ key, kind: 'media-image', file: 'assets/b.gif', ext: 'gif', size: 184 * 1024 * 1024 }],
+        assets: [{ key, kind: 'media-image', file: 'assets/b.gif', ext: 'gif', size: 400 * 1024 * 1024 }],
         course: {
           course: { id: 'SRC', title: 'C' },
           lessons: [

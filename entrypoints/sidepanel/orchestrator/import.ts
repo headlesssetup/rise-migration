@@ -40,6 +40,8 @@ import {
   type FidelityReport,
   type ParityReport,
   type Relay,
+  type RelayResponse,
+  type WriteSpec,
   type Typeface,
 } from '@/core/import';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
@@ -76,8 +78,43 @@ async function refreshToken(
   }
 }
 
-/** The Relay the executor uses: one RELAY_WRITE round-trip to the background. */
+/** Decode a base64 body to a Blob (a valid fetch BodyInit) for the S3 PUT. */
+function base64ToBlob(b64: string, type: string): Blob {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
+/**
+ * S3 upload PUT (presigned, noAuth) — executed DIRECT from the side panel so the
+ * bytes don't cross the 64MB chrome.runtime message hops (panel→background→tab).
+ * host_permissions for the S3 buckets exempt this cross-origin fetch from CORS;
+ * the presigned URL carries its own signature, so no cookies/bearer. Lifts the old
+ * 64MB cap — the only ceiling is now memory (see MAX_UPLOAD_BASE64).
+ */
+async function panelS3Put(spec: WriteSpec): Promise<RelayResponse> {
+  try {
+    const body = base64ToBlob(spec.base64Body ?? '', spec.contentType || 'application/octet-stream');
+    const res = await fetch(spec.url, {
+      method: 'PUT',
+      headers: spec.contentType ? { 'Content-Type': spec.contentType } : {},
+      body,
+      credentials: 'omit',
+    });
+    return { ok: res.ok, status: res.status, text: await res.text() };
+  } catch (e) {
+    return { ok: false, status: 0, text: '', error: String(e) };
+  }
+}
+
+/** The Relay the executor uses. S3 upload PUTs go direct from the panel (no 64MB
+ *  message cap); everything else rides one RELAY_WRITE round-trip to the background
+ *  (which needs the bearer + first-party cookies in the Rise tab). */
 const relayThroughTab: Relay = async (spec) => {
+  if (spec.method === 'PUT' && spec.noAuth && spec.base64Body !== undefined) {
+    return panelS3Put(spec);
+  }
   const resp = await rpc({ type: 'RELAY_WRITE', spec });
   if (resp.type !== 'WRITE_RESULT') {
     return { ok: false, status: 0, text: '', error: 'unexpected background response' };
