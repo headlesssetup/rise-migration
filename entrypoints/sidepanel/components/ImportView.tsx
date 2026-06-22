@@ -20,7 +20,6 @@ import {
   importAccountSettings,
   importBanks,
   listLocalBanks,
-  purgeImported,
   readArchiveInfo,
   readSourceIdentity,
   runImport,
@@ -235,22 +234,6 @@ function AccountSettingsSection({
     [storage, target, override, onEvent, setRunning],
   );
 
-  const purge = useCallback(
-    async (dryRun: boolean) => {
-      if (!storage) return;
-      if (!dryRun && !window.confirm('Delete every folder and course this tool created on the target account? This cannot be undone.')) {
-        return;
-      }
-      setRunning(true);
-      try {
-        await purgeImported(storage, { dryRun }, onEvent);
-      } finally {
-        setRunning(false);
-      }
-    },
-    [storage, onEvent, setRunning],
-  );
-
   return (
     <div style={STEP_STYLE}>
       <h3 style={{ marginTop: 0 }}>A · Account settings</h3>
@@ -285,22 +268,6 @@ function AccountSettingsSection({
           {summary.fonts.created} created, {summary.fonts.unresolved} unresolved.
         </p>
       )}
-      <p className="hint" style={{ marginTop: 8 }}>
-        Cleanup — delete the folders + courses this tool created on the target
-        (recovers an account broken by a bad import).
-      </p>
-      <div className="row">
-        <button onClick={() => purge(true)} disabled={!storage || running}>
-          {running ? 'Working…' : 'Dry-run purge'}
-        </button>
-        <button
-          onClick={() => purge(false)}
-          disabled={!liveOk}
-          style={liveOk ? { background: '#b00', color: '#fff' } : undefined}
-        >
-          Purge imported items
-        </button>
-      </div>
     </div>
   );
 }

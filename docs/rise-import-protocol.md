@@ -103,15 +103,13 @@ for lesson in source.lessons (ASC position):
                 drawCount, mode, pendingItemId, questionBankId:newBankId,
                 questionDrawType, questionList:[…new question ids…], courseId}
         if block carries uploaded media:               # §8 — do AFTER the block exists
-            for each media key on the block:
+            for each media key on the block (original, crushedKey, poster, caption):
                 {key,url,type} = GET_YURL {assetPath:"courses/"+newCourseId,
                                            courseId:newCourseId, filename}
                 PUT bytes -> url   (Content-Type:type, public-read in the presigned url)
-                if image: CRUSH_IMAGE {courseId, original:key} -> {key:crushedKey}
-                if a/v:   TRANSCODE_ASSET {courseId,key,lessonId,mediaType,original,
-                                           refs,uploadId} -> {jobId}
-                          UPDATE_COURSE {id:newCourseId, jobs:[jobId]}   # register job
-                          poll CHECK_STATUS {jobs:[jobId], courseId} until done
+                # NO CRUSH_IMAGE / NO TRANSCODE_ASSET — upload the EXACT exported
+                # bytes (Rise already crushed/transcoded at author time; every
+                # variant key is its own upload + remap). See §8.
                 UPDATE_BLOCK_DEBOUNCE {id:blockId, courseId, lessonId,
                                        item:<block with media.{image|video|audio}.key
                                              (and crushedKey) set to the NEW key>}   # §8
@@ -147,9 +145,15 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 >    call, but the capture creates them one-at-a-time; we mirror that (human-paced).
 > 3. **Banks before the blocks that draw from them** (a draw-from-bank block needs the
 >    new bank id). Folders before courses/banks (so `folderId` is the mapped target).
-> 4. **`UPDATE_COURSE {jobs:[…]}` registers transcode jobs on the course** — it's the
->    same envelope as the theme write, just a different payload field. Send it after
->    `TRANSCODE_ASSET` returns a `jobId`, then poll `CHECK_STATUS`.
+> 4. **Lessons in SOURCE ARRAY ORDER — NOT sorted by the `position` field.** The
+>    `GET_COURSE.lessons[]` array IS the display order; the `position` field does NOT
+>    track it (observed: sorting by `position` scrambled a real course). Create
+>    lessons in array order with a sequential 0-based slot (idx). The same applies to
+>    blocks (already in array order).
+> 5. **NO transcode / NO crush on import.** We upload the EXACT exported asset bytes
+>    (`GET_YURL`→S3 PUT) and remap keys — Rise already crushed/transcoded at author
+>    time, so re-processing only recompresses + drifts. `CRUSH_IMAGE`/`TRANSCODE_ASSET`/
+>    `CHECK_STATUS`/`RESOLVE_ASSET`/`UPDATE_COURSE{jobs}` are documented but unused.
 
 ---
 
@@ -166,10 +170,10 @@ identity / `locks` profile). `type` is sent **null** here and set on the follow-
 `UPDATE_LESSON`. Response returns `payload.course.lessons[]` (the full **ordered** id
 list, server-authoritative) and `payload.lesson.id` — the **server-assigned lessonId**
 (record it old→new). `position` is the 0-based slot; **send a re-indexed sequential
-slot `0,1,2,…` in display order — NOT the raw source `position`.** We create lessons
-in order, so slot == current length == an append; a gappy/non-0-based source position
-otherwise lets the server place lessons out of order (same class of bug as block
-ordering — fix by making each insert a deterministic append).
+slot `0,1,2,…` following the SOURCE ARRAY ORDER — NOT the source `position` field.**
+⚠ The `GET_COURSE.lessons[]` array IS the display order; the `position` field does NOT
+track it (a real course had `position` values that, when sorted, scrambled the import).
+Iterate lessons in array order and append (slot == current length).
 
 **`POST …/ducks/rise/lessons/UPDATE_LESSON`** sets the real lesson fields:
 ```jsonc

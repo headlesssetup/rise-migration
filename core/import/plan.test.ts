@@ -129,14 +129,17 @@ describe('buildPlan ordering', () => {
     expect(kinds).not.toContain('flag-draw-from-bank');
   });
 
-  it('orders lessons by ascending position', () => {
+  it('preserves SOURCE ARRAY ORDER (display order), ignoring the position field', () => {
     const steps = buildPlan(
       input({
         course: {
           course: { id: 'SRC', title: 'C' },
+          // Array order is the display order; the `position` field does NOT track
+          // it (here it's deliberately inverted) and must NOT reorder the output.
           lessons: [
-            { id: 'L2', position: 1, type: 'blocks', title: 'Second', items: [] },
-            { id: 'L1', position: 0, type: 'blocks', title: 'First', items: [] },
+            { id: 'A', position: 9, type: 'blocks', title: 'First', items: [] },
+            { id: 'B', position: 0, type: 'blocks', title: 'Second', items: [] },
+            { id: 'C', position: 4, type: 'blocks', title: 'Third', items: [] },
           ],
         },
       }),
@@ -145,10 +148,10 @@ describe('buildPlan ordering', () => {
     expect(lessonSteps.map((s) => (s as { title: string }).title)).toEqual([
       'First',
       'Second',
+      'Third',
     ]);
-    // Slots are re-indexed 0..n-1 in display order (an append each time), not the
-    // raw source position — so a non-0-based / gappy source can't reorder them.
-    expect(lessonSteps.map((s) => (s as { position: number }).position)).toEqual([0, 1]);
+    // Slots are re-indexed 0..n-1 in array order (an append each time).
+    expect(lessonSteps.map((s) => (s as { position: number }).position)).toEqual([0, 1, 2]);
   });
 
   it('re-indexes gappy/non-0-based source positions to sequential slots', () => {

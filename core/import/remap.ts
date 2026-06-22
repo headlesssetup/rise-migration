@@ -94,12 +94,15 @@ export function remapIds<T extends Json>(doc: T, ids: IdMap): T {
 /** Replace uploaded-media key strings with `""` (used for the CREATE_BLOCKS
  *  payload — the block is created with empty media, then patched with the real
  *  new key after re-upload, mirroring the capture's create-then-attach order).
- *  CDN URLs and embeds are kept verbatim (not uploaded). */
+ *  CDN URLs and embeds are kept verbatim (not uploaded). Storyline keys are
+ *  blanked too: Storyline/Mighty blocks are recreated as EMPTY placeholders (the
+ *  bundle is added out of band), and a dead source key must never survive in the
+ *  target (it would point at the source course + trip the no-survivors invariant). */
 export function blankUploadedMediaKeys<T extends Json>(doc: T): T {
   const transform = (node: Json): Json => {
     if (typeof node === 'string') {
       const kind = classifyString(node);
-      if (kind && kind.startsWith('media-') && kind !== 'media-storyline') {
+      if (kind && kind.startsWith('media-')) {
         return '';
       }
       return node;

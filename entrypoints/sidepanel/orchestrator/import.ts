@@ -31,9 +31,6 @@ import {
   orderForCreation,
   ownerPermissions,
   createFolder,
-  deleteFolder,
-  softDeleteCourses,
-  hardDeleteCourses,
   fetchFolders,
   moveCourseToFolder,
   type PlanInput,
@@ -318,10 +315,6 @@ export async function runImport(
       pace: () => pacedDelay(pacing),
       log: (m) => onEvent({ kind: 'log', message: m }),
     });
-
-    // Record the created course id (append-only) so a later Purge can clean up
-    // this shell even if a retry overwrites the per-course joblog. Live only.
-    if (!opts.dryRun && res.newCourseId) await recordCreatedCourse(storage, res.newCourseId);
 
     // Place the new course into its mapped folder (the course was created at
     // root; folders are recreated account-level above). Best-effort + paced.
@@ -635,28 +628,6 @@ async function writeAccountIdMap(
       2,
     ),
   );
-}
-
-/** Append-only ledger of EVERY target course id this tool created — across all
- *  runs and RETRIES (a per-source joblog only keeps the latest attempt, so a
- *  retried course leaves orphan shells the joblog forgets). Purge reads this to
- *  clean up all of them. `_import/created-courses.json` = string[]. */
-async function recordCreatedCourse(storage: Storage, newCourseId: string): Promise<void> {
-  const ids = await readCreatedCourses(storage);
-  if (ids.includes(newCourseId)) return;
-  ids.push(newCourseId);
-  await storage.writeImportArtifact('created-courses.json', JSON.stringify(ids, null, 2));
-}
-
-async function readCreatedCourses(storage: Storage): Promise<string[]> {
-  const raw = await storage.readImportArtifact('created-courses.json');
-  if (!raw) return [];
-  try {
-    const a = JSON.parse(raw) as unknown;
-    return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
 }
 
 async function readAccountIdMap(storage: Storage): Promise<AccountIdMap> {
@@ -1062,196 +1033,4 @@ export async function importBanks(
   // Persist the merged map (skip in dry-run so a preview never alters state).
   if (!opts.dryRun) await writeBankIdMap(storage, bound);
   return { outcomes };
-}
-
-// --- Cleanup: purge everything this tool created on the target ----------------
-
-export interface PurgeOutcome {
-  foldersDeleted: number;
-  foldersFailed: number;
-  coursesDeleted: number;
-  coursesFailed: number;
-}
-
-/** A target course this tool created, with provenance (which source course +
- *  title it came from), so the purge can show exactly what it will delete. */
-interface ImportedCourse {
-  targetId: string;
-  sourceId: string;
-  title?: string;
-  /** Where we learned the target id — a per-course job log, or the ledger. */
-  via: 'joblog' | 'ledger';
-}
-
-/** TARGET courses this tool created — read from each course's joblog id-map
- *  (`joblog[sourceCourseId]` = newCourseId, recorded at create time) plus the
- *  append-only ledger. Carries the source title for an auditable purge preview. */
-async function importedCourses(storage: Storage): Promise<ImportedCourse[]> {
-  const titleBySrc = new Map<string, string>();
-  let srcIds: string[] = [];
-  const manifestRaw = await storage.readManifest();
-  if (manifestRaw) {
-    try {
-      const m = JSON.parse(manifestRaw) as { courses?: { id?: string; title?: string }[] };
-      for (const c of m.courses ?? []) {
-        if (c.id) {
-          srcIds.push(c.id);
-          if (c.title) titleBySrc.set(c.id, c.title);
-        }
-      }
-    } catch {
-      /* fall through */
-    }
-  }
-  if (srcIds.length === 0) srcIds = await storage.listSaved();
-
-  const out: ImportedCourse[] = [];
-  const seen = new Set<string>();
-  for (const src of srcIds) {
-    const log = await storage.readImportArtifact(`${src}.joblog.json`);
-    if (!log) continue;
-    try {
-      const m = JSON.parse(log) as Record<string, string>;
-      const newId = m[src];
-      if (newId && newId !== src && !seen.has(newId)) {
-        seen.add(newId);
-        out.push({ targetId: newId, sourceId: src, title: titleBySrc.get(src), via: 'joblog' });
-      }
-    } catch {
-      /* tolerate */
-    }
-  }
-  // Append-only ledger catches RETRIED courses' orphan shells (no source link).
-  for (const t of await readCreatedCourses(storage)) {
-    if (!seen.has(t)) {
-      seen.add(t);
-      out.push({ targetId: t, sourceId: '(unknown)', via: 'ledger' });
-    }
-  }
-  return out;
-}
-
-/** TARGET folder ids this tool created, CHILD-FIRST (so a parent isn't deleted
- *  before its children). */
-async function importedFolderTargetIds(
-  storage: Storage,
-  folderMap: Map<string, string>,
-): Promise<string[]> {
-  let srcOrder = [...folderMap.keys()];
-  const raw = await storage.readFolders();
-  if (raw) {
-    // orderForCreation is parent-first; reverse → child-first for deletion.
-    srcOrder = orderForCreation(parseFolders(safeJson(raw))).map((f) => f.id).reverse();
-  }
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const s of srcOrder) {
-    const t = folderMap.get(s);
-    if (t && !seen.has(t)) {
-      seen.add(t);
-      out.push(t);
-    }
-  }
-  return out;
-}
-
-/**
- * Cleanup — delete everything this tool created on the TARGET (the courses from
- * the per-course job logs, then the folders from `account.idmap.json`,
- * child-first). Recovers an account broken by owner-less folders. Best-effort:
- * a 404 counts as already-gone. Clears the persisted folder map afterward so a
- * fresh import recreates folders correctly (owned).
- */
-export async function purgeImported(
-  storage: Storage,
-  opts: { dryRun: boolean; pacing?: PacingConfig },
-  onEvent: (e: ProgressEvent) => void,
-): Promise<PurgeOutcome> {
-  const pacing = opts.pacing ?? DEFAULT_PACING;
-  const out: PurgeOutcome = { foldersDeleted: 0, foldersFailed: 0, coursesDeleted: 0, coursesFailed: 0 };
-
-  // 1) Courses we created (half-imported shells litter the content list).
-  //    Delete ONE id per call (matches the UI; a batch 500s if any single id is
-  //    bad). Two-step per course: soft-delete → bin, then hard-delete → gone.
-  const courses = await importedCourses(storage);
-  if (courses.length) {
-    onEvent({ kind: 'log', message: `Purge: ${courses.length} imported course(s) (from job logs we wrote at create time):` });
-    // Provenance: show source course + title → target id, so it's auditable.
-    for (const c of courses) {
-      onEvent({
-        kind: 'log',
-        message: `  • ${c.title ?? c.sourceId} [src ${c.sourceId}] → target ${c.targetId} (${c.via})`,
-      });
-    }
-  }
-  for (const { targetId: id } of courses) {
-    if (opts.dryRun) {
-      onEvent({ kind: 'log', message: `DRY  soft+hard delete course ${id}` });
-      out.coursesDeleted += 1;
-      continue;
-    }
-    await pacedDelay(pacing);
-    const sr = await relayThroughTab(softDeleteCourses([id]));
-    if (sr.status === 404) {
-      out.coursesDeleted += 1;
-      onEvent({ kind: 'log', message: `OK   course ${id} already gone (404)` });
-      continue;
-    }
-    if (!sr.ok) {
-      // A "never-born"/ghost shell can't be binned (soft-delete 500s) — try a
-      // direct hard-delete; a 404 there means it's already gone.
-      await pacedDelay(pacing);
-      const hr = await relayThroughTab(hardDeleteCourses([id]));
-      if (hr.ok || hr.status === 404) {
-        out.coursesDeleted += 1;
-        onEvent({ kind: 'log', message: `OK   course ${id} removed (hard-delete HTTP ${hr.status}; soft had 500'd)` });
-      } else {
-        out.coursesFailed += 1;
-        onEvent({ kind: 'log', message: `WARN delete ${id} failed (soft HTTP ${sr.status}, hard HTTP ${hr.status})` });
-      }
-      continue;
-    }
-    await pacedDelay(pacing);
-    const hr = await relayThroughTab(hardDeleteCourses([id]));
-    out.coursesDeleted += 1;
-    onEvent({
-      kind: 'log',
-      message: hr.ok
-        ? `OK   deleted course ${id} (soft + hard)`
-        : `OK   course ${id} → bin; empty manually (hard-delete HTTP ${hr.status})`,
-    });
-  }
-
-  // 2) Folders we created, child-first (the owner-less ones break the dashboard).
-  const accountMap = await readAccountIdMap(storage);
-  const folderIds = await importedFolderTargetIds(storage, accountMap.folders);
-  if (folderIds.length) {
-    onEvent({ kind: 'log', message: `Purge: ${folderIds.length} imported folder(s)…` });
-  }
-  for (const id of folderIds) {
-    if (opts.dryRun) {
-      onEvent({ kind: 'log', message: `DRY  delete folder ${id}` });
-      out.foldersDeleted += 1;
-      continue;
-    }
-    await pacedDelay(pacing);
-    const r = await relayThroughTab(deleteFolder(id));
-    if (r.ok || r.status === 404) {
-      out.foldersDeleted += 1;
-      onEvent({ kind: 'log', message: `OK   deleted folder ${id}` });
-    } else {
-      out.foldersFailed += 1;
-      onEvent({ kind: 'log', message: `WARN delete folder ${id} failed (HTTP ${r.status})` });
-    }
-  }
-
-  // Clear the persisted folder map so a fresh import recreates folders (owned).
-  if (!opts.dryRun && out.foldersFailed === 0) {
-    await writeAccountIdMap(storage, new Map(), accountMap.typefaces);
-  }
-  onEvent({
-    kind: 'log',
-    message: `Purge ${opts.dryRun ? 'preview' : 'done'}: ${out.coursesDeleted} course(s), ${out.foldersDeleted} folder(s) deleted; ${out.coursesFailed + out.foldersFailed} failed.`,
-  });
-  return out;
 }

@@ -77,11 +77,6 @@ export function updateCourseFieldThrottle(
   });
 }
 
-/** UPDATE_COURSE {id, jobs} — register transcode job ids on the course (§8). */
-export function registerJobs(courseId: string, jobs: string[]): WriteSpec {
-  return ducks('courses', 'UPDATE_COURSE', { id: courseId, jobs });
-}
-
 /** UPDATE_COURSE with the top-level typeface ids (heading/body/ui) + theme. ✅
  *  Confirmed in the theming capture: changing fonts sends the typeface ids at
  *  the TOP LEVEL of the payload (authoritative), not only inside `theme`. Send
@@ -261,31 +256,10 @@ export function s3Put(args: {
   };
 }
 
-export function crushImage(courseId: string, original: string): WriteSpec {
-  return ducks('uploads', 'CRUSH_IMAGE', { courseId, original });
-}
-
-export function transcodeAsset(payload: {
-  courseId: string;
-  key: string; // URL-encoded
-  lessonId: string;
-  mediaType: 'audio' | 'video';
-  original: string;
-  refs: string;
-  uploadId: string;
-}): WriteSpec {
-  return ducks('uploads', 'TRANSCODE_ASSET', payload);
-}
-
-export function checkStatus(courseId: string, jobs: string[]): WriteSpec {
-  return ducks('uploads', 'CHECK_STATUS', { jobs, courseId });
-}
-
-/** RESOLVE_ASSET — resolve a transcoded key after CHECK_STATUS reports done.
- *  ⚠️ Payload shape not fully captured — confirm on a live a/v import. */
-export function resolveAsset(courseId: string, key: string): WriteSpec {
-  return ducks('uploads', 'RESOLVE_ASSET', { courseId, key });
-}
+// NOTE: CRUSH_IMAGE / TRANSCODE_ASSET / CHECK_STATUS / RESOLVE_ASSET are
+// intentionally NOT used — we upload the EXACT exported asset bytes (Rise already
+// crushed/transcoded them at author time; re-processing would recompress + drift).
+// The endpoints are documented in docs/rise-import-protocol.md §8 for reference.
 
 // --- Question banks (protocol §4a) ------------------------------------------
 
@@ -354,43 +328,10 @@ export function createFolder(args: {
   };
 }
 
-/** DELETE /manage/api/folders/{id} — remove a folder. Used by the cleanup/purge
- *  action to undo folders this tool created (e.g. owner-less folders that 500 the
- *  dashboard). Contents (if any) fall back to the parent/uncategorized. */
-export function deleteFolder(folderId: string): WriteSpec {
-  return {
-    url: `/manage/api/folders/${encodeURIComponent(folderId)}`,
-    method: 'DELETE',
-    label: 'DELETE /manage/api/folders/{id}',
-  };
-}
-
-/** POST /manage/api/content/soft-delete {ids:[…]} — move courses to the bin
- *  (captured; 200 echoes {ids}). A BATCH endpoint — pass all ids at once. There
- *  is NO `DELETE /content/{id}` (it 405s). Empty the bin to remove permanently.
- *  Used by the cleanup/purge action to undo half-imported course shells. */
-export function softDeleteCourses(ids: string[]): WriteSpec {
-  return {
-    url: '/manage/api/content/soft-delete',
-    method: 'POST',
-    body: JSON.stringify({ ids }),
-    contentType: 'application/json',
-    label: 'POST /manage/api/content/soft-delete',
-  };
-}
-
-/** POST /manage/api/content/hard-delete {ids:[…]} — permanently remove courses
- *  from the bin (captured; 200). Must be soft-deleted first. Batch. The purge
- *  chains soft-delete → hard-delete so a shell is fully gone (no manual empty). */
-export function hardDeleteCourses(ids: string[]): WriteSpec {
-  return {
-    url: '/manage/api/content/hard-delete',
-    method: 'POST',
-    body: JSON.stringify({ ids }),
-    contentType: 'application/json',
-    label: 'POST /manage/api/content/hard-delete',
-  };
-}
+// NOTE: deletion endpoints (course soft-delete/hard-delete, folder delete,
+// DELETE_TYPEFACE) are intentionally NOT implemented here — purge/cleanup is out
+// of scope for this app and will be a separate tool. The endpoints are documented
+// in docs/rise-import-protocol.md §10f for when that's built.
 
 /** PATCH /manage/api/content/{courseId}/move — move a course into a folder. The
  *  body is the folder id as a BARE text/plain string (confirmed in capture). */

@@ -303,13 +303,18 @@ export async function executePlan(
             const image = (img as { media?: { image?: Record<string, unknown> } })?.media?.image;
             const mainKey = typeof image?.key === 'string' ? image.key : '';
             if (!mainKey || !/^rise\/(?:courses|questionBanks)\//.test(mainKey)) return undefined;
-            const up = await uploadImageAsset(mainKey);
-            if (!up) return undefined;
-            const km = new Map<string, string>([[mainKey, up.key]]);
-            keyMap.set(mainKey, up.key);
-            if (typeof image?.crushedKey === 'string') {
-              km.set(image.crushedKey, up.crushedKey);
-              keyMap.set(image.crushedKey, up.crushedKey);
+            const newMain = await uploadImageAsset(mainKey);
+            if (!newMain) return undefined;
+            const km = new Map<string, string>([[mainKey, newMain]]);
+            keyMap.set(mainKey, newMain);
+            // Upload the crushed variant faithfully too (verbatim bytes) — no
+            // re-crush; the exported crushedKey IS the crushed image.
+            if (typeof image?.crushedKey === 'string' && /^rise\/(?:courses|questionBanks)\//.test(image.crushedKey)) {
+              const newCrushed = await uploadImageAsset(image.crushedKey);
+              if (newCrushed) {
+                km.set(image.crushedKey, newCrushed);
+                keyMap.set(image.crushedKey, newCrushed);
+              }
             }
             return remapMediaKeys(img, km);
           };
@@ -496,9 +501,13 @@ export async function executePlan(
           break;
         }
         case 'upload-asset': {
-          const newLessonId = ids.get(step.sourceLessonId)!;
-          const meta = blockMeta.get(step.sourceBlockId);
-          // 1) GET_YURL → presigned url + server key.
+          // Faithful upload: GET_YURL → S3 PUT of the EXACT exported bytes → map
+          // the source key. We do NOT crush images or transcode a/v — the source
+          // asset is the source of truth (Rise already crushed/transcoded it at
+          // author time; re-processing would recompress and drift). Every distinct
+          // source key (original, crushedKey, poster, caption .vtt) is its own
+          // upload step, so the per-key map covers them all and the patch step
+          // swaps each — guaranteeing no source key survives.
           const yurl = payloadOf(
             await send(env.getYurl({ courseId: newCourseId, filename: step.filename }), step.kind),
           );
@@ -508,7 +517,6 @@ export async function executePlan(
           if (!dryRun && (!newKey || !url)) {
             throw new WriteError('GET_YURL returned no key/url', step.kind, JSON.stringify(yurl));
           }
-          // 2) PUT bytes to S3 (skipped in dry-run).
           if (!dryRun) {
             const bytes = await deps.readAsset(step.sourceKey);
             if (!bytes) throw new WriteError(`Missing archived bytes for ${step.sourceKey}`, step.kind);
@@ -520,38 +528,7 @@ export async function executePlan(
           } else {
             result.envelopes.push({ step: step.kind, label: 'S3 PUT (upload bytes)' });
           }
-          // Map this source key → its new target key. Every distinct uploaded
-          // key on a block (including a separate `crushedKey`) is its own
-          // upload step, so a uniform per-key mapping covers them all and the
-          // patch step swaps each — guaranteeing no source key survives.
           keyMap.set(step.sourceKey, newKey);
-          // 3) Mirror the editor's post-processing for the main media: image →
-          // CRUSH (output not needed for mapping, the bytes already round-trip);
-          // a/v → TRANSCODE + register job + poll until done.
-          if (step.mediaKind === 'media-image') {
-            await send(env.crushImage(newCourseId, newKey), step.kind);
-          } else if (step.mediaKind === 'media-video' || step.mediaKind === 'media-audio') {
-            const refs = meta ? `items:${meta.newId}` : `items:${step.sourceBlockId}`;
-            const tr = payloadOf(
-              await send(
-                env.transcodeAsset({
-                  courseId: newCourseId,
-                  key: encodeURIComponent(newKey),
-                  lessonId: newLessonId,
-                  mediaType: step.mediaKind === 'media-video' ? 'video' : 'audio',
-                  original: step.filename,
-                  refs,
-                  uploadId: `${newLessonId}-${refs}`,
-                }),
-                step.kind,
-              ),
-            );
-            const jobId = dryRun ? `dry-job-${mint()}` : String(tr.jobId ?? '');
-            if (jobId) {
-              await send(env.registerJobs(newCourseId, [jobId]), step.kind);
-              await pollStatus(jobId, step.kind);
-            }
-          }
           break;
         }
         case 'patch-block-media': {
@@ -708,11 +685,10 @@ export async function executePlan(
     return idMap;
   }
 
-  // Upload an image (cover/card) via the standard chain and CRUSH it; returns the
-  // new key + crushed key. (Shares the GET_YURL→S3 PUT→CRUSH_IMAGE flow.)
-  async function uploadImageAsset(
-    sourceKey: string,
-  ): Promise<{ key: string; crushedKey: string } | null> {
+  // Faithful upload of a single cover/card key (GET_YURL → S3 PUT of the exact
+  // exported bytes). No CRUSH — the source already carries both `key` and
+  // `crushedKey`, and each is uploaded + remapped on its own, verbatim.
+  async function uploadImageAsset(sourceKey: string): Promise<string | null> {
     const filename = sourceKey.split('/').pop() ?? 'image.jpg';
     const yurl = payloadOf(await send(env.getYurl({ courseId: newCourseId, filename }), 'set-course-images'));
     const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}.jpg` : String(yurl.key ?? '');
@@ -731,29 +707,6 @@ export async function executePlan(
     } else {
       result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
     }
-    const crush = payloadOf(await send(env.crushImage(newCourseId, newKey), 'set-course-images'));
-    const crushedKey = dryRun ? `${newKey}.crushed` : String(crush.key ?? newKey);
-    return { key: newKey, crushedKey };
-  }
-
-  async function pollStatus(jobId: string, step: PlanStep['kind']): Promise<void> {
-    if (dryRun) return;
-    const budget = deps.maxStatusPolls ?? 10;
-    for (let i = 0; i < budget; i++) {
-      await pace();
-      const resp = payloadOf(await send(env.checkStatus(newCourseId, [jobId]), step));
-      const jobs = Array.isArray((resp as { jobs?: unknown }).jobs)
-        ? ((resp as { jobs: unknown[] }).jobs)
-        : Array.isArray(resp)
-          ? (resp as unknown[])
-          : [];
-      // Empty / no in-flight job for this id ⇒ done.
-      const stillRunning = jobs.some(
-        (j) => j && typeof j === 'object' && (j as { id?: string }).id === jobId &&
-          (j as { status?: string }).status !== 'complete',
-      );
-      if (!stillRunning) return;
-    }
-    log(`WARN transcode job ${jobId} did not confirm complete within budget`);
+    return newKey;
   }
 }

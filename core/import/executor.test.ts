@@ -79,7 +79,6 @@ const happyHandlers = {
   'GET_YURL': () => ({
     payload: { key: 'rise/courses/NEWCOURSE/server.jpg', url: 'https://s3/put', type: 'image/jpeg' },
   }),
-  'CRUSH_IMAGE': () => ({ payload: { key: 'rise/courses/NEWCOURSE/crushed.jpg' } }),
   'UPDATE_COURSE': () => ({ payload: {} }),
   'UPDATE_BLOCK_DEBOUNCE': () => ({ payload: { success: true } }),
 };
@@ -101,7 +100,7 @@ describe('executePlan — image course happy path', () => {
     expect(res.error).toBeUndefined();
     expect(res.newCourseId).toBe('NEWCOURSE');
     expect(res.survivingKeys).toEqual([]);
-    // The S3 PUT and CRUSH both fired.
+    // The S3 PUT fired (faithful upload — no CRUSH).
     expect(calls.some((c) => c.url === 'https://s3/put' && c.method === 'PUT')).toBe(true);
     // old→new course mapping recorded in the resumable job log
     expect(res.idMap['SRC']).toBe('NEWCOURSE');
@@ -266,7 +265,7 @@ describe('executePlan — block ordering (batched create)', () => {
 });
 
 describe('executePlan — course cover image', () => {
-  it('uploads the cover, CRUSHes it, and sets it via UPDATE_COURSE (no surviving key)', async () => {
+  it('uploads the cover + crushedKey faithfully and sets it via UPDATE_COURSE (no surviving key)', async () => {
     const input: PlanInput = {
       author: 'auth0|t',
       targetFolderId: 'all',
@@ -285,10 +284,12 @@ describe('executePlan — course cover image', () => {
       },
     };
     let coverPayload: any = null;
+    let yurlN = 0;
     const relay: Relay = async (spec) => {
       if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
-      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/courses/NEWCOURSE/srv.jpg', url: 'https://s3/c', type: 'image/jpeg' } }) };
-      if (spec.label.includes('CRUSH_IMAGE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/courses/NEWCOURSE/srv-crushed.jpg' } }) };
+      // Both the cover `key` AND `crushedKey` are uploaded faithfully (verbatim
+      // bytes) — no CRUSH. Distinct GET_YURL keys per upload.
+      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.jpg`, url: 'https://s3/c', type: 'image/jpeg' } }) };
       if (spec.label.endsWith('/UPDATE_COURSE')) { const p = JSON.parse(spec.body!).payload; if (p.coverImage) coverPayload = p; return { ok: true, status: 200, text: '{}' }; }
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
@@ -304,9 +305,11 @@ describe('executePlan — course cover image', () => {
     expect(res.ok).toBe(true);
     expect(res.survivingKeys).toEqual([]);
     expect(coverPayload).toBeTruthy();
-    // the new cover key was written (source key remapped to the uploaded one)
-    expect(coverPayload.coverImage.media.image.key).toBe('rise/courses/NEWCOURSE/srv.jpg');
-    expect(coverPayload.coverImage.media.image.crushedKey).toBe('rise/courses/NEWCOURSE/srv-crushed.jpg');
+    // both source keys remapped to their own faithful uploads (no re-crush)
+    expect(coverPayload.coverImage.media.image.key).toBe('rise/courses/NEWCOURSE/srv0.jpg');
+    expect(coverPayload.coverImage.media.image.crushedKey).toBe('rise/courses/NEWCOURSE/srv1.jpg');
+    // no CRUSH_IMAGE was sent
+    expect(res.envelopes.some((e) => e.label.includes('CRUSH'))).toBe(false);
     // and it's not left flagged
     expect(res.flags.some((f) => f.sourceKey === 'rise/courses/SRC/cover.jpg')).toBe(false);
   });

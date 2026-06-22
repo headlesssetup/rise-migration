@@ -277,10 +277,11 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // NOTE: the theme is applied AFTER the lessons (below) — Rise rejects theming a
   // course that has no lesson yet ("add a lesson before theming").
 
-  // 3. Lessons in ascending position; blocks chained by previousBlockId.
-  const ordered = [...lessons].sort(
-    (a, b) => (a.position ?? 0) - (b.position ?? 0),
-  );
+  // 3. Lessons in SOURCE ARRAY ORDER — that's the display order GET_COURSE
+  // returns. Do NOT sort by the `position` field: it does NOT track display
+  // order (observed: sorting by it scrambles the course). We send a sequential
+  // 0-based slot (idx) so each create is an append in this exact order.
+  const ordered = lessons;
   ordered.forEach((lesson, idx) => {
     const sourceLessonId = typeof lesson.id === 'string' ? lesson.id : `lesson-${idx}`;
     const lType = typeof lesson.type === 'string' ? lesson.type : 'blocks';
