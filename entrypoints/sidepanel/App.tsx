@@ -430,11 +430,11 @@ export function App() {
     if (!storage) return;
     setPhase('exporting');
     setProgress(null);
-    addLog('Exporting account extras (block templates, typefaces)…');
+    addLog('Exporting account data (block templates, typefaces)…');
     const s = await fetchAccountExtras(storage, onEvent);
     setPhase('done');
     addLog(
-      `Account extras: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
+      `Account data: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
     );
   }, [storage, onEvent, addLog]);
 
@@ -506,8 +506,40 @@ export function App() {
 
       {ready && mode === 'export' && (
       <>
+      {/* A · Account Data */}
       <section className="card">
-        <h2>Courses</h2>
+        <h2>A · Account Data</h2>
+        <button
+          onClick={runAccount}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Export account data'}
+        </button>
+        <p className="hint">
+          Block templates and custom typefaces (+ font files). Raw → account/,
+          reports → _metadata/.
+        </p>
+      </section>
+
+      {/* B · Question banks */}
+      <section className="card">
+        <h2>B · Question banks</h2>
+        <button
+          onClick={runBanks}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Fetch question banks (paced)'}
+        </button>
+        <p className="hint">
+          Reusable banks referenced by draw-from-bank blocks — saved to
+          question-banks/, profiled in question-banks-catalog.csv/json.
+        </p>
+        {banks && <BanksView banks={banks} />}
+      </section>
+
+      {/* C · Courses */}
+      <section className="card">
+        <h2>C · Courses</h2>
         <div className="row">
           <label>
             List{' '}
@@ -580,23 +612,9 @@ export function App() {
         )}
       </section>
 
+      {/* C2 · Assets */}
       <section className="card">
-        <h2>Question banks</h2>
-        <button
-          onClick={runBanks}
-          disabled={busy || !storage || !session?.risePresent}
-        >
-          {phase === 'exporting' ? 'Working…' : 'Fetch question banks (paced)'}
-        </button>
-        <p className="hint">
-          Reusable banks referenced by draw-from-bank blocks — saved to
-          question-banks/, profiled in question-banks-catalog.csv/json.
-        </p>
-        {banks && <BanksView banks={banks} />}
-      </section>
-
-      <section className="card">
-        <h2>Assets</h2>
+        <h2>C2 · Assets</h2>
         <button onClick={runAssets} disabled={busy || !storage}>
           {phase === 'exporting' ? 'Working…' : 'Download assets'}
         </button>
@@ -607,20 +625,6 @@ export function App() {
           and YouTube/Vimeo embeds are kept as references. No Rise tab required.
         </p>
         {assets && <AssetsView summary={assets} />}
-      </section>
-
-      <section className="card">
-        <h2>Account extras</h2>
-        <button
-          onClick={runAccount}
-          disabled={busy || !storage || !session?.risePresent}
-        >
-          {phase === 'exporting' ? 'Working…' : 'Export account extras'}
-        </button>
-        <p className="hint">
-          Block templates and custom typefaces (+ font files). Raw → account/,
-          reports → _metadata/.
-        </p>
       </section>
       </>
       )}
