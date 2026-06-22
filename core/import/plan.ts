@@ -297,25 +297,20 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     }
   }
 
-  // 2. Course shell → theme → title.
+  // 2. Course shell. The bare POST /content shell is only a CATALOG row; it
+  // becomes a real course when the FIRST CREATE_LESSON materializes its runtime
+  // document. So we emit the first lesson as the very next write after the shell —
+  // nothing failable in between — to shrink the "never-born phantom" window to a
+  // single hop (the executor rolls back an un-materialized shell if even that
+  // fails). Title is best-effort and NOT the materializer, so it no longer comes
+  // first; it (and the theme) are applied AFTER the lessons exist — Rise also
+  // rejects theming a lesson-less course ("add a lesson before theming").
   steps.push({
     kind: 'create-course',
     sourceCourseId,
     title,
     summary: `Create course "${title}"`,
   });
-  // Set the title FIRST — the bare POST /content shell is a draft that only
-  // MATERIALIZES on its first content write; doing it before the heavier steps
-  // (which can fail) means a failed import leaves a real, deletable course rather
-  // than a "never-born" phantom that 404s on GET_COURSE yet 500s the dashboard.
-  steps.push({
-    kind: 'set-title',
-    sourceCourseId,
-    title,
-    summary: `Set course title "${title}"`,
-  });
-  // NOTE: the theme is applied AFTER the lessons (below) — Rise rejects theming a
-  // course that has no lesson yet ("add a lesson before theming").
 
   // 3. Lessons in DISPLAY ORDER (already applied above via `course.lessons`,
   // the authoritative ordered id list — §2). CREATE_LESSON honors `position`, so
@@ -452,6 +447,15 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       }
     }
     // (no unlock — we never locked)
+  });
+
+  // Title now — best-effort, AFTER the course has been materialized by its first
+  // lesson (the shell on its own is a catalog row, not a real course).
+  steps.push({
+    kind: 'set-title',
+    sourceCourseId,
+    title,
+    summary: `Set course title "${title}"`,
   });
 
   // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course

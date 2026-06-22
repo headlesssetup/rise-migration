@@ -486,7 +486,8 @@ function steps2(input: PlanInput) {
 
 describe('executePlan — transactional rollback (no phantom in root)', () => {
   // A relay that creates the shell, records any soft-delete, and lets the caller
-  // decide what each authoring write returns.
+  // override any authoring write (return null to fall through to happy defaults,
+  // which let a course materialize via CREATE_LESSON).
   function rollbackRelay(onWrite: (label: string) => RelayResponse | null): {
     relay: Relay;
     deleted: string[][];
@@ -497,10 +498,22 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
         deleted.push((JSON.parse(spec.body!) as { ids: string[] }).ids);
         return { ok: true, status: 200, text: '{}' };
       }
+      const override = onWrite(spec.label);
+      if (override) return override;
       if (spec.url.includes('/manage/api/content')) {
         return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
       }
-      return onWrite(spec.label) ?? { ok: true, status: 200, text: '{}' };
+      if (spec.label.includes('CREATE_LESSON')) {
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON', createdAt: 't' } } }) };
+      }
+      if (spec.label.includes('CREATE_BLOCKS')) {
+        const blocks = (JSON.parse(spec.body!) as { payload: { blocks: { id: string }[] } }).payload.blocks;
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: blocks.map((b) => ({ id: b.id, globalBlockId: 'g' })) } }) };
+      }
+      if (spec.label.includes('GET_YURL')) {
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/courses/NEWCOURSE/s.jpg', url: 'https://s3/put', type: 'image/jpeg' } }) };
+      }
+      return { ok: true, status: 200, text: '{}' };
     };
     return { relay, deleted };
   }
@@ -520,6 +533,24 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
     expect(res.ok).toBe(false);
     expect(res.rolledBack).toBe(true);
     expect(deleted).toEqual([['NEWCOURSE']]);
+  });
+
+  it('does NOT roll back once the course has materialized (partial import kept)', async () => {
+    // Shell + first lesson succeed (course is now real), then a block write fails.
+    const input = imageCourse();
+    const { relay, deleted } = rollbackRelay((label) =>
+      label.includes('CREATE_BLOCKS') ? { ok: false, status: 500, text: 'boom' } : null,
+    );
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(false); // the import failed…
+    expect(res.rolledBack).toBeUndefined(); // …but the materialized course is kept
+    expect(deleted).toEqual([]);
   });
 
   it('rolls back a content-less shell that never materialized (G2)', async () => {

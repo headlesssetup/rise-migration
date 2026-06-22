@@ -689,8 +689,11 @@ export async function executePlan(
   } catch (e) {
     result.ok = false;
     result.idMap = ids.toJSON();
-    // Roll back the created shell so a failed import never leaves a phantom in root.
-    await rollbackShell('import failed before completion');
+    // Roll back ONLY an un-materialized shell. Once the first CREATE_LESSON has
+    // landed, the course is a real, queryable, deletable course — a partial import,
+    // not a catalog-poisoning phantom — so we keep it (resumable via the job log)
+    // rather than discard the work. A never-materialized shell is a ghost → delete.
+    if (!materialized) await rollbackShell('import failed before the course materialized');
     if (e instanceof WriteError) {
       // Surface a snippet of the server's response body — a 4xx/5xx body usually
       // says exactly what it rejected (the live diagnostic).

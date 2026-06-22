@@ -42,14 +42,18 @@ describe('buildPlan ordering', () => {
       }),
     );
     const kinds = steps.map((s) => s.kind);
-    // banks → course → title (materialize) → lessons → theme (theme is LAST of
-    // the course-level writes: Rise rejects theming a lesson-less course).
+    // banks → course shell → FIRST lesson immediately (materializes the runtime
+    // doc; no failable step between shell and first lesson) → … → title → theme.
+    // Title/theme are course-level writes applied LAST: the shell alone is a
+    // catalog row, and Rise rejects theming a lesson-less course.
     expect(kinds.slice(0, 4)).toEqual([
       'create-bank',
       'put-bank',
       'create-course',
-      'set-title',
+      'create-lesson',
     ]);
+    // title is set AFTER the course has been materialized by its first lesson
+    expect(kinds.indexOf('set-title')).toBeGreaterThan(kinds.indexOf('create-lesson'));
     // lesson lifecycle present
     expect(kinds).toContain('create-lesson');
     expect(kinds).not.toContain('lock-lesson'); // locks skipped (solo import)
