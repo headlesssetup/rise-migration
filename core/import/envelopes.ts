@@ -328,10 +328,28 @@ export function createFolder(args: {
   };
 }
 
-// NOTE: deletion endpoints (course soft-delete/hard-delete, folder delete,
-// DELETE_TYPEFACE) are intentionally NOT implemented here — purge/cleanup is out
-// of scope for this app and will be a separate tool. The endpoints are documented
-// in docs/rise-import-protocol.md §10f for when that's built.
+/** POST /manage/api/content/soft-delete — move course(s) to the bin (protocol
+ *  §10b). Used by the import's TRANSACTIONAL ROLLBACK: a course shell whose
+ *  import fails (or never materializes) would otherwise strand a "never-born"
+ *  phantom in the root folder, which 500s the dashboard's `content/search`. This
+ *  endpoint is `manage/api` (cookie-authed), so it lands even when the failure was
+ *  a stale-bearer 403 on the authoring API; on a never-materialized shell it may
+ *  answer 500 yet still take effect (verified live), so callers treat it as
+ *  best-effort + status-agnostic. */
+export function softDeleteContent(ids: string[]): WriteSpec {
+  return {
+    url: '/manage/api/content/soft-delete',
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+    label: 'POST /manage/api/content/soft-delete (rollback)',
+  };
+}
+
+// NOTE: the remaining deletion endpoints (content hard-delete, folder delete,
+// DELETE_TYPEFACE) are intentionally NOT implemented here — full purge/cleanup is
+// out of scope for this app and will be a separate tool. (Soft-delete above is the
+// one exception: it's the import's own rollback, not a purge.) The endpoints are
+// documented in docs/rise-import-protocol.md §10f for when that's built.
 
 /** PATCH /manage/api/content/{courseId}/move — move a course into a folder. The
  *  body is the folder id as a BARE text/plain string (confirmed in capture). */

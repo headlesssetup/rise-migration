@@ -109,6 +109,10 @@ export interface ExecResult {
   idMap: Record<string, string>;
   /** New course id once the shell is created. */
   newCourseId?: string;
+  /** Set when a created shell was soft-deleted (transactional rollback) because
+   *  the import failed or the course never materialized — so a never-born phantom
+   *  never strands in the root folder. */
+  rolledBack?: boolean;
   /** Surviving source media keys (must be empty on success). */
   survivingKeys: string[];
   error?: string;
@@ -184,6 +188,10 @@ export async function executePlan(
 
   // Per-run runtime state.
   let newCourseId = '';
+  // A successful CREATE_LESSON is the write that materializes the runtime course
+  // document (POST /content only mints a catalog row). If a run ends without one,
+  // the shell never became a real course → a phantom that 500s content/search.
+  let materialized = false;
   // sourceBlockId → {newId, globalBlockId} (from CREATE_BLOCKS metadata).
   const blockMeta = new Map<string, { newId: string; globalBlockId?: string }>();
   // sourceKey → new target key (after upload) for media patches.
@@ -215,6 +223,24 @@ export async function executePlan(
     }
     log(`${pfx()} OK   ${spec.method} ${spec.label}`);
     return parseJson(r.text);
+  }
+
+  // Transactional cleanup: soft-delete a created shell whose import failed or
+  // never materialized, so a never-born phantom never strands in the root folder
+  // (it 500s the dashboard's content/search). Best-effort + status-agnostic — the
+  // manage/api soft-delete is cookie-authed (lands even when the failure was a
+  // stale-bearer 403) and takes effect even when it answers 500 on a shell with no
+  // runtime doc. Never throws (rollback must not mask the original failure).
+  async function rollbackShell(why: string): Promise<void> {
+    if (dryRun || !newCourseId) return;
+    try {
+      await pace();
+      await deps.relay(env.softDeleteContent([newCourseId]));
+      result.rolledBack = true;
+      log(`Rolled back orphaned course ${newCourseId} (${why})`);
+    } catch (re) {
+      log(`WARN rollback soft-delete failed for ${newCourseId}: ${(re as Error).message}`);
+    }
   }
 
   try {
@@ -371,6 +397,8 @@ export async function executePlan(
             : String(lesson?.id ?? '');
           if (!newLessonId) throw new WriteError('CREATE_LESSON returned no lesson id', step.kind, JSON.stringify(resp));
           ids.set(step.sourceLessonId, newLessonId);
+          // A successful lesson create materializes the runtime course document.
+          if (!dryRun) materialized = true;
           break;
         }
         case 'update-lesson': {
@@ -620,6 +648,20 @@ export async function executePlan(
       deps.onProgress?.(++done, steps.length);
     }
 
+    // Materialization guard: a run can finish without throwing yet never create
+    // any content (e.g. a lesson-less course, or one whose only lesson is a blockless
+    // section that still creates — but a truly content-less course makes no
+    // CREATE_LESSON). An un-materialized shell 404s GET_COURSE but 500s
+    // content/search — a phantom. Roll it back rather than report a hollow success.
+    if (!dryRun && newCourseId && !materialized) {
+      await rollbackShell('no content write materialized the course');
+      result.ok = false;
+      result.error =
+        'Course shell never materialized (no lesson created) — rolled back to avoid a phantom in the root folder';
+      result.idMap = ids.toJSON();
+      return result;
+    }
+
     // Final invariant (protocol §8/§12): every uploaded media key in the rebuilt
     // course must belong to a TARGET owner (new course id / new bank ids) — any
     // other is a source/foreign key that wasn't remapped. Flagged keys (orphan /
@@ -647,6 +689,8 @@ export async function executePlan(
   } catch (e) {
     result.ok = false;
     result.idMap = ids.toJSON();
+    // Roll back the created shell so a failed import never leaves a phantom in root.
+    await rollbackShell('import failed before completion');
     if (e instanceof WriteError) {
       // Surface a snippet of the server's response body — a 4xx/5xx body usually
       // says exactly what it rejected (the live diagnostic).

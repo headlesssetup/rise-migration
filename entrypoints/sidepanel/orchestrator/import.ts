@@ -420,7 +420,7 @@ export async function runImport(
       kind: 'log',
       message: res.ok
         ? `${opts.dryRun ? 'Planned' : 'Imported'} "${course.course?.title ?? courseId}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`
-        : `FAILED "${course.course?.title ?? courseId}": ${res.error}`,
+        : `FAILED "${course.course?.title ?? courseId}": ${res.error}${res.rolledBack ? ' (orphaned shell rolled back — nothing stranded in root)' : ''}`,
     });
     // Break flags down by kind so the operator knows WHAT needs manual handling
     // (storyline vs orphan vs cover/header media …) without opening the report.

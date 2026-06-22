@@ -484,6 +484,103 @@ function steps2(input: PlanInput) {
   return buildPlan(input);
 }
 
+describe('executePlan — transactional rollback (no phantom in root)', () => {
+  // A relay that creates the shell, records any soft-delete, and lets the caller
+  // decide what each authoring write returns.
+  function rollbackRelay(onWrite: (label: string) => RelayResponse | null): {
+    relay: Relay;
+    deleted: string[][];
+  } {
+    const deleted: string[][] = [];
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content/soft-delete')) {
+        deleted.push((JSON.parse(spec.body!) as { ids: string[] }).ids);
+        return { ok: true, status: 200, text: '{}' };
+      }
+      if (spec.url.includes('/manage/api/content')) {
+        return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      }
+      return onWrite(spec.label) ?? { ok: true, status: 200, text: '{}' };
+    };
+    return { relay, deleted };
+  }
+
+  it('soft-deletes the created shell when a later write fails (G1)', async () => {
+    const input = imageCourse();
+    const { relay, deleted } = rollbackRelay((label) =>
+      label.includes('CREATE_LESSON') ? { ok: false, status: 403, text: 'Forbidden' } : null,
+    );
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.rolledBack).toBe(true);
+    expect(deleted).toEqual([['NEWCOURSE']]);
+  });
+
+  it('rolls back a content-less shell that never materialized (G2)', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [],
+      banksById: new Map(),
+      course: { course: { id: 'SRC', title: 'Empty' }, lessons: [] },
+    };
+    const { relay, deleted } = rollbackRelay(() => null);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.rolledBack).toBe(true);
+    expect(res.error).toMatch(/never materialized/i);
+    expect(deleted).toEqual([['NEWCOURSE']]);
+  });
+
+  it('does NOT roll back a materialized course (lesson created)', async () => {
+    const input = imageCourse();
+    const { relay, calls } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.rolledBack).toBeUndefined();
+    expect(calls.some((c) => c.url.includes('/content/soft-delete'))).toBe(false);
+  });
+
+  it('does NOT roll back in dry-run', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [],
+      banksById: new Map(),
+      course: { course: { id: 'SRC', title: 'Empty' }, lessons: [] },
+    };
+    const { relay, deleted } = rollbackRelay(() => null);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+      dryRun: true,
+    });
+    expect(deleted).toEqual([]);
+    expect(res.rolledBack).toBeUndefined();
+  });
+});
+
 describe('executePlan — dry run', () => {
   it('collects every envelope without relaying', async () => {
     const input = imageCourse();
