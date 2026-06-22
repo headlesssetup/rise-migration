@@ -68,12 +68,12 @@ export type PlanStep =
     }
   | { kind: 'lock-lesson'; sourceLessonId: string; summary: string }
   | {
-      kind: 'create-block';
+      // ALL of a lesson's blocks created in ONE ordered CREATE_BLOCKS. A single
+      // array insert preserves order deterministically; per-block previousBlockId
+      // chaining (interleaved with media uploads) mis-ordered larger lessons.
+      kind: 'create-blocks';
       sourceLessonId: string;
-      sourceBlockId: string;
-      family: string;
-      variant: string;
-      previousSourceBlockId: string | null;
+      blocks: { sourceBlockId: string; family: string; variant: string }[];
       summary: string;
     }
   | {
@@ -293,42 +293,35 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Lock lesson "${lTitle}" for editing`,
     });
 
-    let prev: string | null = null;
+    // 1. Create ALL blocks in one ordered batch (preserves order).
+    steps.push({
+      kind: 'create-blocks',
+      sourceLessonId,
+      blocks: blocks.map((b) => ({
+        sourceBlockId: typeof b.id === 'string' ? b.id : '',
+        family: String(b.family ?? ''),
+        variant: String(b.variant ?? ''),
+      })),
+      summary: `Create ${blocks.length} block(s) in "${lTitle}"`,
+    });
+
+    // 2. Per-block follow-ups — run AFTER every block exists, addressed by id,
+    //    so they never affect ordering: storyline/draw-from-bank flags + binds,
+    //    media upload + patch, orphan flags.
     for (const block of blocks) {
       const sourceBlockId = typeof block.id === 'string' ? block.id : '';
       const family = String(block.family ?? '');
       const variant = String(block.variant ?? '');
 
       if (isStoryline(block)) {
-        // Created empty + flagged manual (Review-360 reachability, §9).
-        steps.push({
-          kind: 'create-block',
-          sourceLessonId,
-          sourceBlockId,
-          family,
-          variant,
-          previousSourceBlockId: prev,
-          summary: `Create block ${family}/${variant}`,
-        });
         steps.push({
           kind: 'flag-storyline',
           sourceLessonId,
           sourceBlockId,
           summary: `⚠ Storyline/Mighty block needs manual Review-360 attach`,
         });
-        prev = sourceBlockId;
         continue;
       }
-
-      steps.push({
-        kind: 'create-block',
-        sourceLessonId,
-        sourceBlockId,
-        family,
-        variant,
-        previousSourceBlockId: prev,
-        summary: `Create block ${family}/${variant}`,
-      });
 
       if (isDrawFromBank(block)) {
         if (input.recreateBanks) {
@@ -345,7 +338,6 @@ export function buildPlan(input: PlanInput): PlanStep[] {
               : `⚠ draw-from-bank block missing a bank reference`,
           });
         } else {
-          // Default: leave the block as an unbound placeholder (no bank created).
           steps.push({
             kind: 'flag-draw-from-bank',
             sourceLessonId,
@@ -353,7 +345,6 @@ export function buildPlan(input: PlanInput): PlanStep[] {
             summary: `⚠ Draw-from-bank placeholder — attach a question bank manually`,
           });
         }
-        prev = sourceBlockId;
         continue;
       }
 
@@ -394,7 +385,6 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           summary: `Patch block media (${uploadable.length} key(s))`,
         });
       }
-      prev = sourceBlockId;
     }
 
     steps.push({
@@ -448,11 +438,15 @@ export interface PlanStats {
 export function planStats(steps: PlanStep[]): PlanStats {
   const count = (k: PlanStep['kind']): number =>
     steps.filter((s) => s.kind === k).length;
+  const blocks = steps.reduce(
+    (n, s) => (s.kind === 'create-blocks' ? n + s.blocks.length : n),
+    0,
+  );
   return {
     total: steps.length,
     banks: count('create-bank'),
     lessons: count('create-lesson'),
-    blocks: count('create-block'),
+    blocks,
     uploads: count('upload-asset'),
     storylineFlags: count('flag-storyline'),
     orphanFlags: count('flag-orphan-media'),

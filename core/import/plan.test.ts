@@ -52,12 +52,12 @@ describe('buildPlan ordering', () => {
     // lesson lifecycle present
     expect(kinds).toContain('create-lesson');
     expect(kinds).toContain('lock-lesson');
-    expect(kinds).toContain('create-block');
+    expect(kinds).toContain('create-blocks');
     expect(kinds).toContain('bind-draw-from-bank');
     expect(kinds).toContain('unlock-lesson');
-    // bind comes after its create-block
+    // bind comes after the batched block creation
     expect(kinds.indexOf('bind-draw-from-bank')).toBeGreaterThan(
-      kinds.indexOf('create-block'),
+      kinds.indexOf('create-blocks'),
     );
   });
 
@@ -88,7 +88,7 @@ describe('buildPlan ordering', () => {
       }),
     );
     const kinds = steps.map((s) => s.kind);
-    expect(kinds).toContain('create-block'); // the placeholder block IS created
+    expect(kinds).toContain('create-blocks'); // the placeholder block IS created
     expect(kinds).toContain('flag-draw-from-bank');
     expect(kinds).not.toContain('create-bank');
     expect(kinds).not.toContain('bind-draw-from-bank');
@@ -126,7 +126,7 @@ describe('buildPlan ordering', () => {
     expect(steps.some((s) => s.kind === 'create-lesson')).toBe(true);
   });
 
-  it('chains blocks via previousSourceBlockId', () => {
+  it('batches a lesson’s blocks into ONE ordered create-blocks step', () => {
     const steps = buildPlan(
       input({
         course: {
@@ -146,12 +146,11 @@ describe('buildPlan ordering', () => {
         },
       }),
     );
-    const creates = steps.filter((s) => s.kind === 'create-block') as Array<{
-      sourceBlockId: string;
-      previousSourceBlockId: string | null;
+    const creates = steps.filter((s) => s.kind === 'create-blocks') as Array<{
+      blocks: { sourceBlockId: string }[];
     }>;
-    expect(creates[0]!.previousSourceBlockId).toBe(null);
-    expect(creates[1]!.previousSourceBlockId).toBe('cb1');
+    expect(creates.length).toBe(1); // one batch per lesson
+    expect(creates[0]!.blocks.map((b) => b.sourceBlockId)).toEqual(['cb1', 'cb2']); // source order
   });
 });
 
@@ -186,7 +185,7 @@ describe('buildPlan media + flags', () => {
     const kinds = steps.map((s) => s.kind);
     expect(kinds).toContain('upload-asset');
     expect(kinds).toContain('patch-block-media');
-    expect(kinds.indexOf('upload-asset')).toBeGreaterThan(kinds.indexOf('create-block'));
+    expect(kinds.indexOf('upload-asset')).toBeGreaterThan(kinds.indexOf('create-blocks'));
     expect(kinds.indexOf('patch-block-media')).toBeGreaterThan(kinds.indexOf('upload-asset'));
   });
 

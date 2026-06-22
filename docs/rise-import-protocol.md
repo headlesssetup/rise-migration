@@ -190,6 +190,16 @@ is sent empty here (blocks are created separately via `CREATE_BLOCKS`).
 - Question blocks (inline quiz / knowledge-check) are **ordinary blocks** here — no
   bank call. Their `{type:"MULTIPLE_CHOICE"|…, answers, feedback, …}` ride inside the
   block verbatim with regenerated ids (see `rise-question-banks.md` for the schema).
+- **Batch a whole lesson's blocks in ONE `CREATE_BLOCKS` (ordering fix).** ✅
+  Confirmed on a live US→EU import: creating blocks **one-at-a-time** with
+  per-call `previousBlockId` chaining — interleaved with the media upload calls —
+  **mis-ordered larger lessons** (the lesson's last few blocks landed near the
+  top, shifting the rest). Send the lesson's blocks as a **single ordered array**
+  (`previousBlockId:null`, `blocks:[b0,b1,…]`) — a single array insert preserves
+  order deterministically and is the editor's multi-block-paste path. Do the media
+  uploads + `UPDATE_BLOCK_DEBOUNCE` patches **afterward, addressed by block id**
+  (order-independent). Map the returned `blockMetadata` back **by `id`**, not by
+  position (the response order isn't guaranteed).
 - Default/placeholder media seen in the capture (`sourcedFrom:"DEFAULT"`,
   `cdn.articulate.com/assets/rise/assets/block-defaults/…`) is what a freshly-created
   media block ships with; we overwrite it via `UPDATE_BLOCK_DEBOUNCE` (§8). Blocks with

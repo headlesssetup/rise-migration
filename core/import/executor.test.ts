@@ -212,6 +212,58 @@ describe('executePlan — course with a cover image', () => {
   });
 });
 
+describe('executePlan — block ordering (batched create)', () => {
+  it('sends ALL of a lesson’s blocks in ONE ordered CREATE_BLOCKS', async () => {
+    const families = ['text', 'divider', 'continue', 'list', 'impact'];
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [],
+      banksById: new Map(),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: families.map((f, i) => ({
+              id: `cblk${i}aaaaaaaaaaaaaaaaaaaa`,
+              family: f,
+              variant: 'v',
+              items: [],
+            })),
+          },
+        ],
+      },
+    };
+    const steps = buildPlan(input);
+    const createBlocksCalls: unknown[][] = [];
+    const relay: Relay = async (spec) => {
+      if (spec.label.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) {
+        const blocks = JSON.parse(spec.body!).payload.blocks as { id: string }[];
+        createBlocksCalls.push(blocks);
+        // Return metadata in REVERSED order to prove id-based (not positional) mapping.
+        const metas = [...blocks].reverse().map((b) => ({ id: b.id, globalBlockId: 'g' }));
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: metas } }) };
+      }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(steps, { input, relay, readAsset: async () => null, ids: new IdMap(counterMint()), mintId: counterMint() });
+    expect(res.ok).toBe(true);
+    // Exactly ONE CREATE_BLOCKS for the lesson, carrying all 5 blocks in source order.
+    expect(createBlocksCalls.length).toBe(1);
+    expect(createBlocksCalls[0]!.length).toBe(5);
+    // Every source block id is mapped (id-based metadata matching survives reordering).
+    for (let i = 0; i < 5; i++) {
+      expect(res.idMap[`cblk${i}aaaaaaaaaaaaaaaaaaaa`]).toBeTruthy();
+    }
+  });
+});
+
 describe('executePlan — dry run', () => {
   it('collects every envelope without relaying', async () => {
     const input = imageCourse();

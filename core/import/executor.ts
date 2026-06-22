@@ -315,44 +315,61 @@ export async function executePlan(
           }
           break;
         }
-        case 'create-block': {
-          const entry = srcBlocks.get(step.sourceBlockId);
-          if (!entry) throw new WriteError(`Source block ${step.sourceBlockId} not found`, step.kind);
+        case 'create-blocks': {
           const newLessonId = ids.get(step.sourceLessonId)!;
-          // Copy-faithful: regenerate ids + strip server fields, then blank
-          // uploaded media keys (filled by the patch step after re-upload).
-          const remapped = blankUploadedMediaKeys(remapIds(entry.block, ids)) as Record<string, unknown>;
-          const newBlockId = String(remapped.id ?? '');
-          const previousBlockId = step.previousSourceBlockId
-            ? ids.get(step.previousSourceBlockId) ?? null
-            : null;
+          // Build ALL of the lesson's blocks in source order, copy-faithful:
+          // regenerate ids + strip server fields, then blank uploaded media keys
+          // (filled by the patch step after re-upload). One ordered insert keeps
+          // block order deterministic.
+          const newIdToSource = new Map<string, string>();
+          const built: Record<string, unknown>[] = [];
+          for (const ref of step.blocks) {
+            const entry = srcBlocks.get(ref.sourceBlockId);
+            if (!entry) throw new WriteError(`Source block ${ref.sourceBlockId} not found`, step.kind);
+            const remapped = blankUploadedMediaKeys(remapIds(entry.block, ids)) as Record<string, unknown>;
+            const newBlockId = String(remapped.id ?? '');
+            newIdToSource.set(newBlockId, ref.sourceBlockId);
+            built.push(remapped);
+            // Provisional mapping (confirmed below in a live run).
+            blockMeta.set(ref.sourceBlockId, { newId: newBlockId });
+          }
           const resp = await send(
             env.createBlocks({
               courseId: newCourseId,
               lessonId: newLessonId,
-              previousBlockId,
-              blocks: [remapped],
+              previousBlockId: null,
+              blocks: built,
             }),
             step.kind,
           );
           if (!dryRun) {
             const p = payloadOf(resp);
-            const meta = Array.isArray(p.blockMetadata)
-              ? (p.blockMetadata[0] as Record<string, unknown> | undefined)
-              : undefined;
-            if (p.success !== true || !meta || meta.id !== newBlockId) {
+            const metas = Array.isArray(p.blockMetadata)
+              ? (p.blockMetadata as Record<string, unknown>[])
+              : [];
+            if (p.success !== true || metas.length !== built.length) {
               throw new WriteError(
-                'CREATE_BLOCKS did not confirm the block id we sent',
+                `CREATE_BLOCKS did not confirm all ${built.length} block(s)`,
                 step.kind,
                 JSON.stringify(resp),
               );
             }
-            blockMeta.set(step.sourceBlockId, {
-              newId: newBlockId,
-              globalBlockId: typeof meta.globalBlockId === 'string' ? meta.globalBlockId : undefined,
-            });
-          } else {
-            blockMeta.set(step.sourceBlockId, { newId: newBlockId });
+            for (const meta of metas) {
+              const newBlockId = String(meta.id ?? '');
+              const src = newIdToSource.get(newBlockId);
+              if (!src) {
+                throw new WriteError(
+                  `CREATE_BLOCKS returned an unexpected block id ${newBlockId}`,
+                  step.kind,
+                  JSON.stringify(resp),
+                );
+              }
+              blockMeta.set(src, {
+                newId: newBlockId,
+                globalBlockId:
+                  typeof meta.globalBlockId === 'string' ? meta.globalBlockId : undefined,
+              });
+            }
           }
           break;
         }
