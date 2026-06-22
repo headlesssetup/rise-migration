@@ -838,47 +838,62 @@ async function importAccountFonts(args: {
   }
 
   const total = toRecreate.length;
+  // DRY-RUN: do NOT touch the live account — just report what WOULD be created.
+  // (GET_YURL + CREATE_TYPEFACE are real writes; sending them in a "dry-run" was
+  // polluting the target with empty typefaces.)
+  if (dryRun) {
+    onEvent({ kind: 'log', message: `Would create ${total} custom typeface(s) (dry-run — no writes):` });
+    for (const tf of toRecreate) {
+      onEvent({ kind: 'log', message: `  • would create typeface "${tf.name}" (${tf.fonts.length} font file(s))` });
+    }
+    return { idMap, matched, created: total, unresolved: unresolved.length };
+  }
+
   onEvent({ kind: 'log', message: `Creating ${total} custom typeface(s)…` });
-  const courseId = (await liveTargetCourseId()) ?? 'dry-course';
-  let n = 0;
-  const mint = () => `gen${(++n).toString(36)}${Date.now().toString(36)}`;
+  const courseId = await liveTargetCourseId();
+  if (!courseId) {
+    onEvent({ kind: 'log', message: 'WARN no live target course to anchor font uploads — skipping font creation' });
+    return { idMap, matched, created: 0, unresolved: unresolved.length };
+  }
   let created = 0;
   for (const [ti, tf] of toRecreate.entries()) {
     const pfx = `[${ti + 1}/${total} fonts]`;
     const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();
     for (const f of tf.fonts) {
       const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
-      if (!dryRun) await pacedDelay(pacing);
+      await pacedDelay(pacing);
       const yresp = await relayThroughTab(getYurl({ courseId, filename, assetPath: 'fonts/' }));
       onEvent({ kind: 'log', message: `${pfx} ${yresp.ok ? 'OK' : 'FAIL'} POST rise/uploads/GET_YURL` });
+      if (!yresp.ok) {
+        onEvent({ kind: 'log', message: `${pfx} WARN GET_YURL failed for "${tf.name}" (HTTP ${yresp.status}) — skipping this file` });
+        continue;
+      }
       const yurl = payloadOf(yresp.text);
-      const newKey = dryRun ? `rise/fonts/${mint()}.woff` : String(yurl.key ?? '');
+      const newKey = String(yurl.key ?? '');
       const url = String(yurl.url ?? '');
       const type = String(yurl.type ?? 'font/woff');
-      if (!dryRun) {
-        const bytes = await readFontBytes(f.key);
-        if (!bytes) {
-          onEvent({ kind: 'log', message: `${pfx} WARN missing archived font bytes for ${f.key} (skipping)` });
-          continue;
-        }
-        const put = await relayThroughTab(s3Put({ url, base64Body: bytes.base64, contentType: type }));
-        onEvent({ kind: 'log', message: `${pfx} ${put.ok ? 'OK' : 'FAIL'} PUT S3 (font bytes)` });
-        if (!put.ok) {
-          onEvent({ kind: 'log', message: `${pfx} WARN font S3 PUT failed for "${tf.name}" (HTTP ${put.status})` });
-          continue;
-        }
+      const bytes = await readFontBytes(f.key);
+      if (!bytes) {
+        onEvent({ kind: 'log', message: `${pfx} WARN missing archived font bytes for ${f.key} (skipping)` });
+        continue;
+      }
+      const put = await relayThroughTab(s3Put({ url, base64Body: bytes.base64, contentType: type }));
+      onEvent({ kind: 'log', message: `${pfx} ${put.ok ? 'OK' : 'FAIL'} PUT S3 (font bytes)` });
+      if (!put.ok) {
+        onEvent({ kind: 'log', message: `${pfx} WARN font S3 PUT failed for "${tf.name}" (HTTP ${put.status})` });
+        continue;
       }
       uploaded.set(f.key, { key: newKey, url, type, filename: String(yurl.filename ?? filename) });
     }
     if (uploaded.size === 0) {
-      onEvent({ kind: 'log', message: `${pfx} WARN custom font "${tf.name}" has no archived bytes — provision manually` });
+      onEvent({ kind: 'log', message: `${pfx} WARN custom font "${tf.name}" had no uploadable files — skipping` });
       continue;
     }
-    if (!dryRun) await pacedDelay(pacing);
+    await pacedDelay(pacing);
     const cresp = payloadOf(
       (await relayThroughTab(createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }))).text,
     );
-    const newId = dryRun ? `dry-tf-${mint()}` : String(cresp.id ?? '');
+    const newId = String(cresp.id ?? '');
     if (newId) {
       idMap.set(tf.id, newId);
       created += 1;
