@@ -715,8 +715,6 @@ export interface AccountSettingsOptions {
   dryRun: boolean;
   override?: boolean;
   pacing?: PacingConfig;
-  /** Recreate the folder tree (default on). */
-  recreateFolders?: boolean;
 }
 
 /**
@@ -742,11 +740,8 @@ export async function importAccountSettings(
     message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} account settings → ${target?.name ?? 'unknown target'}`,
   });
 
-  // Folders.
-  const folderIdMap =
-    opts.recreateFolders === false
-      ? new Map<string, string>()
-      : await setupFolders(storage, opts.dryRun, pacing, onEvent);
+  // Folders (always included in this step).
+  const folderIdMap = await setupFolders(storage, opts.dryRun, pacing, onEvent);
 
   // Custom fonts (uploaded once, account-level).
   const tfRaw = await storage.readTypefaces();
@@ -798,16 +793,20 @@ async function importAccountFonts(args: {
     return { idMap, matched, created: 0, unresolved: unresolved.length };
   }
 
+  const total = toRecreate.length;
+  onEvent({ kind: 'log', message: `Creating ${total} custom typeface(s)…` });
   const courseId = (await liveTargetCourseId()) ?? 'dry-course';
   let n = 0;
   const mint = () => `gen${(++n).toString(36)}${Date.now().toString(36)}`;
   let created = 0;
-  for (const tf of toRecreate) {
+  for (const [ti, tf] of toRecreate.entries()) {
+    const pfx = `[${ti + 1}/${total} fonts]`;
     const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();
     for (const f of tf.fonts) {
       const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
       if (!dryRun) await pacedDelay(pacing);
       const yresp = await relayThroughTab(getYurl({ courseId, filename, assetPath: 'fonts/' }));
+      onEvent({ kind: 'log', message: `${pfx} ${yresp.ok ? 'OK' : 'FAIL'} POST rise/uploads/GET_YURL` });
       const yurl = payloadOf(yresp.text);
       const newKey = dryRun ? `rise/fonts/${mint()}.woff` : String(yurl.key ?? '');
       const url = String(yurl.url ?? '');
@@ -815,19 +814,20 @@ async function importAccountFonts(args: {
       if (!dryRun) {
         const bytes = await readFontBytes(f.key);
         if (!bytes) {
-          onEvent({ kind: 'log', message: `WARN missing archived font bytes for ${f.key} (skipping)` });
+          onEvent({ kind: 'log', message: `${pfx} WARN missing archived font bytes for ${f.key} (skipping)` });
           continue;
         }
         const put = await relayThroughTab(s3Put({ url, base64Body: bytes.base64, contentType: type }));
+        onEvent({ kind: 'log', message: `${pfx} ${put.ok ? 'OK' : 'FAIL'} PUT S3 (font bytes)` });
         if (!put.ok) {
-          onEvent({ kind: 'log', message: `WARN font S3 PUT failed for "${tf.name}" (HTTP ${put.status})` });
+          onEvent({ kind: 'log', message: `${pfx} WARN font S3 PUT failed for "${tf.name}" (HTTP ${put.status})` });
           continue;
         }
       }
       uploaded.set(f.key, { key: newKey, url, type, filename: String(yurl.filename ?? filename) });
     }
     if (uploaded.size === 0) {
-      onEvent({ kind: 'log', message: `WARN custom font "${tf.name}" has no archived bytes — provision manually` });
+      onEvent({ kind: 'log', message: `${pfx} WARN custom font "${tf.name}" has no archived bytes — provision manually` });
       continue;
     }
     if (!dryRun) await pacedDelay(pacing);
@@ -838,8 +838,9 @@ async function importAccountFonts(args: {
     if (newId) {
       idMap.set(tf.id, newId);
       created += 1;
+      onEvent({ kind: 'log', message: `${pfx} OK   created typeface "${tf.name}" (${created}/${total})` });
     } else {
-      onEvent({ kind: 'log', message: `WARN CREATE_TYPEFACE returned no id for "${tf.name}"` });
+      onEvent({ kind: 'log', message: `${pfx} WARN CREATE_TYPEFACE returned no id for "${tf.name}"` });
     }
   }
   return { idMap, matched, created, unresolved: unresolved.length };
@@ -879,16 +880,19 @@ export async function listLocalBanks(storage: Storage): Promise<LocalBank[]> {
   const out: LocalBank[] = [];
   for (const id of ids) {
     let questionCount = 0;
+    let title: string | undefined;
     const raw = await storage.readQuestionBank(id);
     if (raw) {
       try {
         const b = JSON.parse(raw) as SourceBank;
         questionCount = Array.isArray(b.questions) ? b.questions.length : 0;
+        // The bank's own JSON carries the real title; prefer it over the index.
+        if (typeof b.title === 'string' && b.title) title = b.title;
       } catch {
         /* tolerate */
       }
     }
-    out.push({ id, title: titleById.get(id) ?? id, questionCount });
+    out.push({ id, title: title ?? titleById.get(id) ?? id, questionCount });
   }
   return out;
 }

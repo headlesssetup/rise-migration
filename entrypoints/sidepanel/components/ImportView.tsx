@@ -200,7 +200,6 @@ function AccountSettingsSection({
 }: SectionProps) {
   const [info, setInfo] = useState<ArchiveInfo | null>(null);
   const [summary, setSummary] = useState<AccountSettingsSummary | null>(null);
-  const [recreateFolders, setRecreateFolders] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -223,7 +222,7 @@ function AccountSettingsSection({
         const res = await importAccountSettings(
           storage,
           target,
-          { dryRun, override, recreateFolders },
+          { dryRun, override },
           onEvent,
         );
         if (res.summary) setSummary(res.summary);
@@ -231,7 +230,7 @@ function AccountSettingsSection({
         setRunning(false);
       }
     },
-    [storage, target, override, recreateFolders, onEvent, setRunning],
+    [storage, target, override, onEvent, setRunning],
   );
 
   return (
@@ -246,15 +245,10 @@ function AccountSettingsSection({
       ) : (
         <p className="hint">Reading archive…</p>
       )}
-      <p className="hint">Imports the folder tree + custom fonts (account-level, once).</p>
-      <label title="Recreate the source folder tree on the target (deduped by name). Ownership/sharing stays manual.">
-        <input
-          type="checkbox"
-          checked={recreateFolders}
-          onChange={(e) => setRecreateFolders(e.target.checked)}
-        />{' '}
-        Recreate folders
-      </label>
+      <p className="hint">
+        Imports the folder tree + custom fonts (account-level, once). Folder
+        ownership/sharing stays a manual step.
+      </p>
       <div className="row">
         <button onClick={() => run(true)} disabled={!storage || running}>
           {running ? 'Working…' : 'Dry-run'}
@@ -336,6 +330,8 @@ function BanksSection({
             selected={selected.size}
             shown={shown.length}
             total={banks.length}
+            onSelectAll={() => setSelected((s) => selectAll(s, shown.map((b) => b.id)))}
+            onClear={() => setSelected(new Set())}
           />
           <ul className="course-list">
             {shown.map((b) => (
@@ -346,7 +342,10 @@ function BanksSection({
                     checked={selected.has(b.id)}
                     onChange={() => setSelected((s) => toggle(s, b.id))}
                   />{' '}
-                  {b.title} <span className="hint">({b.questionCount}q)</span>
+                  {b.title}{' '}
+                  <span className="hint">
+                    [{b.questionCount} question{b.questionCount === 1 ? '' : 's'}]
+                  </span>
                 </label>
               </li>
             ))}
@@ -461,6 +460,8 @@ function CoursesSection({
             selected={selected.size}
             shown={shown.length}
             total={courses.length}
+            onSelectAll={() => setSelected((s) => selectAll(s, shown.map((c) => c.id)))}
+            onClear={() => setSelected(new Set())}
           />
           <ul className="course-list">
             {shown.map((c) => (
@@ -505,6 +506,8 @@ function FilterRow({
   selected,
   shown,
   total,
+  onSelectAll,
+  onClear,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -512,6 +515,9 @@ function FilterRow({
   selected: number;
   shown: number;
   total: number;
+  /** Select all currently-visible (filtered) rows. */
+  onSelectAll: () => void;
+  onClear: () => void;
 }) {
   return (
     <>
@@ -532,9 +538,19 @@ function FilterRow({
           color: 'inherit',
         }}
       />
-      <p className="hint">
-        {selected} selected · {value ? `${shown} of ${total} shown` : `${total} total`}
-      </p>
+      <div className="row" style={{ margin: '4px 0' }}>
+        <span className="hint">
+          {selected} selected · {value ? `${shown} of ${total} shown` : `${total} total`}
+        </span>
+        <span style={{ display: 'flex', gap: 6 }}>
+          <button onClick={onSelectAll} disabled={shown === 0}>
+            {value ? `Select ${shown} shown` : 'Select all'}
+          </button>
+          <button onClick={onClear} disabled={selected === 0}>
+            Clear
+          </button>
+        </span>
+      </div>
     </>
   );
 }
@@ -548,6 +564,13 @@ function filterByName<T>(items: T[], name: (t: T) => string, q: string): T[] {
 function toggle(set: Set<string>, id: string): Set<string> {
   const next = new Set(set);
   next.has(id) ? next.delete(id) : next.add(id);
+  return next;
+}
+
+/** Add every id in `ids` (the currently-visible rows) to the selection. */
+function selectAll(set: Set<string>, ids: string[]): Set<string> {
+  const next = new Set(set);
+  for (const id of ids) next.add(id);
   return next;
 }
 
