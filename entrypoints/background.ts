@@ -489,32 +489,6 @@ export default defineBackground(() => {
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
-
-      case 'GRAB_TOKEN': {
-        const tab = await findRiseTab();
-        if (!tab || typeof tab.id !== 'number') {
-          return {
-            type: 'GRAB_TOKEN_RESULT',
-            ok: false,
-            error: 'No open Rise tab — open and log into Rise first.',
-          };
-        }
-        // Read the bearer directly from the `_articulate_rise_` cookie — no
-        // reload, no course navigation. (A plain list-page reload does NOT carry
-        // the bearer; only the course runtime does, which is why reloading alone
-        // never grabbed it.)
-        if (await grabTokenFromCookie()) {
-          return { type: 'GRAB_TOKEN_RESULT', ok: true };
-        }
-        // Fallback: reload so the app re-issues authed requests the observer can
-        // catch (covers a missing/renamed cookie).
-        try {
-          await chrome.tabs.reload(tab.id);
-          return { type: 'GRAB_TOKEN_RESULT', ok: true };
-        } catch (e) {
-          return { type: 'GRAB_TOKEN_RESULT', ok: false, error: (e as Error).message };
-        }
-      }
     }
   }
 

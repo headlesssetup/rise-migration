@@ -438,21 +438,6 @@ export function App() {
     );
   }, [storage, onEvent, addLog]);
 
-  const grabToken = useCallback(async () => {
-    addLog('Grabbing token from the Rise session…');
-    const resp = await rpc({ type: 'GRAB_TOKEN' });
-    if (resp.type === 'GRAB_TOKEN_RESULT' && !resp.ok) {
-      addLog(`Grab token failed: ${resp.error ?? 'unknown error'}`);
-      return;
-    }
-    // Reflect the new token immediately (the poll would catch it within 3s).
-    const st = await rpc({ type: 'GET_SESSION_STATE' });
-    if (st.type === 'SESSION_STATE') {
-      setSession(st.state);
-      addLog(st.state.hasToken ? 'Token captured ✓' : 'Token not found yet — reloading the tab as a fallback…');
-    }
-  }, [addLog]);
-
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
 
@@ -461,7 +446,11 @@ export function App() {
   const setupNeeds = [
     !session?.risePresent && 'open a logged-in Rise tab',
     !storage && 'pick a destination folder',
-    session?.risePresent && !session?.hasToken && 'grab the token',
+    // The token is read from the Rise cookie automatically once a logged-in tab
+    // is found — surfaced as a transient status, not an action.
+    session?.risePresent &&
+      !session?.hasToken &&
+      'capturing the session token… (reload your Rise tab if it doesn’t appear)',
   ].filter(Boolean) as string[];
 
   return (
@@ -499,13 +488,6 @@ export function App() {
               Forget
             </button>
           )}
-          <button
-            onClick={grabToken}
-            disabled={busy || !session?.risePresent}
-            title="Reads the session token from the Rise cookie — no need to open a course or reload"
-          >
-            {session?.hasToken ? 'Token ✓ — re-grab' : 'Grab token'}
-          </button>
         </div>
         {pendingHandle && (
           <p className="hint">
