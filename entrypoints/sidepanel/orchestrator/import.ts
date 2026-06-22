@@ -279,7 +279,10 @@ export async function runImport(
       course,
       assets: entries,
       banksById,
-      author: target?.sub ?? 'unknown',
+      // The current account-local user (the `_articulate_user_id` owner), NOT the
+      // Okta `sub` — same principal the folders API requires. Author of created
+      // lessons/locks; keeps every created resource owned by the live account.
+      author: target?.userId ?? target?.sub ?? 'unknown',
       targetFolderId: opts.targetFolderId ?? 'all',
       recreateBanks: opts.recreateBanks ?? false,
       boundBanks: boundBanks.size > 0 ? boundBanks : undefined,
@@ -979,7 +982,8 @@ export async function importBanks(
 
   // Merge into any previously-imported banks so C sees the full set.
   const bound = await readBankIdMap(storage);
-  const author = target?.sub ?? 'unknown';
+  // Account-local owner (see runImport) — author of the bank lock_data.
+  const author = target?.userId ?? target?.sub ?? 'unknown';
 
   for (const [i, bankId] of bankIds.entries()) {
     const raw = await storage.readQuestionBank(bankId);
