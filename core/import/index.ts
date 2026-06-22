@@ -10,3 +10,4 @@ export * from './executor';
 export * from './guards';
 export * from './fidelity';
 export * from './verify';
+export * from './typefaces';

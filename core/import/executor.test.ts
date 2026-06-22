@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildPlan, type PlanInput } from './plan';
 import { executePlan, type Relay, type RelayResponse } from './executor';
 import { IdMap } from './ids';
+import { parseTypefaces } from './typefaces';
 
 // A deterministic id minter for stable assertions.
 function counterMint(): () => string {
@@ -263,6 +264,71 @@ describe('executePlan — block ordering (batched create)', () => {
     }
   });
 });
+
+describe('executePlan — typography migration', () => {
+  it('recreates a missing custom font and sets the new typeface id on the course', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          bodyTypefaceId: 'src-brand',
+          theme: { themeId: 'organic', bodyTypefaceId: 'src-brand' },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    const sourceTypefaces = parseTypefaces({
+      typefaces: [
+        { id: 'src-brand', name: 'AcmeBrand', default: false, fonts: [{ key: 'rise/fonts/a.woff', style: 'regular', original: 'Acme.woff' }] },
+      ],
+    });
+    const seen: string[] = [];
+    let coverBody: any = null;
+    const relay: Relay = async (spec) => {
+      seen.push(spec.label);
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('FETCH_TYPEFACES'))
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { typefaces: [{ id: 'tgt-lato', name: 'Lato', default: true, fonts: [] }] } }) };
+      if (spec.label.includes('GET_YURL'))
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/fonts/NEW.woff', url: 'https://s3/f', type: 'font/woff', filename: 'NEW.woff' } }) };
+      if (spec.label.includes('CREATE_TYPEFACE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { id: 'NEWTF' } }) };
+      // The theme write is the plain UPDATE_COURSE (NOT UPDATE_COURSE_FIELD_THROTTLE).
+      if (spec.label.endsWith('/UPDATE_COURSE')) { coverBody = JSON.parse(spec.body!).payload; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) {
+        const id = JSON.parse(spec.body!).payload.blocks[0].id;
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) };
+      }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(steps2(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      sourceTypefaces,
+      readFontBytes: async () => ({ base64: 'AAAA', contentType: 'font/woff' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // The font was uploaded + registered, and the course got the NEW typeface id.
+    expect(res.envelopes.some((e) => e.label === 'S3 PUT (font)')).toBe(true);
+    expect(seen.some((s) => s.includes('CREATE_TYPEFACE'))).toBe(true);
+    expect(coverBody.bodyTypefaceId).toBe('NEWTF');
+    expect(coverBody.theme.bodyTypefaceId).toBe('NEWTF');
+  });
+});
+
+function steps2(input: PlanInput) {
+  return buildPlan(input);
+}
 
 describe('executePlan — dry run', () => {
   it('collects every envelope without relaying', async () => {

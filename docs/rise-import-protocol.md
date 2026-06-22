@@ -479,6 +479,45 @@ exist on the target anyway). Don't use `INSERT_BLOCK_TEMPLATE` in the importer.
 
 ---
 
+## 10a. Typography & custom fonts (theming) ✅ captured
+
+**Typeface ids are account-specific** — even built-ins: each account has its own id
+for "Lato". A migrated course's theme references the *source* account's
+`headingTypefaceId`/`bodyTypefaceId`/`uiTypefaceId`, which don't resolve on the
+target → **wrong (default) font**. Two facts from the theming capture:
+
+- **The authoritative typeface ids are TOP-LEVEL on the course**, set via
+  `UPDATE_COURSE {id, headingTypefaceId, bodyTypefaceId, uiTypefaceId, theme}`
+  (the theme object carries its own copies too — set both).
+- **`FETCH_TYPEFACES`** → `{typefaces:[{id, name, default, deleted,
+  fonts:[{key, style, original}]}]}`. Built-ins have `default:true` + keys under
+  `assets/rise/fonts/…` (shared, universal); custom fonts have `rise/fonts/…`
+  keys + an `original` filename.
+
+**Migration algorithm (by NAME, with recreate):**
+1. `FETCH_TYPEFACES` on the **target** → `name → id`.
+2. For each typeface the course uses, look up its **source name** (from the
+   exported `account/typefaces.json`):
+   - target has that name → **reuse the target id** (covers built-ins AND a brand
+     font already uploaded — natural **dedup** across courses/re-runs);
+   - else, custom font missing on target → **recreate**.
+3. **Recreate a custom font:** for each font file, `GET_YURL {assetPath:"fonts/",
+   courseId, filename}` → S3 PUT the `.woff` bytes → then
+   `CREATE_TYPEFACE {name, fonts:{ "typeface-<style>": {id, key, type, filename,
+   url, original, style, status:"complete", progress:100}, … }}` → returns the
+   new **typeface id**. (Font bytes come from the archive's `assets/` via the
+   `account/typefaces.assets.json` key→file map the exporter now writes.)
+4. Remap the theme's typeface ids + send the top-level ids (step above). A font
+   that can't be matched or recreated (no archived bytes) is **flagged** `typeface`.
+
+**Course cover / card image** (the remaining course-level media): upload via the
+normal chain (`GET_YURL {assetPath:"courses/<id>"}` → S3 PUT → `CRUSH_IMAGE`),
+then `UPDATE_COURSE {id, coverImage:{media:{image:{key, crushedKey, dimensions,
+sourcedFrom:"USER", useCrushedKey:false, originalUrl}}}, cardImage:{…|{}}}`.
+Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
+
+---
+
 ## 11. Safe-import gates (required UX, enforced before any write)
 
 1. **Write mode is never the default.** A distinct Import/write-mode entry, separate

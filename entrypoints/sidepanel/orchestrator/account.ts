@@ -93,6 +93,9 @@ export async function fetchAccountExtras(
       if (fontKeys.length) {
         const res = await downloadKeyList(fontKeys, storage, cdnDownload);
         summary.fonts = { written: res.written, deduped: res.deduped, failed: res.failed.length };
+        // Persist the font key→archive-file map so the import can re-upload
+        // custom font bytes by their source key (CREATE_TYPEFACE on the target).
+        await storage.writeFontManifest(JSON.stringify(res.files, null, 2));
       }
       onEvent({
         kind: 'log',

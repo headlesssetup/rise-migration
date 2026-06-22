@@ -55,6 +55,13 @@ export interface Storage {
   writeBlockTemplateInventory(json: string, csv: string): Promise<void>;
   /** Write the raw typefaces response. */
   writeTypefaces(raw: string): Promise<void>;
+  /** Read the raw typefaces response (import: typeface name→id + fonts), or null. */
+  readTypefaces(): Promise<string | null>;
+  /** Write the font key→archive-file map (account/typefaces.assets.json) so the
+   *  import can re-upload custom font bytes by their source key. */
+  writeFontManifest(json: string): Promise<void>;
+  /** Read the font key→archive-file map, or null. */
+  readFontManifest(): Promise<string | null>;
   /** Write the typefaces inventory. */
   writeTypefaceInventory(json: string, csv: string): Promise<void>;
   /** Write the raw Review-360 items response. */

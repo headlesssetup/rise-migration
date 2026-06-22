@@ -256,6 +256,29 @@ export class FileSystemStorage implements Storage {
     await this.writeFile(dir, 'typefaces.json', raw);
   }
 
+  async readTypefaces(): Promise<string | null> {
+    try {
+      const dir = await this.accountDir();
+      return await (await (await dir.getFileHandle('typefaces.json')).getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
+  async writeFontManifest(json: string): Promise<void> {
+    const dir = await this.accountDir();
+    await this.writeFile(dir, 'typefaces.assets.json', json);
+  }
+
+  async readFontManifest(): Promise<string | null> {
+    try {
+      const dir = await this.accountDir();
+      return await (await (await dir.getFileHandle('typefaces.assets.json')).getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
   async writeTypefaceInventory(json: string, csv: string): Promise<void> {
     await this.writeMetaPair('typefaces-inventory', json, csv);
   }

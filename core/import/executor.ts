@@ -14,6 +14,15 @@ import { remapIds, blankUploadedMediaKeys, remapMediaKeys, findForeignMediaKeys 
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
 import { findBankRef, type PlanStep, type PlanInput, type SourceBank } from './plan';
+import {
+  parseTypefaces,
+  targetByName,
+  usedTypefaceIds,
+  resolveTypefaces,
+  buildCreateTypefaceFonts,
+  applyTypefaceIds,
+  type Typeface,
+} from './typefaces';
 
 export interface RelayResponse {
   ok: boolean;
@@ -34,6 +43,12 @@ export interface ExecutorDeps {
   relay: Relay;
   /** Resolve a source media key to its archived bytes (base64) + content-type. */
   readAsset: (sourceKey: string) => Promise<AssetBytes | null>;
+  /** Source account typefaces (parsed from account/typefaces.json), keyed by id.
+   *  When provided, the import migrates fonts (match-by-name + recreate custom);
+   *  otherwise it falls back to a plain theme round-trip. */
+  sourceTypefaces?: Map<string, Typeface>;
+  /** Read a custom font's archived `.woff` bytes by its source key. */
+  readFontBytes?: (fontKey: string) => Promise<AssetBytes | null>;
   ids?: IdMap;
   /** Human-paced gap between writes (no-op in tests). */
   pace?: () => Promise<void>;
@@ -244,12 +259,33 @@ export async function executePlan(
           break;
         }
         case 'set-theme': {
+          const course = (deps.input.course.course ?? {}) as Record<string, unknown>;
           // Theme round-trips verbatim EXCEPT any user-uploaded cover/header key
           // (rise/courses/<srcId>/…) which would be a dead source key on target —
           // blank those (flagged as unsupported-media); built-in cdn/asset theme
           // images are kept as-is.
-          const theme = blankUploadedMediaKeys(deps.input.course.course?.theme ?? {});
-          await send(env.updateCourseTheme(newCourseId, theme), step.kind);
+          const theme = blankUploadedMediaKeys(course.theme ?? {}) as Record<string, unknown>;
+
+          // Typography: typeface ids are account-specific, so match the source's
+          // fonts to the TARGET account by name and recreate any custom font it
+          // lacks — otherwise the course renders with the wrong (default) font.
+          const src = deps.sourceTypefaces;
+          if (src && src.size) {
+            const idMap = await resolveAndRecreateTypefaces(course, src);
+            const applied = applyTypefaceIds(course, theme, idMap);
+            await send(
+              env.updateCourseThemeAndTypefaces({
+                courseId: newCourseId,
+                theme: applied.theme,
+                headingTypefaceId: applied.headingTypefaceId,
+                bodyTypefaceId: applied.bodyTypefaceId,
+                uiTypefaceId: applied.uiTypefaceId,
+              }),
+              step.kind,
+            );
+          } else {
+            await send(env.updateCourseTheme(newCourseId, theme), step.kind);
+          }
           break;
         }
         case 'set-title': {
@@ -573,6 +609,58 @@ export async function executePlan(
       result.error = String(e);
     }
     return result;
+  }
+
+  // Match the course's typefaces to the TARGET account by name (FETCH_TYPEFACES)
+  // and recreate any custom font it lacks (upload .woff files → CREATE_TYPEFACE).
+  // Returns source typeface id → target typeface id.
+  async function resolveAndRecreateTypefaces(
+    course: Record<string, unknown>,
+    source: Map<string, Typeface>,
+  ): Promise<Map<string, string>> {
+    const target = parseTypefaces(payloadOf(await send(env.fetchTypefaces(newCourseId), 'set-theme')));
+    const used = usedTypefaceIds(course);
+    const { idMap, toRecreate, unresolved } = resolveTypefaces(used, source, targetByName(target));
+
+    for (const tf of toRecreate) {
+      const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();
+      for (const f of tf.fonts) {
+        const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
+        const yurl = payloadOf(
+          await send(env.getYurl({ courseId: newCourseId, filename, assetPath: 'fonts/' }), 'set-theme'),
+        );
+        const newKey = dryRun ? `rise/fonts/${mint()}.woff` : String(yurl.key ?? '');
+        const url = String(yurl.url ?? '');
+        const type = String(yurl.type ?? 'font/woff');
+        if (!dryRun) {
+          const bytes = await deps.readFontBytes?.(f.key);
+          if (!bytes) {
+            log(`WARN missing archived font bytes for ${f.key} (skipping)`);
+            continue;
+          }
+          const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: type }));
+          result.envelopes.push({ step: 'set-theme', label: 'S3 PUT (font)' });
+          if (!put.ok) throw new WriteError(`Font S3 PUT failed (HTTP ${put.status})`, 'set-theme', put.text);
+        } else {
+          result.envelopes.push({ step: 'set-theme', label: 'S3 PUT (font)' });
+        }
+        uploaded.set(f.key, { key: newKey, url, type, filename: String(yurl.filename ?? filename) });
+      }
+      if (uploaded.size === 0) {
+        result.flags.push({ kind: 'typeface', detail: `Custom font "${tf.name}" has no archived bytes — provision it manually on the target` });
+        continue;
+      }
+      const cresp = payloadOf(
+        await send(env.createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }), 'set-theme'),
+      );
+      const newId = dryRun ? mint() : String(cresp.id ?? '');
+      if (newId) idMap.set(tf.id, newId);
+      else result.flags.push({ kind: 'typeface', detail: `CREATE_TYPEFACE returned no id for "${tf.name}"` });
+    }
+    for (const u of unresolved) {
+      result.flags.push({ kind: 'typeface', detail: `Typeface ${u} not found on the target — set the font manually` });
+    }
+    return idMap;
   }
 
   async function pollStatus(jobId: string, step: PlanStep['kind']): Promise<void> {

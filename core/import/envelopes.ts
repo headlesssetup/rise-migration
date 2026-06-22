@@ -82,6 +82,61 @@ export function registerJobs(courseId: string, jobs: string[]): WriteSpec {
   return ducks('courses', 'UPDATE_COURSE', { id: courseId, jobs });
 }
 
+/** UPDATE_COURSE with the top-level typeface ids (heading/body/ui) + theme. ✅
+ *  Confirmed in the theming capture: changing fonts sends the typeface ids at
+ *  the TOP LEVEL of the payload (authoritative), not only inside `theme`. Send
+ *  both so the course renders with the intended fonts. */
+export function updateCourseThemeAndTypefaces(args: {
+  courseId: string;
+  theme: unknown;
+  headingTypefaceId?: string;
+  bodyTypefaceId?: string;
+  uiTypefaceId?: string;
+}): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE', {
+    id: args.courseId,
+    ...(args.headingTypefaceId ? { headingTypefaceId: args.headingTypefaceId } : {}),
+    ...(args.bodyTypefaceId ? { bodyTypefaceId: args.bodyTypefaceId } : {}),
+    ...(args.uiTypefaceId ? { uiTypefaceId: args.uiTypefaceId } : {}),
+    theme: args.theme,
+  });
+}
+
+/** UPDATE_COURSE setting a user-uploaded cover/card image (after upload+crush).
+ *  `coverImage`/`cardImage` are `{media:{image:{key,crushedKey,…}}}` or `{}`. */
+export function setCourseImages(args: {
+  courseId: string;
+  coverImage?: unknown;
+  cardImage?: unknown;
+}): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE', {
+    id: args.courseId,
+    ...(args.coverImage !== undefined ? { coverImage: args.coverImage } : {}),
+    ...(args.cardImage !== undefined ? { cardImage: args.cardImage } : {}),
+  });
+}
+
+/** FETCH_TYPEFACES — list the target account's typefaces (id ↔ name) so fonts
+ *  can be matched by name (dedup) instead of by account-specific id. Payload is
+ *  a courseId context (any course on the account works). A read, but it rides
+ *  the same write relay. */
+export function fetchTypefaces(courseId: string): WriteSpec {
+  return ducks('typefaces', 'FETCH_TYPEFACES', courseId);
+}
+
+/** CREATE_TYPEFACE — register a custom font on the target account from uploaded
+ *  `.woff` files. `fonts` is keyed by `typeface-<style>` (regular/bold/italic/…).
+ *  Returns the new server-assigned typeface id. */
+export function createTypeface(args: {
+  name: string;
+  fonts: Record<string, unknown>;
+}): WriteSpec {
+  return ducks('typefaces', 'CREATE_TYPEFACE', {
+    name: args.name,
+    fonts: args.fonts,
+  });
+}
+
 // --- Lessons + locks (protocol §2) ------------------------------------------
 
 export function createLesson(args: {
@@ -179,9 +234,12 @@ export function insertQuestionBankQuestions(payload: {
 export function getYurl(args: {
   courseId: string;
   filename: string;
+  /** Upload namespace. Default `courses/<courseId>` (block/cover media);
+   *  custom fonts use `fonts/` (→ a `rise/fonts/<key>` server key). */
+  assetPath?: string;
 }): WriteSpec {
   return ducks('uploads', 'GET_YURL', {
-    assetPath: `courses/${args.courseId}`,
+    assetPath: args.assetPath ?? `courses/${args.courseId}`,
     courseId: args.courseId,
     filename: args.filename,
   });

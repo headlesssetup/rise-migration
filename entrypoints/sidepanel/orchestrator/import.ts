@@ -16,6 +16,7 @@ import {
   verifyParity,
   parityReportToMarkdown,
   summarizeFlags,
+  parseTypefaces,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
@@ -174,6 +175,21 @@ export async function runImport(
     message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} import → ${target?.name ?? 'unknown target'} (${verdict.reason})`,
   });
 
+  // Account-level typeface migration inputs (load once): the source account's
+  // typefaces + the font key→archive-file map, so the import can match fonts by
+  // name on the target and recreate custom ones.
+  const tfRaw = await storage.readTypefaces();
+  const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map();
+  const fontManifest = await readFontManifest(storage);
+  const readFontBytes = async (fontKey: string) => {
+    const file = fontManifest.get(fontKey);
+    if (!file) return null;
+    const bytes = await storage.readAsset(file.replace(/^assets\//, ''));
+    if (!bytes) return null;
+    const ext = file.split('.').pop() ?? 'woff';
+    return { base64: bytesToBase64(bytes), contentType: contentTypeForExt(ext) };
+  };
+
   for (const [i, courseId] of courseIds.entries()) {
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId });
 
@@ -216,6 +232,8 @@ export async function runImport(
       input,
       relay: relayThroughTab,
       readAsset,
+      sourceTypefaces,
+      readFontBytes,
       ids,
       dryRun: opts.dryRun,
       pace: () => pacedDelay(pacing),
@@ -282,7 +300,33 @@ export async function runImport(
   return { outcomes };
 }
 
+function safeJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Read the font key→archive-file map (account/typefaces.assets.json). */
+async function readFontManifest(storage: Storage): Promise<Map<string, string>> {
+  const raw = await storage.readFontManifest();
+  const m = new Map<string, string>();
+  if (!raw) return m;
+  try {
+    const obj = JSON.parse(raw) as Record<string, string>;
+    for (const [k, v] of Object.entries(obj)) if (typeof v === 'string') m.set(k, v);
+  } catch {
+    /* tolerate a malformed manifest */
+  }
+  return m;
+}
+
 const EXT_CT: Record<string, string> = {
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   png: 'image/png',
