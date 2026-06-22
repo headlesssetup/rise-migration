@@ -48,6 +48,34 @@ import type { Block } from '@/shared/types/rise';
 import { rpc } from '../rpc';
 import { extractItems, unwrap, type ProgressEvent } from './shared';
 
+/**
+ * Force a fresh bearer before a (possibly long) stretch of writes. The held
+ * token is ~15 min and an import is write-quiet, so the webRequest observer
+ * never sees a fresh bearer to capture — we must pull a rotated one ourselves.
+ * Non-mutating (a session refresh + cookie re-read), so it's safe in dry-run too
+ * and makes the dry-run preview reads (FETCH_TYPEFACES) accurate. Best-effort:
+ * on failure we still proceed and let the reactive 401/403 retry catch up.
+ */
+async function refreshToken(
+  onEvent: (e: ProgressEvent) => void,
+  label?: string,
+): Promise<void> {
+  const tag = label ? ` (${label})` : '';
+  try {
+    const resp = await rpc({ type: 'REAUTH' });
+    if (resp.type === 'REAUTH_RESULT' && resp.ok) {
+      const exp = resp.identity?.expiresAt
+        ? new Date(resp.identity.expiresAt).toLocaleTimeString()
+        : 'unknown';
+      onEvent({ kind: 'log', message: `Token refreshed${tag} — valid until ${exp}` });
+    } else {
+      onEvent({ kind: 'log', message: `WARN token refresh failed${tag} — using current session cookie` });
+    }
+  } catch {
+    onEvent({ kind: 'log', message: `WARN token refresh errored${tag} — using current session cookie` });
+  }
+}
+
 /** The Relay the executor uses: one RELAY_WRITE round-trip to the background. */
 const relayThroughTab: Relay = async (spec) => {
   const resp = await rpc({ type: 'RELAY_WRITE', spec });
@@ -229,6 +257,10 @@ export async function runImport(
     message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} import → ${target?.name ?? 'unknown target'} (${verdict.reason})`,
   });
 
+  // Start on a fresh bearer: the panel may have been idle since the token was
+  // last captured, so the very first reads (target fonts) could otherwise 403.
+  await refreshToken(onEvent, 'run start');
+
   // Account-level typeface migration inputs (load once): the source account's
   // typefaces + the font key→archive-file map, so the import can match fonts by
   // name on the target and recreate custom ones.
@@ -262,6 +294,12 @@ export async function runImport(
 
   for (const [i, courseId] of courseIds.entries()) {
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId });
+
+    // Refresh the bearer before EACH course: every course is many paced writes,
+    // and the first ducks call (UPDATE_COURSE_FIELD_THROTTLE / CREATE_LESSON)
+    // 403s on a token that lapsed during the previous course. Per-course refresh
+    // keeps each course starting on a token with the full ~15 min window.
+    await refreshToken(onEvent, `[${i + 1}/${courseIds.length}]`);
 
     const raw = await storage.readCourse(courseId);
     if (!raw) {
@@ -760,6 +798,9 @@ export async function importAccountSettings(
     message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} account settings → ${target?.name ?? 'unknown target'}`,
   });
 
+  // Start on a fresh bearer (idle panels lapse the ~15 min token).
+  await refreshToken(onEvent, 'run start');
+
   // Folders (always included in this step).
   const folderIdMap = await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
 
@@ -970,6 +1011,9 @@ export async function importBanks(
     onEvent({ kind: 'log', message: `BLOCKED: ${verdict.reason}` });
     return { blocked: verdict.reason, outcomes };
   }
+
+  // Start on a fresh bearer (idle panels lapse the ~15 min token).
+  await refreshToken(onEvent, 'run start');
 
   // Merge into any previously-imported banks so C sees the full set.
   const bound = await readBankIdMap(storage);

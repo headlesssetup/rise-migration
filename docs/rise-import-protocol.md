@@ -51,6 +51,16 @@
   cookie** (during an import there's no page traffic for the webRequest observer to
   catch the new bearer), and retry once. Also refresh **proactively** when the held
   token is within ~60s of `exp`, so a long run never trips the 403 at all.
+  ⚠ **Refresh on demand, not only near `exp`.** Observed failure: a DRY-RUN preview
+  succeeded but the LIVE run 403'd on the **first** ducks write of **every** course
+  (`UPDATE_COURSE_FIELD_THROTTLE`, then `CREATE_LESSON … HTTP 403 — body: Forbidden`)
+  right after the cookie-auth `POST /manage/api/content` shell create succeeded — the
+  REST shell create rides first-party cookies, but the bearer had gone stale while the
+  panel sat idle, and the reactive 401/403 retry alone didn't recover it in time. Fix:
+  the panel forces a refresh (`REAUTH`: refresh session → re-read cookie) **at run
+  start AND before each course** (operations A/B/C all refresh at start), so every
+  course begins with the full ~15 min window instead of inheriting the prior course's
+  near-dead token. The reactive retry stays as a backstop.
 - **The websocket carries no document writes.** `conveyor.articulate.com/socket.io`
   is collaboration mirror only (presence + lock broadcast). A single-author importer
   ignores it. (It DOES carry a mirror of each write for live co-editing, but the HTTP
