@@ -369,6 +369,106 @@ describe('buildPlan media + flags', () => {
   });
 });
 
+describe('buildPlan — lesson header media', () => {
+  it('uploads a lesson header image BEFORE update-lesson (not flagged)', () => {
+    const key = 'rise/courses/SRC/hdr.png';
+    const steps = buildPlan(
+      input({
+        assets: [{ key, kind: 'media-image', file: 'assets/h.png', ext: 'png', size: 1024 }],
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              headerImage: { key },
+              items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }],
+            },
+          ],
+        },
+      }),
+    );
+    const kinds = steps.map((s) => s.kind);
+    // header upload exists, and comes BEFORE the lesson's update-lesson
+    expect(kinds).toContain('upload-lesson-media');
+    expect(kinds.indexOf('upload-lesson-media')).toBeLessThan(kinds.indexOf('update-lesson'));
+    // the header key is NOT left as an unsupported-media flag
+    expect(
+      steps.some((s) => s.kind === 'flag-unsupported-media' && (s as { sourceKey: string }).sourceKey === key),
+    ).toBe(false);
+  });
+
+  it('predicts an oversize lesson header as a manual flag (no upload)', () => {
+    const key = 'rise/courses/SRC/huge.gif';
+    const steps = buildPlan(
+      input({
+        assets: [{ key, kind: 'media-image', file: 'assets/g.gif', ext: 'gif', size: 200 * 1024 * 1024 }],
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            { id: 'L1', position: 0, type: 'blocks', title: 'L', headerImage: { key }, items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }] },
+          ],
+        },
+      }),
+    );
+    expect(steps.some((s) => s.kind === 'upload-lesson-media')).toBe(false);
+    expect(
+      steps.some((s) => s.kind === 'flag-unsupported-media' && (s as { sourceKey: string }).sourceKey === key),
+    ).toBe(true);
+  });
+});
+
+describe('buildPlan — oversize block media prediction (dry-run honest)', () => {
+  it('flags an oversize block asset instead of emitting an upload-asset', () => {
+    const key = 'rise/courses/SRC/big.gif';
+    const steps = buildPlan(
+      input({
+        assets: [{ key, kind: 'media-image', file: 'assets/b.gif', ext: 'gif', size: 184 * 1024 * 1024 }],
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              items: [{ id: 'cb1', family: 'image', variant: 'hero', items: [{ id: 'ci1', media: { image: { key } } }] }],
+            },
+          ],
+        },
+      }),
+    );
+    expect(steps.some((s) => s.kind === 'upload-asset' && (s as { sourceKey: string }).sourceKey === key)).toBe(false);
+    expect(
+      steps.some((s) => s.kind === 'flag-unsupported-media' && (s as { sourceKey: string }).sourceKey === key),
+    ).toBe(true);
+  });
+
+  it('still uploads a normal-size block asset', () => {
+    const key = 'rise/courses/SRC/ok.jpg';
+    const steps = buildPlan(
+      input({
+        assets: [{ key, kind: 'media-image', file: 'assets/o.jpg', ext: 'jpg', size: 2 * 1024 * 1024 }],
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              items: [{ id: 'cb1', family: 'image', variant: 'hero', items: [{ id: 'ci1', media: { image: { key } } }] }],
+            },
+          ],
+        },
+      }),
+    );
+    expect(steps.some((s) => s.kind === 'upload-asset' && (s as { sourceKey: string }).sourceKey === key)).toBe(true);
+  });
+});
+
 describe('findBankRef', () => {
   it('reads bank ref from the item', () => {
     const ref = findBankRef({

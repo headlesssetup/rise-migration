@@ -210,6 +210,15 @@ Carry the source lesson's `type`, `icon`, `headerImage`, `description`, `setting
 `media` verbatim (copy-faithful) — only ids/positions are remapped. `bulkUpdateBlocks`
 is sent empty here (blocks are created separately via `CREATE_BLOCKS`).
 
+⚠ **Lesson header / lesson media (uploaded keys).** A `headerImage`/`media` that
+carries an **uploaded** key (`rise/courses/<srcId>/…`) is now re-uploaded like block
+media: the importer runs `GET_YURL → S3 PUT` for the header bytes **before**
+`UPDATE_LESSON` (an `upload-lesson-media` step), then sends the lesson with the key
+**remapped** to the new target key (any un-uploaded/oversize/orphan lesson media is
+blanked so no dead source key survives). Built-in `cdn.…`/`assets/rise/…` header
+images stay as references. The `GET_YURL→S3 PUT` upload is capture-confirmed; the
+`UPDATE_LESSON {headerImage:<new key>}` write shape still wants a live confirmation.
+
 **Lesson edit lock** (collab guard; captured, low-risk to include):
 - `POST …/ducks/rise/locks/PUT_LOCK` `{id:<lessonId>, courseId}` → `{author, session,
   updatedAt, courseId, id, ttl:86400000}` (24h TTL).

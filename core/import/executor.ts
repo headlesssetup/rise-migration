@@ -10,10 +10,16 @@
 
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 import { IdMap, newId } from './ids';
-import { remapIds, blankUploadedMediaKeys, remapMediaKeys, findForeignMediaKeys } from './remap';
+import {
+  remapIds,
+  blankUploadedMediaKeys,
+  blankForeignMediaKeys,
+  remapMediaKeys,
+  findForeignMediaKeys,
+} from './remap';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
-import { findBankRef, type PlanStep, type PlanInput, type SourceBank } from './plan';
+import { findBankRef, MAX_RELAY_BASE64, type PlanStep, type PlanInput, type SourceBank } from './plan';
 import {
   targetByName,
   usedTypefaceIds,
@@ -37,10 +43,9 @@ export interface AssetBytes {
   contentType: string;
 }
 
-/** chrome.runtime messages are capped at 64MiB; the asset's base64 body rides one
- *  (plus envelope overhead), so guard a bit under the limit. Larger assets are
- *  flagged for manual upload rather than crashing the course. */
-const MAX_RELAY_BASE64 = 60 * 1024 * 1024;
+// MAX_RELAY_BASE64 (the 64MiB chrome.runtime message cap, guarded a bit under) is
+// defined in ./plan and shared: the planner predicts overflow from the manifest
+// size; this executor backstops it on the actual base64 length (unknown-size assets).
 
 export interface ExecutorDeps {
   input: PlanInput;
@@ -249,6 +254,56 @@ export async function executePlan(
     }
   }
 
+  // Upload one source asset (block OR lesson media) via the faithful chain:
+  // dedup → size-guard → GET_YURL → S3 PUT → record source→new key in keyMap. A
+  // reused key uploads once; an oversize asset (over the 64MB relay cap that the
+  // planner couldn't predict, e.g. no manifest size) is flagged + blanked
+  // (keyMap → '') so no dead source key survives.
+  async function uploadOne(
+    sourceKey: string,
+    filename: string,
+    stepKind: PlanStep['kind'],
+  ): Promise<void> {
+    if (keyMap.has(sourceKey)) {
+      log(`${pfx()} reuse ${sourceKey} (already uploaded)`);
+      return;
+    }
+    let bytes: AssetBytes | null = null;
+    if (!dryRun) {
+      bytes = await deps.readAsset(sourceKey);
+      if (!bytes) throw new WriteError(`Missing archived bytes for ${sourceKey}`, stepKind);
+      if (bytes.base64.length > MAX_RELAY_BASE64) {
+        const mb = Math.round(bytes.base64.length / (1024 * 1024));
+        log(`${pfx()} WARN ${sourceKey} too large to upload via the extension (~${mb}MB > 64MB message limit) — flagged, attach manually`);
+        result.flags.push({
+          kind: 'unsupported-media',
+          sourceKey,
+          detail: `Asset ~${mb}MB exceeds the 64MB extension message limit — upload it manually in Rise`,
+        });
+        keyMap.set(sourceKey, ''); // blank → no dead source key survives
+        return;
+      }
+    }
+    // Faithful upload (no CRUSH/transcode — the exported bytes are the source of
+    // truth). Every distinct source key is its own upload, so the per-key map
+    // covers them all and the patch/lesson remap swaps each.
+    const yurl = payloadOf(await send(env.getYurl({ courseId: newCourseId, filename }), stepKind));
+    const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}` : String(yurl.key ?? '');
+    const url = String(yurl.url ?? '');
+    const ctype = String(yurl.type ?? 'application/octet-stream');
+    if (!dryRun && (!newKey || !url)) {
+      throw new WriteError('GET_YURL returned no key/url', stepKind, JSON.stringify(yurl));
+    }
+    if (!dryRun && bytes) {
+      const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }));
+      result.envelopes.push({ step: stepKind, label: 'S3 PUT (upload bytes)' });
+      if (!put.ok) throw new WriteError(`S3 PUT failed (HTTP ${put.status})`, stepKind, put.text);
+    } else {
+      result.envelopes.push({ step: stepKind, label: 'S3 PUT (upload bytes)' });
+    }
+    keyMap.set(sourceKey, newKey);
+  }
+
   try {
     let done = 0;
     for (const step of steps) {
@@ -414,10 +469,14 @@ export async function executePlan(
           for (const k of ['headerImage', 'description', 'settings', 'media', 'piles']) {
             if (src && k in src) extra[k] = (src as Record<string, unknown>)[k];
           }
-          // Lesson-level uploaded media (headerImage/media) isn't re-uploaded by
-          // the captured write path — blank those keys (flagged unsupported) so a
-          // dead source key is never written to the target lesson.
-          const safeExtra = blankUploadedMediaKeys(extra) as Record<string, unknown>;
+          // Lesson media (header image / media) uploaded by the preceding
+          // `upload-lesson-media` steps is in keyMap → remap it to the new target
+          // key; anything NOT uploaded (oversize/orphan/none) is blanked so a dead
+          // source key is never written to the target lesson.
+          const safeExtra = blankForeignMediaKeys(
+            remapMediaKeys(extra, keyMap),
+            new Set(newCourseId ? [newCourseId] : []),
+          ) as Record<string, unknown>;
           await send(
             env.updateLesson({
               id: newLessonId,
@@ -540,61 +599,16 @@ export async function executePlan(
           break;
         }
         case 'upload-asset': {
-          // Dedup: a source asset reused across blocks (e.g. a logo) uploads ONCE.
-          // The plan emits an upload step per (block, key), so the SAME source key
-          // can recur — if it's already uploaded, reuse the new key instead of
-          // creating a duplicate copy in the target. (CLAUDE.md: upload once, reuse
-          // the key for all references.)
-          if (keyMap.has(step.sourceKey)) {
-            log(`${pfx()} reuse ${step.sourceKey} (already uploaded)`);
-            break;
-          }
-          // Read bytes FIRST, so we can size-guard before issuing any write. The
-          // bytes ride a chrome.runtime message (base64) which is capped at 64MiB
-          // — a bigger asset can't be relayed, so flag it (don't crash the whole
-          // course) and blank the key so no dead source key survives.
-          let bytes: AssetBytes | null = null;
-          if (!dryRun) {
-            bytes = await deps.readAsset(step.sourceKey);
-            if (!bytes) throw new WriteError(`Missing archived bytes for ${step.sourceKey}`, step.kind);
-            if (bytes.base64.length > MAX_RELAY_BASE64) {
-              const mb = Math.round(bytes.base64.length / (1024 * 1024));
-              log(`${pfx()} WARN ${step.sourceKey} too large to upload via the extension (~${mb}MB > 64MB message limit) — flagged, attach manually`);
-              result.flags.push({
-                kind: 'unsupported-media',
-                sourceKey: step.sourceKey,
-                detail: `Asset ~${mb}MB exceeds the 64MB extension message limit — upload it manually in Rise`,
-              });
-              keyMap.set(step.sourceKey, ''); // blank → no dead source key survives
-              break;
-            }
-          }
-          // Faithful upload: GET_YURL → S3 PUT of the EXACT exported bytes → map
-          // the source key. We do NOT crush images or transcode a/v — the source
-          // asset is the source of truth (Rise already crushed/transcoded it at
-          // author time; re-processing would recompress and drift). Every distinct
-          // source key (original, crushedKey, poster, caption .vtt) is its own
-          // upload step, so the per-key map covers them all and the patch step
-          // swaps each — guaranteeing no source key survives.
-          const yurl = payloadOf(
-            await send(env.getYurl({ courseId: newCourseId, filename: step.filename }), step.kind),
-          );
-          const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}` : String(yurl.key ?? '');
-          const url = String(yurl.url ?? '');
-          const ctype = String(yurl.type ?? 'application/octet-stream');
-          if (!dryRun && (!newKey || !url)) {
-            throw new WriteError('GET_YURL returned no key/url', step.kind, JSON.stringify(yurl));
-          }
-          if (!dryRun && bytes) {
-            const put = await deps.relay(
-              env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }),
-            );
-            result.envelopes.push({ step: step.kind, label: 'S3 PUT (upload bytes)' });
-            if (!put.ok) throw new WriteError(`S3 PUT failed (HTTP ${put.status})`, step.kind, put.text);
-          } else {
-            result.envelopes.push({ step: step.kind, label: 'S3 PUT (upload bytes)' });
-          }
-          keyMap.set(step.sourceKey, newKey);
+          // Dedup + size-guard + faithful upload (shared with lesson media). The
+          // plan emits an upload step per (block, key), so the SAME source key can
+          // recur — uploadOne reuses an already-uploaded key (upload once).
+          await uploadOne(step.sourceKey, step.filename, step.kind);
+          break;
+        }
+        case 'upload-lesson-media': {
+          // Lesson header / media — uploaded BEFORE this lesson's UPDATE_LESSON so
+          // the lesson payload (built in update-lesson) carries the remapped key.
+          await uploadOne(step.sourceKey, step.filename, step.kind);
           break;
         }
         case 'patch-block-media': {
@@ -621,6 +635,7 @@ export async function executePlan(
             sourceBlockId: step.sourceBlockId,
             detail: 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
           });
+          log(`${pfx()} ⚠ FLAG storyline — block ${step.sourceBlockId} needs manual Review 360 attach`);
           break;
         }
         case 'flag-draw-from-bank': {
@@ -630,6 +645,7 @@ export async function executePlan(
             detail:
               'Draw-from-bank block created as an unbound placeholder — attach a question bank manually (bank recreation is off)',
           });
+          log(`${pfx()} ⚠ FLAG draw-from-bank — block ${step.sourceBlockId} (attach a bank manually)`);
           break;
         }
         case 'flag-orphan-media': {
@@ -639,6 +655,7 @@ export async function executePlan(
             sourceKey: step.sourceKey,
             detail: 'Media is 403/deleted at source — block shipped without it',
           });
+          log(`${pfx()} ⚠ FLAG orphan-media — ${step.sourceKey} (deleted at source)`);
           break;
         }
         case 'flag-unsupported-media': {
@@ -647,6 +664,10 @@ export async function executePlan(
             sourceKey: step.sourceKey,
             detail: `Media at ${step.location} has no captured write path — attach manually (not written as a source key)`,
           });
+          // Blank the key so any later remap (block patch / lesson payload / final
+          // rebuild) writes empty media, never a dead source key.
+          keyMap.set(step.sourceKey, '');
+          log(`${pfx()} ⚠ FLAG unsupported-media — ${step.sourceKey} (${step.location})`);
           break;
         }
       }

@@ -15,8 +15,29 @@ export interface AssetEntry {
   /** Archive path `assets/<hash>.<ext>` — absent for orphaned keys. */
   file?: string;
   ext?: string;
+  /** Raw byte size (from the asset manifest) — used to PREDICT the relay-cap
+   *  overflow in the plan (so a dry-run preview flags oversized media too). */
+  size?: number;
   /** 403/404 at source (assets-summary `orphaned`): no bytes to upload. */
   orphaned?: boolean;
+}
+
+/** chrome.runtime messages cap at 64MiB; an asset's base64 body rides one, so we
+ *  guard a bit under. Shared by the PLANNER (predict overflow from the manifest
+ *  size, so dry-run previews the manual flag) and the EXECUTOR (runtime backstop on
+ *  the actual base64 length, for assets whose size the manifest didn't record). */
+export const MAX_RELAY_BASE64 = 60 * 1024 * 1024;
+
+/** Predict whether raw bytes of `size` exceed the relay cap once base64-encoded
+ *  (base64 inflates ~4/3). Unknown/zero size → not predicted (executor backstops). */
+export function exceedsRelayCap(size: number | undefined): boolean {
+  if (typeof size !== 'number' || size <= 0) return false;
+  return Math.ceil(size / 3) * 4 > MAX_RELAY_BASE64;
+}
+
+/** ~MB for an oversize flag message. */
+function approxMb(size: number): number {
+  return Math.round(size / (1024 * 1024));
 }
 
 /** A referenced reusable question bank (from `question-banks/<id>.json`). */
@@ -104,6 +125,16 @@ export type PlanStep =
       sourceBlockId: string;
       sourceKey: string;
       mediaKind: string;
+      filename: string;
+      summary: string;
+    }
+  | {
+      // Lesson-level uploaded media (header image + any lesson `media`) — uploaded
+      // BEFORE the lesson's UPDATE_LESSON so the payload carries the remapped key
+      // instead of blanking it. Same upload chain as block media.
+      kind: 'upload-lesson-media';
+      sourceLessonId: string;
+      sourceKey: string;
       filename: string;
       summary: string;
     }
@@ -335,6 +366,46 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       lessonType: lType === 'section' ? 'section' : null, // type set on update
       summary: `Create lesson "${lTitle}" (${lType})`,
     });
+
+    // Lesson-level media (header image + any lesson `media`) — uploaded BEFORE
+    // UPDATE_LESSON so the lesson payload carries the remapped key instead of a
+    // blank. Same orphan/oversize handling as block media; oversize is PREDICTED
+    // from the manifest size so dry-run previews the manual flag too.
+    const lessonMedia = {
+      headerImage: (lesson as Record<string, unknown>).headerImage,
+      media: (lesson as Record<string, unknown>).media,
+    };
+    for (const ak of collectAssetKeys(lessonMedia, sourceCourseId)) {
+      const entry = assetByKey.get(ak.key);
+      handledKeys.add(ak.key);
+      if (entry?.orphaned || (entry && !entry.file)) {
+        steps.push({
+          kind: 'flag-orphan-media',
+          sourceLessonId,
+          sourceBlockId: '',
+          sourceKey: ak.key,
+          summary: `⚠ Orphaned lesson media (deleted at source): ${ak.key}`,
+        });
+        continue;
+      }
+      if (exceedsRelayCap(entry?.size)) {
+        steps.push({
+          kind: 'flag-unsupported-media',
+          sourceKey: ak.key,
+          location: `lesson "${lTitle}" header/media`,
+          summary: `⚠ Lesson media ~${approxMb(entry!.size!)}MB exceeds the 64MB extension limit — attach manually: ${ak.key}`,
+        });
+        continue;
+      }
+      steps.push({
+        kind: 'upload-lesson-media',
+        sourceLessonId,
+        sourceKey: ak.key,
+        filename: fileBasename(ak.key),
+        summary: `Upload lesson media ${fileBasename(ak.key)}`,
+      });
+    }
+
     steps.push({
       kind: 'update-lesson',
       sourceLessonId,
@@ -425,6 +496,18 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           continue;
         }
         handledKeys.add(ak.key);
+        // Predict the 64MB relay-cap overflow from the manifest size — so a dry-run
+        // flags it too. Oversize keys aren't uploaded; the executor blanks them
+        // (keyMap → '') so no dead source key survives on the block.
+        if (exceedsRelayCap(entry?.size)) {
+          steps.push({
+            kind: 'flag-unsupported-media',
+            sourceKey: ak.key,
+            location: `block ${sourceBlockId}`,
+            summary: `⚠ Media ~${approxMb(entry!.size!)}MB exceeds the 64MB extension limit — attach manually: ${ak.key}`,
+          });
+          continue;
+        }
         steps.push({
           kind: 'upload-asset',
           sourceLessonId,
@@ -484,10 +567,10 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   }
 
-  // Media that isn't on a recreatable block — theme images, lesson header
-  // images, and bank question media. The captured write path doesn't cover
-  // writing these, so flag them (manual) rather than silently shipping a source
-  // key or failing the whole course.
+  // Media that isn't on a recreatable block OR an uploaded lesson header — theme
+  // images and bank question media (lesson headers are handled per-lesson above).
+  // The captured write path doesn't cover these, so flag them (manual) rather than
+  // silently shipping a source key or failing the whole course.
   const flagUnsupported = (doc: unknown, ownerId: string, where: string): void => {
     for (const ak of collectAssetKeys(doc, ownerId)) {
       if (handledKeys.has(ak.key)) continue;
@@ -537,7 +620,7 @@ export function planStats(steps: PlanStep[]): PlanStats {
     banks: count('create-bank'),
     lessons: count('create-lesson'),
     blocks,
-    uploads: count('upload-asset'),
+    uploads: count('upload-asset') + count('upload-lesson-media'),
     storylineFlags: count('flag-storyline'),
     orphanFlags: count('flag-orphan-media'),
     drawFromBank: count('bind-draw-from-bank'),

@@ -612,6 +612,54 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
   });
 });
 
+describe('executePlan — lesson header image', () => {
+  it('uploads the header, remaps it into UPDATE_LESSON, leaves no surviving key', async () => {
+    const key = 'rise/courses/SRC/hdr.png';
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [{ key, kind: 'media-image', file: 'assets/h.png', ext: 'png', size: 4096 }],
+      banksById: new Map(),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            headerImage: { key },
+            items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }],
+          },
+        ],
+      },
+    };
+    let lessonPayload: any = null;
+    let yurlN = 0;
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.png`, url: 'https://s3/h', type: 'image/png' } }) };
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('UPDATE_LESSON')) { lessonPayload = JSON.parse(spec.body!).payload; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/png' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    // The header is set on the lesson and points at the NEW (target) key, not SRC.
+    expect(lessonPayload.headerImage.key).toBe('rise/courses/NEWCOURSE/srv0.png');
+    // No unsupported-media flag for the header (it was uploaded).
+    expect(res.flags.some((f) => f.sourceKey === key)).toBe(false);
+  });
+});
+
 describe('executePlan — dry run', () => {
   it('collects every envelope without relaying', async () => {
     const input = imageCourse();

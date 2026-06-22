@@ -168,6 +168,25 @@ manifest now records `sourceAccount` for the guard; `ImportView` provides the
 write-mode banner, target gate, Source≠Target guard (+ override), dry-run
 preview, and gated live import.
 
+**Recently added (completeness branch):**
+- **Lesson header / lesson media upload** — header images are now uploaded
+  (GET_YURL → S3 PUT) and remapped into `UPDATE_LESSON {headerImage}` instead of
+  being blanked + flagged. Same dedup / no-surviving-key guarantees as block media.
+  ⚠ Capture-verify the `UPDATE_LESSON {headerImage}` write shape on a live run.
+- **Dry-run oversize prediction** — the 64MB relay-cap overflow is now PREDICTED in
+  the plan from the asset manifest `size`, so a dry-run flags oversized media (it no
+  longer surfaced only at live time). The executor keeps a runtime backstop.
+- **Per-flag log lines** — storyline / draw-from-bank / orphan / unsupported-media
+  flags now each log a `[i/N] ⚠ FLAG …` line, so the step counter is contiguous
+  (no more silent gaps).
+
+**TODO (open):**
+- ⏳ **Confirm video thumbnails/posters round-trip.** A multimedia/video block's
+  `poster`/`thumbnail` are `images[.eu].articulate.com` transform URLs wrapping a
+  `rise/courses/{id}/{poster}.jpg` key (protocol §8). Verify the poster image is
+  uploaded + the thumbnail/poster renders on the target after import (the transform
+  URL host/key must resolve on the target plane). Not yet verified on a live run.
+
 **Still TODO in Phase 3:**
 - **Folder recreation** — the folder-create endpoint/payload is **not** in the
   capture; the importer currently places content at the account root and flags

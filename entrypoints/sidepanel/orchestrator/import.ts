@@ -157,11 +157,11 @@ async function readCourseAssets(
   if (!raw) return { entries, fileByKey };
   try {
     const m = JSON.parse(raw) as {
-      assets?: { key: string; kind: string; file: string; ext: string }[];
+      assets?: { key: string; kind: string; file: string; ext: string; size?: number }[];
       failed?: { key: string; status?: number }[];
     };
     for (const a of m.assets ?? []) {
-      entries.push({ key: a.key, kind: a.kind, file: a.file, ext: a.ext });
+      entries.push({ key: a.key, kind: a.kind, file: a.file, ext: a.ext, size: a.size });
       fileByKey.set(a.key, a.file);
     }
     for (const f of m.failed ?? []) {

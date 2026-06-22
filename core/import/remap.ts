@@ -146,6 +146,33 @@ export function remapMediaKeys<T extends Json>(
   return transform(doc) as T;
 }
 
+/** Blank uploaded-media key strings whose owner is NOT a target owner — keeps
+ *  already-remapped (target-owned) keys, blanks leftover SOURCE keys. Used for the
+ *  lesson payload after a header/media upload: `remapMediaKeys` swaps the uploaded
+ *  key to its new (target) key, then this blanks any media that wasn't uploaded so
+ *  a dead source key never survives. CDN/embed strings are left untouched. */
+export function blankForeignMediaKeys<T extends Json>(
+  doc: T,
+  targetOwnerIds: Iterable<string>,
+): T {
+  const targets = new Set(targetOwnerIds);
+  const transform = (node: Json): Json => {
+    if (typeof node === 'string') {
+      const kind = classifyString(node);
+      if (!kind || !kind.startsWith('media-')) return node; // cdn/embed/non-media kept
+      const keys = extractUploadedKeys(node);
+      const keep = keys.length > 0 && keys.every((k) => targets.has(k.split('/')[2] ?? ''));
+      return keep ? node : '';
+    }
+    if (Array.isArray(node)) return node.map(transform);
+    if (!isObject(node)) return node;
+    const out: Record<string, Json> = {};
+    for (const [k, v] of Object.entries(node)) out[k] = transform(v);
+    return out;
+  };
+  return transform(doc) as T;
+}
+
 /** Walk a doc and collect every uploaded media key, keyed by owner id (the 3rd
  *  path segment of `rise/{courses|questionBanks}/<ownerId>/…`). */
 function collectUploadedKeysByOwner(doc: Json): { key: string; ownerId: string }[] {
