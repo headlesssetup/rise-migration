@@ -1168,14 +1168,19 @@ export async function purgeImported(
     }
     await pacedDelay(pacing);
     const sr = await relayThroughTab(softDeleteCourses([id]));
+    if (sr.status === 404) {
+      out.coursesDeleted += 1;
+      onEvent({ kind: 'log', message: `OK   course ${id} already gone (404)` });
+      continue;
+    }
     if (!sr.ok) {
-      // Some half-created shells are "ghost" records that can't be binned
-      // (soft-delete 500s) but may still hard-delete directly. Try that.
+      // A "never-born"/ghost shell can't be binned (soft-delete 500s) — try a
+      // direct hard-delete; a 404 there means it's already gone.
       await pacedDelay(pacing);
       const hr = await relayThroughTab(hardDeleteCourses([id]));
-      if (hr.ok) {
+      if (hr.ok || hr.status === 404) {
         out.coursesDeleted += 1;
-        onEvent({ kind: 'log', message: `OK   hard-deleted course ${id} (direct; soft-delete had 500'd)` });
+        onEvent({ kind: 'log', message: `OK   course ${id} removed (hard-delete HTTP ${hr.status}; soft had 500'd)` });
       } else {
         out.coursesFailed += 1;
         onEvent({ kind: 'log', message: `WARN delete ${id} failed (soft HTTP ${sr.status}, hard HTTP ${hr.status})` });

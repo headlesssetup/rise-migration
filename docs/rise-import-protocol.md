@@ -84,8 +84,8 @@ for bank in banks referenced by draw-from-bank blocks (deduped by id):       # �
 
 # ---- per course ----
 newCourseId = POST /manage/api/content {createBookmark:false, folderId:mapped}  # ref §4.1 -> {id}
+UPDATE_COURSE_FIELD {id, field:"title", value}       # title FIRST — materializes the draft (see ⚠ below)
 UPDATE_COURSE {id:newCourseId, theme}                # theme round-trips verbatim (§7)
-UPDATE_COURSE_FIELD {id, field:"title", value}       # title (and other scalar fields)
 
 for lesson in source.lessons (ASC position):
     {lessonId} = CREATE_LESSON {author, courseId:newCourseId, position, title, type:null}  # §2
@@ -122,6 +122,13 @@ for lesson in source.lessons (ASC position):
 ```
 
 > **Ordering rules that matter (from the capture):**
+> 0. ⚠ **Title before theme — the shell is a DRAFT until its first content write.**
+>    `POST /content` returns a course id, but the course doesn't fully MATERIALIZE
+>    until a content write lands. Confirmed: a run that died at the theme/font step
+>    (a font-upload 403) *before* any `UPDATE_COURSE` left a **"never-born"** course
+>    — `GET_COURSE` 404s on it, yet it still **500s `content/search`** and can't be
+>    soft-deleted (500). So write the **title first** (a cheap `UPDATE_COURSE_FIELD`)
+>    so a later failure leaves a real, deletable course, never a phantom.
 > 1. **Lesson exists → blocks → media.** A media block is first created with its
 >    *default/placeholder* media (or empty), THEN the real asset is uploaded and the
 >    block is patched via `UPDATE_BLOCK_DEBOUNCE`. You cannot upload to a course/lesson

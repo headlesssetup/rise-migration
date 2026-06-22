@@ -46,8 +46,8 @@ describe('buildPlan ordering', () => {
       'create-bank',
       'put-bank',
       'create-course',
-      'set-theme',
       'set-title',
+      'set-theme',
     ]);
     // lesson lifecycle present
     expect(kinds).toContain('create-lesson');

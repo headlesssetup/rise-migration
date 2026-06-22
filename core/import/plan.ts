@@ -264,6 +264,17 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     title,
     summary: `Create course "${title}"`,
   });
+  // Set the title FIRST — the bare POST /content shell is a draft that only
+  // MATERIALIZES on its first content write; doing it before the theme/font step
+  // (which can fail, e.g. a font upload 403) means a failed import leaves a real,
+  // deletable course rather than a "never-born" phantom that 404s on GET_COURSE
+  // yet 500s the dashboard's content list.
+  steps.push({
+    kind: 'set-title',
+    sourceCourseId,
+    title,
+    summary: `Set course title "${title}"`,
+  });
   if (course.theme && typeof course.theme === 'object') {
     steps.push({
       kind: 'set-theme',
@@ -271,12 +282,6 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: 'Apply course theme (verbatim round-trip)',
     });
   }
-  steps.push({
-    kind: 'set-title',
-    sourceCourseId,
-    title,
-    summary: `Set course title "${title}"`,
-  });
 
   // 3. Lessons in ascending position; blocks chained by previousBlockId.
   const ordered = [...lessons].sort(
