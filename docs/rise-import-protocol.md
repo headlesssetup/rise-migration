@@ -561,9 +561,11 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
     folder is born owned — never owner-less. (Sharing with OTHER team members
     stays a manual step.)
 - **Delete (cleanup):**
-  - Course: **`POST /manage/api/content/soft-delete {ids:[…]}`** (captured; 200
-    echoes `{ids}`) — a **batch** soft-delete that moves courses to the bin; empty
-    the bin to remove permanently. ⚠ There is **no `DELETE /content/{id}`** (405).
+  - Course: two captured **batch** steps — **`POST /manage/api/content/soft-delete
+    {ids:[…]}`** moves courses to the bin (200 echoes `{ids}`), then **`POST
+    /manage/api/content/hard-delete {ids:[…]}`** permanently removes them (must be
+    soft-deleted first). The purge chains soft → hard. ⚠ There is **no `DELETE
+    /content/{id}`** (405).
   - Folder: `DELETE /manage/api/folders/{id}` (conventional; not yet capture-
     confirmed). Used by the purge action to undo owner-less folders from a bad run.
   - There are **two roots** (both `isRoot:true`): a **shared** root and a

@@ -379,6 +379,19 @@ export function softDeleteCourses(ids: string[]): WriteSpec {
   };
 }
 
+/** POST /manage/api/content/hard-delete {ids:[…]} — permanently remove courses
+ *  from the bin (captured; 200). Must be soft-deleted first. Batch. The purge
+ *  chains soft-delete → hard-delete so a shell is fully gone (no manual empty). */
+export function hardDeleteCourses(ids: string[]): WriteSpec {
+  return {
+    url: '/manage/api/content/hard-delete',
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+    contentType: 'application/json',
+    label: 'POST /manage/api/content/hard-delete',
+  };
+}
+
 /** PATCH /manage/api/content/{courseId}/move — move a course into a folder. The
  *  body is the folder id as a BARE text/plain string (confirmed in capture). */
 export function moveCourseToFolder(courseId: string, folderId: string): WriteSpec {

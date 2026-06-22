@@ -33,6 +33,7 @@ import {
   createFolder,
   deleteFolder,
   softDeleteCourses,
+  hardDeleteCourses,
   fetchFolders,
   moveCourseToFolder,
   type PlanInput,
@@ -1124,17 +1125,25 @@ export async function purgeImported(
   if (courseIds.length) {
     onEvent({ kind: 'log', message: `Purge: soft-deleting ${courseIds.length} imported course(s)…` });
     if (opts.dryRun) {
-      for (const id of courseIds) onEvent({ kind: 'log', message: `DRY  soft-delete course ${id}` });
+      for (const id of courseIds) onEvent({ kind: 'log', message: `DRY  soft+hard delete course ${id}` });
       out.coursesDeleted = courseIds.length;
     } else {
+      // Two-step: soft-delete → bin, then hard-delete → permanently gone.
       await pacedDelay(pacing);
-      const r = await relayThroughTab(softDeleteCourses(courseIds));
-      if (r.ok) {
-        out.coursesDeleted = courseIds.length;
-        onEvent({ kind: 'log', message: `OK   soft-deleted ${courseIds.length} course(s) → bin (empty the bin to remove permanently)` });
-      } else {
+      const sr = await relayThroughTab(softDeleteCourses(courseIds));
+      if (!sr.ok) {
         out.coursesFailed = courseIds.length;
-        onEvent({ kind: 'log', message: `WARN soft-delete failed (HTTP ${r.status}) — ${r.text?.slice(0, 200) ?? ''}` });
+        onEvent({ kind: 'log', message: `WARN soft-delete failed (HTTP ${sr.status}) — ${sr.text?.slice(0, 200) ?? ''}` });
+      } else {
+        await pacedDelay(pacing);
+        const hr = await relayThroughTab(hardDeleteCourses(courseIds));
+        out.coursesDeleted = courseIds.length;
+        onEvent({
+          kind: 'log',
+          message: hr.ok
+            ? `OK   deleted ${courseIds.length} course(s) (soft + hard)`
+            : `OK   moved ${courseIds.length} course(s) to bin — empty it manually (hard-delete HTTP ${hr.status})`,
+        });
       }
     }
   }
