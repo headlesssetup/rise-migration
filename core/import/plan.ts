@@ -52,6 +52,14 @@ export type PlanStep =
   | { kind: 'set-theme'; sourceCourseId: string; summary: string }
   | { kind: 'set-title'; sourceCourseId: string; title: string; summary: string }
   | {
+      // Upload + set the course's user-uploaded cover / card image (course-level
+      // media, not on a block) via UPDATE_COURSE coverImage/cardImage.
+      kind: 'set-course-images';
+      hasCover: boolean;
+      hasCard: boolean;
+      summary: string;
+    }
+  | {
       kind: 'create-lesson';
       sourceLessonId: string;
       position: number;
@@ -143,6 +151,13 @@ function lessonTitle(l: Lesson): string {
 
 function fileBasename(key: string): string {
   return key.split('/').pop() || 'asset';
+}
+
+/** The uploaded media key of a course cover/card image object
+ *  (`{media:{image:{key}}}`), or null if absent / not a course-bank upload. */
+export function coverCardImageKey(img: unknown): string | null {
+  const k = (img as { media?: { image?: { key?: unknown } } })?.media?.image?.key;
+  return typeof k === 'string' && /^rise\/(?:courses|questionBanks)\//.test(k) ? k : null;
 }
 
 /** Is this block a Storyline / Mighty block (conditional, flagged manual)? */
@@ -394,10 +409,26 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   });
 
-  // Media that isn't on a recreatable block — course cover/card/theme images,
-  // lesson header images, and bank question media. The captured write path
-  // doesn't cover writing these, so flag them (manual) rather than silently
-  // shipping a source key or failing the whole course.
+  // Course cover / card images (user-uploaded) — upload + set via UPDATE_COURSE.
+  // Mark their keys handled so the flagger below skips them.
+  const coverKey = coverCardImageKey(course.coverImage);
+  const cardKey = coverCardImageKey(course.cardImage);
+  if (coverKey || cardKey) {
+    for (const img of [course.coverImage, course.cardImage]) {
+      for (const ak of collectAssetKeys(img, sourceCourseId)) handledKeys.add(ak.key);
+    }
+    steps.push({
+      kind: 'set-course-images',
+      hasCover: !!coverKey,
+      hasCard: !!cardKey,
+      summary: `Set course ${[coverKey && 'cover', cardKey && 'card'].filter(Boolean).join(' + ')} image`,
+    });
+  }
+
+  // Media that isn't on a recreatable block — theme images, lesson header
+  // images, and bank question media. The captured write path doesn't cover
+  // writing these, so flag them (manual) rather than silently shipping a source
+  // key or failing the whole course.
   const flagUnsupported = (doc: unknown, ownerId: string, where: string): void => {
     for (const ak of collectAssetKeys(doc, ownerId)) {
       if (handledKeys.has(ak.key)) continue;

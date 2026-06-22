@@ -220,24 +220,47 @@ describe('buildPlan media + flags', () => {
     expect(steps.some((s) => s.kind === 'upload-asset')).toBe(false);
   });
 
-  it('flags course-level (cover) media as unsupported, not on a block', () => {
+  it('uploads a course cover image (set-course-images), not flag it', () => {
     const steps = buildPlan(
       input({
         assets: [{ key: 'rise/courses/SRC/cover.jpg', kind: 'media-image', file: 'assets/c.jpg' }],
         course: {
-          course: { id: 'SRC', title: 'C', coverImage: { key: 'rise/courses/SRC/cover.jpg' } },
+          course: {
+            id: 'SRC',
+            title: 'C',
+            coverImage: { media: { image: { key: 'rise/courses/SRC/cover.jpg' } } },
+          },
           lessons: [
             { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }] },
           ],
         },
       }),
     );
-    const flag = steps.find((s) => s.kind === 'flag-unsupported-media') as
-      | { sourceKey: string }
+    const sc = steps.find((s) => s.kind === 'set-course-images') as
+      | { hasCover: boolean; hasCard: boolean }
       | undefined;
-    expect(flag?.sourceKey).toBe('rise/courses/SRC/cover.jpg');
-    // not emitted as a block upload
-    expect(steps.some((s) => s.kind === 'upload-asset')).toBe(false);
+    expect(sc?.hasCover).toBe(true);
+    // the cover key is handled, NOT flagged
+    expect(steps.some((s) => s.kind === 'flag-unsupported-media')).toBe(false);
+  });
+
+  it('still flags a theme/header image that is not the cover/card', () => {
+    const steps = buildPlan(
+      input({
+        assets: [{ key: 'rise/courses/SRC/logo.svg', kind: 'media-image', file: 'assets/l.svg' }],
+        course: {
+          course: { id: 'SRC', title: 'C', theme: { logo: 'rise/courses/SRC/logo.svg' } },
+          lessons: [
+            { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }] },
+          ],
+        },
+      }),
+    );
+    expect(
+      steps.some(
+        (s) => s.kind === 'flag-unsupported-media' && (s as { sourceKey: string }).sourceKey === 'rise/courses/SRC/logo.svg',
+      ),
+    ).toBe(true);
   });
 
   it('flags storyline blocks for manual handling', () => {

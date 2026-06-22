@@ -265,6 +265,53 @@ describe('executePlan — block ordering (batched create)', () => {
   });
 });
 
+describe('executePlan — course cover image', () => {
+  it('uploads the cover, CRUSHes it, and sets it via UPDATE_COURSE (no surviving key)', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [{ key: 'rise/courses/SRC/cover.jpg', kind: 'media-image', file: 'assets/c.jpg', ext: 'jpg' }],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          coverImage: {
+            media: { image: { key: 'rise/courses/SRC/cover.jpg', crushedKey: 'rise/courses/SRC/cc.jpg', sourcedFrom: 'USER' } } },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    let coverPayload: any = null;
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/courses/NEWCOURSE/srv.jpg', url: 'https://s3/c', type: 'image/jpeg' } }) };
+      if (spec.label.includes('CRUSH_IMAGE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/courses/NEWCOURSE/srv-crushed.jpg' } }) };
+      if (spec.label.endsWith('/UPDATE_COURSE')) { const p = JSON.parse(spec.body!).payload; if (p.coverImage) coverPayload = p; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    expect(coverPayload).toBeTruthy();
+    // the new cover key was written (source key remapped to the uploaded one)
+    expect(coverPayload.coverImage.media.image.key).toBe('rise/courses/NEWCOURSE/srv.jpg');
+    expect(coverPayload.coverImage.media.image.crushedKey).toBe('rise/courses/NEWCOURSE/srv-crushed.jpg');
+    // and it's not left flagged
+    expect(res.flags.some((f) => f.sourceKey === 'rise/courses/SRC/cover.jpg')).toBe(false);
+  });
+});
+
 describe('executePlan — typography migration', () => {
   it('recreates a missing custom font and sets the new typeface id on the course', async () => {
     const input: PlanInput = {

@@ -288,6 +288,32 @@ export async function executePlan(
           }
           break;
         }
+        case 'set-course-images': {
+          const course = (deps.input.course.course ?? {}) as Record<string, unknown>;
+          const build = async (img: unknown): Promise<unknown | undefined> => {
+            const image = (img as { media?: { image?: Record<string, unknown> } })?.media?.image;
+            const mainKey = typeof image?.key === 'string' ? image.key : '';
+            if (!mainKey || !/^rise\/(?:courses|questionBanks)\//.test(mainKey)) return undefined;
+            const up = await uploadImageAsset(mainKey);
+            if (!up) return undefined;
+            const km = new Map<string, string>([[mainKey, up.key]]);
+            keyMap.set(mainKey, up.key);
+            if (typeof image?.crushedKey === 'string') {
+              km.set(image.crushedKey, up.crushedKey);
+              keyMap.set(image.crushedKey, up.crushedKey);
+            }
+            return remapMediaKeys(img, km);
+          };
+          const coverImage = step.hasCover ? await build(course.coverImage) : undefined;
+          const cardImage = step.hasCard ? await build(course.cardImage) : undefined;
+          if (coverImage !== undefined || cardImage !== undefined) {
+            await send(
+              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage }),
+              step.kind,
+            );
+          }
+          break;
+        }
         case 'set-title': {
           // Best-effort: never abort a whole course import over a cosmetic
           // title/description (confirmed envelope, but flag if it doesn't take).
@@ -661,6 +687,34 @@ export async function executePlan(
       result.flags.push({ kind: 'typeface', detail: `Typeface ${u} not found on the target — set the font manually` });
     }
     return idMap;
+  }
+
+  // Upload an image (cover/card) via the standard chain and CRUSH it; returns the
+  // new key + crushed key. (Shares the GET_YURL→S3 PUT→CRUSH_IMAGE flow.)
+  async function uploadImageAsset(
+    sourceKey: string,
+  ): Promise<{ key: string; crushedKey: string } | null> {
+    const filename = sourceKey.split('/').pop() ?? 'image.jpg';
+    const yurl = payloadOf(await send(env.getYurl({ courseId: newCourseId, filename }), 'set-course-images'));
+    const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}.jpg` : String(yurl.key ?? '');
+    const url = String(yurl.url ?? '');
+    const ctype = String(yurl.type ?? 'image/jpeg');
+    if (!dryRun) {
+      if (!newKey || !url) throw new WriteError('GET_YURL returned no key/url (cover)', 'set-course-images', JSON.stringify(yurl));
+      const bytes = await deps.readAsset(sourceKey);
+      if (!bytes) {
+        log(`WARN missing archived bytes for cover/card ${sourceKey} (skipping)`);
+        return null;
+      }
+      const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }));
+      result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
+      if (!put.ok) throw new WriteError(`Cover S3 PUT failed (HTTP ${put.status})`, 'set-course-images', put.text);
+    } else {
+      result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
+    }
+    const crush = payloadOf(await send(env.crushImage(newCourseId, newKey), 'set-course-images'));
+    const crushedKey = dryRun ? `${newKey}.crushed` : String(crush.key ?? newKey);
+    return { key: newKey, crushedKey };
   }
 
   async function pollStatus(jobId: string, step: PlanStep['kind']): Promise<void> {
