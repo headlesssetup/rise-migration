@@ -448,12 +448,18 @@ export default defineBackground(() => {
           'Typefaces response',
         );
 
-      case 'REVIEW_ITEMS':
+      case 'REVIEW_ITEMS': {
+        // The review API host follows the plane (US api.articulate.com vs EU
+        // api.eu.articulate.com) — pick it from the live tab, else the US host
+        // CORS-fails from an EU session.
+        const reviewTab = await findRiseTab();
+        const eu = planeFromHost(reviewTab?.url) === 'eu';
         return rawResult(
           'reviewItems',
-          buildReviewItemsRequest(),
+          buildReviewItemsRequest(eu),
           'Review items response',
         );
+      }
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };

@@ -26,7 +26,7 @@ import type { Storage } from '@/core/storage/storage';
 import type { BackgroundRequest } from '@/shared/messaging';
 import { cdnDownload } from './assets';
 import { rpc } from '../rpc';
-import type { ProgressEvent } from './shared';
+import { extractItems, type ProgressEvent } from './shared';
 
 export interface AccountExtrasSummary {
   blockTemplates: number;
@@ -37,6 +37,21 @@ export interface AccountExtrasSummary {
 }
 
 /** Fetch a RAW_RESULT export; returns {raw, doc} or null (logging the error). */
+/** A course id valid on the LIVE account (the FETCH_TYPEFACES context). Prefers
+ *  the live library (page 0); falls back to a saved id. */
+async function liveCourseId(storage: Storage): Promise<string | undefined> {
+  try {
+    const resp = await rpc({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+    if (resp.type === 'SEARCH_RESULT' && resp.result.ok) {
+      const id = extractItems(resp.result.data)[0]?.id;
+      if (id) return id;
+    }
+  } catch {
+    /* fall back to a saved id */
+  }
+  return (await storage.listSaved())[0];
+}
+
 async function fetchRaw(
   req: BackgroundRequest,
   label: string,
@@ -77,10 +92,13 @@ export async function fetchAccountExtras(
     onEvent({ kind: 'log', message: `Block templates: ${rows.length} → account/ + _metadata/.` });
   }
 
-  // 2) Typefaces (needs a courseId context) + font files.
-  const courseId = (await storage.listSaved())[0];
+  // 2) Typefaces (needs a courseId context) + font files. The context course
+  // must exist on the LIVE account the tab is on — an archived id from a
+  // different account/plane 404s — so prefer a course from the live library and
+  // only fall back to a saved id.
+  const courseId = await liveCourseId(storage);
   if (!courseId) {
-    onEvent({ kind: 'log', message: 'Typefaces skipped: no saved course for context.' });
+    onEvent({ kind: 'log', message: 'Typefaces skipped: no course available for context.' });
   } else {
     const tf = await fetchRaw({ type: 'FETCH_TYPEFACES', courseId }, 'Typefaces', onEvent);
     if (tf) {
