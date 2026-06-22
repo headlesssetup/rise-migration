@@ -37,6 +37,11 @@ export interface AssetBytes {
   contentType: string;
 }
 
+/** chrome.runtime messages are capped at 64MiB; the asset's base64 body rides one
+ *  (plus envelope overhead), so guard a bit under the limit. Larger assets are
+ *  flagged for manual upload rather than crashing the course. */
+const MAX_RELAY_BASE64 = 60 * 1024 * 1024;
+
 export interface ExecutorDeps {
   input: PlanInput;
   relay: Relay;
@@ -510,6 +515,26 @@ export async function executePlan(
             log(`${pfx()} reuse ${step.sourceKey} (already uploaded)`);
             break;
           }
+          // Read bytes FIRST, so we can size-guard before issuing any write. The
+          // bytes ride a chrome.runtime message (base64) which is capped at 64MiB
+          // — a bigger asset can't be relayed, so flag it (don't crash the whole
+          // course) and blank the key so no dead source key survives.
+          let bytes: AssetBytes | null = null;
+          if (!dryRun) {
+            bytes = await deps.readAsset(step.sourceKey);
+            if (!bytes) throw new WriteError(`Missing archived bytes for ${step.sourceKey}`, step.kind);
+            if (bytes.base64.length > MAX_RELAY_BASE64) {
+              const mb = Math.round(bytes.base64.length / (1024 * 1024));
+              log(`${pfx()} WARN ${step.sourceKey} too large to upload via the extension (~${mb}MB > 64MB message limit) — flagged, attach manually`);
+              result.flags.push({
+                kind: 'unsupported-media',
+                sourceKey: step.sourceKey,
+                detail: `Asset ~${mb}MB exceeds the 64MB extension message limit — upload it manually in Rise`,
+              });
+              keyMap.set(step.sourceKey, ''); // blank → no dead source key survives
+              break;
+            }
+          }
           // Faithful upload: GET_YURL → S3 PUT of the EXACT exported bytes → map
           // the source key. We do NOT crush images or transcode a/v — the source
           // asset is the source of truth (Rise already crushed/transcoded it at
@@ -526,9 +551,7 @@ export async function executePlan(
           if (!dryRun && (!newKey || !url)) {
             throw new WriteError('GET_YURL returned no key/url', step.kind, JSON.stringify(yurl));
           }
-          if (!dryRun) {
-            const bytes = await deps.readAsset(step.sourceKey);
-            if (!bytes) throw new WriteError(`Missing archived bytes for ${step.sourceKey}`, step.kind);
+          if (!dryRun && bytes) {
             const put = await deps.relay(
               env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }),
             );

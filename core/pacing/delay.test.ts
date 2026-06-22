@@ -3,7 +3,7 @@ import { DEFAULT_PACING, nextDelayMs } from './delay';
 
 describe('nextDelayMs', () => {
   it('returns base with zero jitter draw (rng=0.5)', () => {
-    expect(nextDelayMs(DEFAULT_PACING, () => 0.5)).toBe(2000);
+    expect(nextDelayMs(DEFAULT_PACING, () => 0.5)).toBe(1600);
   });
 
   it('applies negative jitter at rng=0', () => {

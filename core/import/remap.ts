@@ -150,10 +150,16 @@ export function remapMediaKeys<T extends Json>(
  *  path segment of `rise/{courses|questionBanks}/<ownerId>/…`). */
 function collectUploadedKeysByOwner(doc: Json): { key: string; ownerId: string }[] {
   const out: { key: string; ownerId: string }[] = [];
-  const walk = (node: Json): void => {
+  // Path-aware so storyline media (under `media.storyline.*`) is recognised as
+  // such even when the key string itself has no telltale extension.
+  const walk = (node: Json, path: string): void => {
     if (typeof node === 'string') {
-      const kind = classifyString(node);
-      if (kind && kind.startsWith('media-')) {
+      const kind = classifyString(node, path);
+      // Storyline keys are EXCLUDED: Storyline/Mighty blocks are recreated as
+      // empty placeholders (media blanked) and their bundles are added out of
+      // band — they're never migrated, so they don't count toward the
+      // "no source key survives" invariant (else every Storyline course fails).
+      if (kind && kind.startsWith('media-') && kind !== 'media-storyline') {
         for (const key of extractUploadedKeys(node)) {
           const ownerId = key.split('/')[2] ?? '';
           out.push({ key, ownerId });
@@ -162,12 +168,12 @@ function collectUploadedKeysByOwner(doc: Json): { key: string; ownerId: string }
       return;
     }
     if (Array.isArray(node)) {
-      node.forEach(walk);
+      node.forEach((child, i) => walk(child, `${path}[${i}]`));
       return;
     }
-    if (isObject(node)) for (const v of Object.values(node)) walk(v);
+    if (isObject(node)) for (const [k, v] of Object.entries(node)) walk(v, `${path}.${k}`);
   };
-  walk(doc);
+  walk(doc, '');
   return out;
 }
 

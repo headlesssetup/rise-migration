@@ -9,7 +9,7 @@ export interface PacingConfig {
   jitterMs: number;
 }
 
-export const DEFAULT_PACING: PacingConfig = { baseMs: 2000, jitterMs: 750 };
+export const DEFAULT_PACING: PacingConfig = { baseMs: 1600, jitterMs: 300 };
 
 /** Compute the next delay (pure; inject `rng` for deterministic tests). */
 export function nextDelayMs(

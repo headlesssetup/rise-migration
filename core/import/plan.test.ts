@@ -52,10 +52,10 @@ describe('buildPlan ordering', () => {
     ]);
     // lesson lifecycle present
     expect(kinds).toContain('create-lesson');
-    expect(kinds).toContain('lock-lesson');
+    expect(kinds).not.toContain('lock-lesson'); // locks skipped (solo import)
     expect(kinds).toContain('create-blocks');
     expect(kinds).toContain('bind-draw-from-bank');
-    expect(kinds).toContain('unlock-lesson');
+    expect(kinds).not.toContain('unlock-lesson'); // never locked → never unlock
     // bind comes after the batched block creation
     expect(kinds.indexOf('bind-draw-from-bank')).toBeGreaterThan(
       kinds.indexOf('create-blocks'),

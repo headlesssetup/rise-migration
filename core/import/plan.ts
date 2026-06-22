@@ -307,15 +307,13 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       icon,
       summary: `Configure lesson "${lTitle}" (type=${lType})`,
     });
-    // A `section` (module header) has no blocks — skip the lock/block churn.
+    // A `section` (module header) has no blocks — skip the block churn.
     const blocks = (lesson.items ?? []) as Block[];
     if (lType === 'section' || blocks.length === 0) return;
 
-    steps.push({
-      kind: 'lock-lesson',
-      sourceLessonId,
-      summary: `Lock lesson "${lTitle}" for editing`,
-    });
+    // No PUT_LOCK/DEL_LOCK: the edit lock is a collaboration guard only; a
+    // single-author import doesn't need it, and skipping it removes two paced
+    // writes per lesson (protocol §2).
 
     // 1. Create ALL blocks in one ordered batch (preserves order).
     steps.push({
@@ -413,12 +411,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         });
       }
     }
-
-    steps.push({
-      kind: 'unlock-lesson',
-      sourceLessonId,
-      summary: `Unlock lesson "${lTitle}"`,
-    });
+    // (no unlock — we never locked)
   });
 
   // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
