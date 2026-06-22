@@ -252,17 +252,7 @@ export function App() {
     if (storage) {
       await storage.writeInventory(inventoryToJson(rows), inventoryToCsv(rows));
       addLog(`Inventory written (${rows.length} rows) → inventory.csv/json.`);
-
-      // Folder structure (course folders now; bank folders after a bank fetch).
-      await fetchFolders(storage, onEvent);
-      const folders = await buildFolders(storage);
-      if (folders.length) {
-        const course = folders.filter((f) => f.source === 'course').length;
-        const bank = folders.filter((f) => f.source === 'bank').length;
-        addLog(
-          `Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`,
-        );
-      }
+      // (Folder tree is exported under Account Data, not here.)
     } else {
       addLog(
         `Inventory built (${rows.length} rows) — connect a folder to save it.`,
@@ -430,11 +420,21 @@ export function App() {
     if (!storage) return;
     setPhase('exporting');
     setProgress(null);
-    addLog('Exporting account data (block templates, typefaces)…');
+    addLog('Exporting account data (folders, block templates, typefaces)…');
+
+    // Folder tree — account-level data, independent of the course listing.
+    await fetchFolders(storage, onEvent);
+    const folders = await buildFolders(storage);
+    if (folders.length) {
+      const course = folders.filter((f) => f.source === 'course').length;
+      const bank = folders.filter((f) => f.source === 'bank').length;
+      addLog(`Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`);
+    }
+
     const s = await fetchAccountExtras(storage, onEvent);
     setPhase('done');
     addLog(
-      `Account data: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
+      `Account data: ${folders.length} folder(s), ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
     );
   }, [storage, onEvent, addLog]);
 

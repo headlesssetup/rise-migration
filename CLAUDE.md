@@ -35,4 +35,5 @@ Rise blocks **round-trip verbatim** — read each block's JSON and write it back
 ## Conventions
 - Asset/cross-ref discovery is a **generic recursive scan** of the full document, not a per-block-type walk.
 - Dedup binaries by content hash: upload once, reuse the key for all references.
+- **Every repeatable action shows `[i/N]` progress.** Any loop that does N units of work (folders, fonts, banks, lessons, courses, blocks, assets, purges, deletes…) logs per-item progress in the same form — e.g. `[3/20 folders] OK created "Name"`, `[12/77 fonts] OK created typeface "X"`, `[1/5] course …`. Never run a long loop that looks frozen; the operator must always see which item N-of-total is in flight.
 - Keep this file under ~200 lines.

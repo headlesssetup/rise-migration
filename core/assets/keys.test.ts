@@ -141,3 +141,43 @@ describe('collectAssetKeys (fixture)', () => {
     for (const k of keys) expect(k.paths.length).toBeGreaterThan(0);
   });
 });
+
+// A real video block (shape from the 2026-06 capture): the video key + its
+// derived poster/thumbnail (images.articulate.com transform URLs wrapping a
+// separate crushed image key) + caption .vtt keys. ALL must be collected so the
+// import re-uploads + remaps them — otherwise the video has no thumbnail/captions.
+describe('collectAssetKeys — video poster + captions', () => {
+  const videoBlock = {
+    family: 'multimedia',
+    variant: 'video',
+    items: [
+      {
+        id: 'cm-item',
+        media: {
+          video: {
+            key: 'rise/courses/SRC/txF-video.mp4',
+            type: 'video',
+            filename: 'txF-video.mp4',
+            poster:
+              'https://images.eu.articulate.com/f:png,w:1920,s:cover,q:65/rise/courses/SRC/chHQR-poster.jpg',
+            thumbnail:
+              'https://images.eu.articulate.com/f:jpg,b:fff,w:100,h:100,s:cover/rise/courses/SRC/chHQR-poster.jpg',
+            captions: [
+              { code: 'pl', name: 'Polish', key: 'rise/courses/SRC/9aR8-cap.vtt' },
+              { code: 'pl', name: 'Polish', key: 'rise/courses/SRC/TuJw-cap.vtt' },
+            ],
+          },
+        },
+      },
+    ],
+  };
+
+  it('collects the video, poster (from the transform URL), and caption keys', () => {
+    const keys = collectAssetKeys(videoBlock, 'SRC');
+    const set = new Set(keys.map((k) => k.key));
+    expect(set).toContain('rise/courses/SRC/txF-video.mp4');
+    expect(set).toContain('rise/courses/SRC/chHQR-poster.jpg'); // poster + thumbnail (deduped)
+    expect(set).toContain('rise/courses/SRC/9aR8-cap.vtt');
+    expect(set).toContain('rise/courses/SRC/TuJw-cap.vtt');
+  });
+});

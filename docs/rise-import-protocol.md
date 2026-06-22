@@ -636,6 +636,43 @@ its own dry-run + live run. They share state through small id-map artifacts unde
   unbound placeholder. If A wasn't run, C falls back to creating folders inline +
   resolving fonts per course (back-compat).
 
+## 10e. Capture additions (2026-06 — `9e532fc5`)
+
+- **Video block** `family:multimedia, variant:video` → `items[].media.video`:
+  ```jsonc
+  { "key":"rise/courses/{id}/{vid}.mp4", "type":"video", "filename":"…",
+    "poster":"https://images[.eu].articulate.com/f:png,w:1920,…/rise/courses/{id}/{poster}.jpg",
+    "thumbnail":"https://images[.eu].articulate.com/f:jpg,w:100,h:100,…/rise/courses/{id}/{poster}.jpg",
+    "captions":[ {"code":"pl","name":"Polish","key":"rise/courses/{id}/{cap}.vtt","isAiGenerated":true}, … ] }
+  ```
+  - `poster`/`thumbnail` are **`images[.eu].articulate.com` transform URLs** wrapping a
+    **separate crushed image key** (`rise/courses/{id}/{poster}.jpg`). The editor makes
+    it by uploading a frame PNG (`GET_YURL`→PUT) then `CRUSH_IMAGE {courseId,
+    original:"…/{frame}.png"}` → `{key:"…/{poster}.jpg"}`.
+  - **Captions** are separate `.vtt` keys (one per language; AI auto-captions add a
+    second). Uploaded via `GET_YURL`→PUT (no crush/transcode).
+  - **Copy-faithful coverage:** the generic scan already collects the video key, the
+    poster key (from inside the transform URL), and every caption `.vtt` key as media,
+    and `remapMediaKeys` swaps them in place (incl. inside the transform URLs). So
+    poster + captions round-trip without per-field code. (Test:
+    `collectAssetKeys — video poster + captions`.)
+  - ⚠ **The captured video upload does NOT transcode** — direct `GET_YURL`→S3 PUT→
+    `UPDATE_BLOCK_DEBOUNCE`, with `media.video.isSkipCrush/skipProcess` editor flags.
+    Our importer currently `TRANSCODE_ASSET`s video; revisit whether transcode is
+    needed (likely only for non-mp4 / large sources).
+- **Microlearning = a course with `type:"onePage"`.** `POST /manage/api/content
+  {createBookmark:false, folderId, type:"onePage"}` → `{id}`. A normal course omits
+  `type` (defaults to a multi-lesson course). Single-lesson in the UI, same API.
+- **Delete a typeface:** `POST …/ducks/rise/typefaces/DELETE_TYPEFACE {id, courseId}`
+  → 200 (echoes the course's remaining typeface ids). Needs a live courseId. (Lets a
+  cleanup/purge remove typefaces this tool created.)
+- **Quiz-bank folders are SEPARATE from course folders.** They live in the
+  `GET /api/rise-authoring/question_banks` response under `private_folders` /
+  `shared_folders` (NOT `GET /manage/api/folders`, which is courses). A bank
+  references one via `folder_id`. We export both trees (merged in
+  folders-inventory); recreating bank folders on import isn't built yet (banks are
+  created at the bank root, `folderId:null`).
+
 ## 11. Safe-import gates (required UX, enforced before any write)
 
 1. **Write mode is never the default.** A distinct Import/write-mode entry, separate

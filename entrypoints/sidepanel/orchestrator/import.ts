@@ -485,22 +485,26 @@ async function setupFolders(
 
   let created = 0;
   let reused = 0;
-  for (const f of toCreate) {
+  const total = toCreate.length;
+  for (const [i, f] of toCreate.entries()) {
+    const pfx = `[${i + 1}/${total} folders]`;
     const parentTarget =
       (f.parentFolderId && map.get(f.parentFolderId)) ||
       (f.folderType === 'private' ? roots.private : roots.shared) ||
       roots.shared ||
       roots.private;
     if (!parentTarget) {
-      onEvent({ kind: 'log', message: `Folder "${f.name}" skipped: no target root` });
+      onEvent({ kind: 'log', message: `${pfx} skipped "${f.name}": no target root` });
       continue;
     }
     const dedupKey = `${parentTarget}|${f.name.toLowerCase()}`;
     let newId = existing.get(dedupKey);
     if (newId) {
       reused += 1;
+      onEvent({ kind: 'log', message: `${pfx} reused "${f.name}"` });
     } else if (dryRun) {
       newId = `dry-folder-${f.id}`;
+      onEvent({ kind: 'log', message: `${pfx} DRY  would create "${f.name}"` });
     } else {
       await pacedDelay(pacing);
       // Create WITH the owner ACL — never leave a folder owner-less.
@@ -508,13 +512,14 @@ async function setupFolders(
         createFolder({ name: f.name, parentFolderId: parentTarget, permissions: owner }),
       );
       if (!r.ok) {
-        onEvent({ kind: 'log', message: `WARN folder "${f.name}" create failed (HTTP ${r.status})` });
+        onEvent({ kind: 'log', message: `${pfx} WARN create "${f.name}" failed (HTTP ${r.status})` });
         continue;
       }
       newId = String((safeJson(r.text) as { id?: string } | null)?.id ?? '');
       if (!newId) continue;
       existing.set(dedupKey, newId);
       created += 1;
+      onEvent({ kind: 'log', message: `${pfx} OK   created "${f.name}"` });
     }
     map.set(f.id, newId);
   }
