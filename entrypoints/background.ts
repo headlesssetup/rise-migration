@@ -517,6 +517,12 @@ export default defineBackground(() => {
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
+
+      case 'REAUTH': {
+        // Force a fresh bearer on demand (panel calls this before each course).
+        const ok = await reauth();
+        return { type: 'REAUTH_RESULT', ok, identity };
+      }
     }
   }
 

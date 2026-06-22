@@ -37,7 +37,12 @@ export type BackgroundRequest =
   // Phase 3 — relay a single WRITE envelope through the live Rise tab. The panel
   // orchestrates the sequence + pacing; the background just performs the fetch
   // (supports POST/PUT/DELETE, JSON or base64 binary bodies, presigned S3 PUT).
-  | { type: 'RELAY_WRITE'; spec: WriteSpec };
+  | { type: 'RELAY_WRITE'; spec: WriteSpec }
+  // Phase 3 — force a fresh bearer NOW (refresh the id.articulate.com session +
+  // re-read the rotated `_articulate_rise_` cookie). The panel calls this before
+  // each course so a long, write-quiet import never starts on a stale token (the
+  // webRequest observer can't catch a fresh bearer when there's no page traffic).
+  | { type: 'REAUTH' };
 
 /** Account-level raw exports that share a {raw, doc} result shape. */
 export type RawKind = 'blockTemplates' | 'typefaces';
@@ -64,7 +69,8 @@ export type BackgroundResponse =
       kind: RawKind;
       result: FetchResult<{ raw: string; doc: unknown }>;
     }
-  | { type: 'WRITE_RESULT'; result: WriteRelayResult };
+  | { type: 'WRITE_RESULT'; result: WriteRelayResult }
+  | { type: 'REAUTH_RESULT'; ok: boolean; identity: Identity | null };
 
 /** Raw outcome of a single relayed write (the executor's Relay consumes this). */
 export interface WriteRelayResult {
