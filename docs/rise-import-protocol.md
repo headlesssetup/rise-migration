@@ -145,11 +145,10 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 >    call, but the capture creates them one-at-a-time; we mirror that (human-paced).
 > 3. **Banks before the blocks that draw from them** (a draw-from-bank block needs the
 >    new bank id). Folders before courses/banks (so `folderId` is the mapped target).
-> 4. **Lessons in SOURCE ARRAY ORDER — NOT sorted by the `position` field.** The
->    `GET_COURSE.lessons[]` array IS the display order; the `position` field does NOT
->    track it (observed: sorting by `position` scrambled a real course). Create
->    lessons in array order with a sequential 0-based slot (idx). The same applies to
->    blocks (already in array order).
+> 4. **Lessons in `course.lessons` ORDER (the ordered id list) — NOT the objects
+>    array order, NOT `position`.** Both were observed to scramble a real course;
+>    `course.lessons` is authoritative (§2). Create in that order with a sequential
+>    0-based slot (idx); `CREATE_LESSON` honors it, so no reorder pass is needed.
 > 5. **NO transcode / NO crush on import.** We upload the EXACT exported asset bytes
 >    (`GET_YURL`→S3 PUT) and remap keys — Rise already crushed/transcoded at author
 >    time, so re-processing only recompresses + drifts. `CRUSH_IMAGE`/`TRANSCODE_ASSET`/
@@ -165,15 +164,19 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 { "author":"auth0|…", "selectedAuthorId":"auth0|…",
   "courseId":"<newCourseId>", "position":5, "title":"remaining types", "type":null }
 ```
-`author`/`selectedAuthorId` = the importing account's user id (read from the session
-identity / `locks` profile). `type` is sent **null** here and set on the follow-up
-`UPDATE_LESSON`. Response returns `payload.course.lessons[]` (the full **ordered** id
-list, server-authoritative) and `payload.lesson.id` — the **server-assigned lessonId**
-(record it old→new). `position` is the 0-based slot; **send a re-indexed sequential
-slot `0,1,2,…` following the SOURCE ARRAY ORDER — NOT the source `position` field.**
-⚠ The `GET_COURSE.lessons[]` array IS the display order; the `position` field does NOT
-track it (a real course had `position` values that, when sorted, scrambled the import).
-Iterate lessons in array order and append (slot == current length).
+`author`/`selectedAuthorId` = the importing account's user id. `type` is sent **null**
+here and set on the follow-up `UPDATE_LESSON`. Response returns `payload.lesson.id` —
+the **server-assigned lessonId** (record it old→new).
+
+⚠ **DISPLAY ORDER = `payload.course.lessons` — an ORDERED ARRAY OF LESSON IDS** on the
+course object (✅ capture-confirmed: `"lessons":["7dqd…","_mAVG…",…]`). This is the
+authoritative order — **NOT** the top-level `lessons[]` objects array order, and **NOT**
+the `position` field (both scrambled a real course). Order the source lesson objects by
+this id list, then **create each at its sequential slot** (`position: 0,1,2,…`).
+✅ **`CREATE_LESSON` honors `position`**, so creating in the right order needs no reorder
+pass. **Fallback (unused):** `courses/UPDATE_LESSON_ORDER {course:{from, lessonId, to,
+courseId}}` reorders one lesson; `lessons/DELETE_LESSON {id, position, courseId}` removes
+one. (For a future cleanup tool — not part of import.)
 
 **`POST …/ducks/rise/lessons/UPDATE_LESSON`** sets the real lesson fields:
 ```jsonc

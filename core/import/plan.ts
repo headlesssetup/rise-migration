@@ -317,10 +317,10 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // NOTE: the theme is applied AFTER the lessons (below) — Rise rejects theming a
   // course that has no lesson yet ("add a lesson before theming").
 
-  // 3. Lessons in SOURCE ARRAY ORDER — that's the display order GET_COURSE
-  // returns. Do NOT sort by the `position` field: it does NOT track display
-  // order (observed: sorting by it scrambles the course). We send a sequential
-  // 0-based slot (idx) so each create is an append in this exact order.
+  // 3. Lessons in DISPLAY ORDER (already applied above via `course.lessons`,
+  // the authoritative ordered id list — §2). CREATE_LESSON honors `position`, so
+  // we send a sequential 0-based slot (idx) and each create appends in this exact
+  // order — no reorder pass needed.
   const ordered = lessons;
   ordered.forEach((lesson, idx) => {
     const sourceLessonId = typeof lesson.id === 'string' ? lesson.id : `lesson-${idx}`;
