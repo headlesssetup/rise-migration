@@ -43,6 +43,11 @@ export interface PlanInput {
    *  placeholders and flagged for manual handling (like Storyline/Mighty) — a
    *  course import does not silently spawn banks in the target account. */
   recreateBanks?: boolean;
+  /** Banks already imported as a separate step (B): source bank id →
+   *  { newBankId, questionIds }. When a draw-from-bank block's bank is here, the
+   *  plan emits a bind step (auto-bind) WITHOUT creating the bank — the bank and
+   *  its question ids already exist on the target. Supersedes `recreateBanks`. */
+  boundBanks?: Map<string, { newBankId: string; questionIds: string[] }>;
 }
 
 export type PlanStep =
@@ -339,8 +344,11 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       }
 
       if (isDrawFromBank(block)) {
-        if (input.recreateBanks) {
-          const { bankId, drawCount, questionDrawType } = findBankRef(block);
+        const { bankId, drawCount, questionDrawType } = findBankRef(block);
+        // Bind when the bank was imported in step B (boundBanks) OR when this run
+        // is recreating banks itself; otherwise leave an unbound placeholder.
+        const isBound = bankId != null && (input.boundBanks?.has(bankId) ?? false);
+        if (isBound || input.recreateBanks) {
           steps.push({
             kind: 'bind-draw-from-bank',
             sourceLessonId,

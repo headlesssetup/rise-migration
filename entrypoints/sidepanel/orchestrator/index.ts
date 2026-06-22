@@ -31,7 +31,17 @@ export { fetchAccountExtras, type AccountExtrasSummary } from './account';
 export {
   runImport,
   readSourceIdentity,
+  readArchiveInfo,
+  importAccountSettings,
+  listLocalBanks,
+  importBanks,
   type ImportOptions,
   type ImportRunResult,
   type CourseImportOutcome,
+  type ArchiveInfo,
+  type AccountSettingsSummary,
+  type AccountSettingsOptions,
+  type LocalBank,
+  type BankImportOutcome,
+  type BankImportOptions,
 } from './import';

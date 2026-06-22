@@ -17,6 +17,15 @@ import {
   parityReportToMarkdown,
   summarizeFlags,
   parseTypefaces,
+  resolveTypefaces,
+  targetByName,
+  buildCreateTypefaceFonts,
+  remapIds,
+  getYurl,
+  s3Put,
+  createTypeface,
+  postBank,
+  putBank,
   parseFolders,
   rootIdsByType,
   orderForCreation,
@@ -224,32 +233,31 @@ export async function runImport(
   // name on the target and recreate custom ones.
   const tfRaw = await storage.readTypefaces();
   const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map();
-  const fontManifest = await readFontManifest(storage);
+  const readFontBytes = makeFontReader(storage, await readFontManifest(storage));
 
   // TARGET account typefaces — fetched once against a *live existing* course.
   // FETCH_TYPEFACES 404s on a just-created course id, so we can't ask the
   // brand-new course; we match fonts by name + dedup recreation against this.
   const targetTypefaces = await fetchTargetTypefaces(onEvent);
 
-  // Account-level folder tree (created once, deduped) + course→folder map.
+  // Cross-step state from the account-settings (A) + banks (B) operations, if
+  // they were run first: folder + typeface id maps, and the imported-bank map for
+  // auto-binding draw-from-bank blocks. (Persisted under `_import/`.)
+  const accountMap = await readAccountIdMap(storage);
+  const boundBanks = await readBankIdMap(storage);
+  // Folders: prefer the map persisted by step A; else create them here when the
+  // caller opted in (back-compat for a one-shot course import without step A).
   const folderIdMap =
-    opts.recreateFolders === false
-      ? new Map<string, string>()
-      : await setupFolders(storage, opts.dryRun, pacing, onEvent);
+    accountMap.folders.size > 0
+      ? accountMap.folders
+      : opts.recreateFolders === false
+        ? new Map<string, string>()
+        : await setupFolders(storage, opts.dryRun, pacing, onEvent);
+  const typefaceSeed = accountMap.typefaces;
+  if (boundBanks.size > 0) {
+    onEvent({ kind: 'log', message: `Auto-binding draw-from-bank to ${boundBanks.size} imported bank(s).` });
+  }
   const courseFolders = await readCourseFolders(storage);
-  const readFontBytes = async (fontKey: string) => {
-    const file = fontManifest.get(fontKey);
-    if (!file) return null;
-    // Fonts live under account/assets/ (new) — fall back to assets/ for archives
-    // exported before the split.
-    const name = file.split('/').pop() ?? file;
-    const bytes = file.startsWith('account/assets/')
-      ? await storage.readAccountAsset(name)
-      : await storage.readAsset(name);
-    if (!bytes) return null;
-    const ext = file.split('.').pop() ?? 'woff';
-    return { base64: bytesToBase64(bytes), contentType: contentTypeForExt(ext) };
-  };
 
   for (const [i, courseId] of courseIds.entries()) {
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId });
@@ -270,6 +278,7 @@ export async function runImport(
       author: target?.sub ?? 'unknown',
       targetFolderId: opts.targetFolderId ?? 'all',
       recreateBanks: opts.recreateBanks ?? false,
+      boundBanks: boundBanks.size > 0 ? boundBanks : undefined,
     };
     const steps = buildPlan(input);
 
@@ -295,6 +304,7 @@ export async function runImport(
       readAsset,
       sourceTypefaces,
       targetTypefaces,
+      typefaceIdMap: typefaceSeed.size > 0 ? typefaceSeed : undefined,
       readFontBytes,
       ids,
       dryRun: opts.dryRun,
@@ -531,4 +541,456 @@ const EXT_CT: Record<string, string> = {
 
 function contentTypeForExt(ext: string): string {
   return EXT_CT[ext.toLowerCase()] ?? 'application/octet-stream';
+}
+
+/** Build the font-bytes reader (font key → archived base64) shared by the
+ *  account-settings font upload and the per-course fallback. */
+function makeFontReader(
+  storage: Storage,
+  fontManifest: Map<string, string>,
+): (fontKey: string) => Promise<{ base64: string; contentType: string } | null> {
+  return async (fontKey: string) => {
+    const file = fontManifest.get(fontKey);
+    if (!file) return null;
+    // Fonts live under account/assets/ (new) — fall back to assets/ for archives
+    // exported before the split.
+    const name = file.split('/').pop() ?? file;
+    const bytes = file.startsWith('account/assets/')
+      ? await storage.readAccountAsset(name)
+      : await storage.readAsset(name);
+    if (!bytes) return null;
+    const ext = file.split('.').pop() ?? 'woff';
+    return { base64: bytesToBase64(bytes), contentType: contentTypeForExt(ext) };
+  };
+}
+
+function payloadOf(text: string): Record<string, unknown> {
+  try {
+    const o = JSON.parse(text) as Record<string, unknown>;
+    const p = o.payload;
+    return p && typeof p === 'object' ? (p as Record<string, unknown>) : o;
+  } catch {
+    return {};
+  }
+}
+
+/** A course id valid on the LIVE target account — the context GET_YURL/CREATE_*
+ *  need (a just-created course 404s). Page-0 of the target library. */
+async function liveTargetCourseId(): Promise<string | undefined> {
+  try {
+    const resp = await rpc({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+    if (resp.type === 'SEARCH_RESULT' && resp.result.ok) {
+      return extractItems(resp.result.data)[0]?.id;
+    }
+  } catch {
+    /* none */
+  }
+  return undefined;
+}
+
+// --- Cross-step id maps (persisted under `_import/`, shared by A → B → C) ------
+
+interface AccountIdMap {
+  folders: Map<string, string>;
+  typefaces: Map<string, string>;
+}
+
+async function writeAccountIdMap(
+  storage: Storage,
+  folders: Map<string, string>,
+  typefaces: Map<string, string>,
+): Promise<void> {
+  await storage.writeImportArtifact(
+    'account.idmap.json',
+    JSON.stringify(
+      { folders: Object.fromEntries(folders), typefaces: Object.fromEntries(typefaces) },
+      null,
+      2,
+    ),
+  );
+}
+
+async function readAccountIdMap(storage: Storage): Promise<AccountIdMap> {
+  const raw = await storage.readImportArtifact('account.idmap.json');
+  const empty = { folders: new Map<string, string>(), typefaces: new Map<string, string>() };
+  if (!raw) return empty;
+  try {
+    const o = JSON.parse(raw) as { folders?: Record<string, string>; typefaces?: Record<string, string> };
+    return {
+      folders: new Map(Object.entries(o.folders ?? {})),
+      typefaces: new Map(Object.entries(o.typefaces ?? {})),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/** Imported question banks: source bank id → { newBankId, questionIds }. */
+export type BoundBankMap = Map<string, { newBankId: string; questionIds: string[] }>;
+
+async function writeBankIdMap(storage: Storage, banks: BoundBankMap): Promise<void> {
+  await storage.writeImportArtifact(
+    'banks.idmap.json',
+    JSON.stringify(Object.fromEntries(banks), null, 2),
+  );
+}
+
+async function readBankIdMap(storage: Storage): Promise<BoundBankMap> {
+  const raw = await storage.readImportArtifact('banks.idmap.json');
+  const out: BoundBankMap = new Map();
+  if (!raw) return out;
+  try {
+    const o = JSON.parse(raw) as Record<string, { newBankId?: string; questionIds?: string[] }>;
+    for (const [src, v] of Object.entries(o)) {
+      if (v && typeof v.newBankId === 'string') {
+        out.set(src, { newBankId: v.newBankId, questionIds: Array.isArray(v.questionIds) ? v.questionIds : [] });
+      }
+    }
+  } catch {
+    /* tolerate */
+  }
+  return out;
+}
+
+// --- A) Account settings: brief info + folders + custom fonts -----------------
+
+export interface ArchiveInfo {
+  /** Source account display name (from the manifest), if recorded. */
+  sourceName?: string;
+  courses: number;
+  banks: number;
+  folders: number;
+  /** Custom (non-built-in) typefaces in the account archive. */
+  customFonts: number;
+  totalFonts: number;
+}
+
+/** A brief read-only summary of what the archive holds (for the A info panel). */
+export async function readArchiveInfo(storage: Storage): Promise<ArchiveInfo> {
+  const source = await readSourceIdentity(storage);
+  let courses = 0;
+  const manifestRaw = await storage.readManifest();
+  if (manifestRaw) {
+    try {
+      const m = JSON.parse(manifestRaw) as { courses?: unknown[] };
+      if (Array.isArray(m.courses)) courses = m.courses.length;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (courses === 0) courses = (await storage.listSaved()).length;
+
+  const banks = (await storage.listSavedBanks()).length;
+
+  let folders = 0;
+  const foldersRaw = await storage.readFolders();
+  if (foldersRaw) folders = orderForCreation(parseFolders(safeJson(foldersRaw))).length;
+
+  const tfRaw = await storage.readTypefaces();
+  const typefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map<string, Typeface>();
+  let customFonts = 0;
+  for (const tf of typefaces.values()) if (!isCustomFontBuiltin(tf)) customFonts += 1;
+
+  return {
+    sourceName: source?.name ?? source?.sub ?? undefined,
+    courses,
+    banks,
+    folders,
+    customFonts,
+    totalFonts: typefaces.size,
+  };
+}
+
+// A typeface is "custom" (uploadable) when it isn't a shared built-in.
+function isCustomFontBuiltin(tf: Typeface): boolean {
+  return tf.isDefault || tf.fonts.every((f) => f.key.startsWith('assets/'));
+}
+
+export interface AccountSettingsSummary {
+  folders: { mapped: number };
+  fonts: { matched: number; created: number; unresolved: number; mapped: number };
+}
+
+export interface AccountSettingsOptions {
+  dryRun: boolean;
+  override?: boolean;
+  pacing?: PacingConfig;
+  /** Recreate the folder tree (default on). */
+  recreateFolders?: boolean;
+}
+
+/**
+ * Operation A — import account-level settings: the folder tree + custom fonts.
+ * Persists the folder + typeface id maps under `_import/account.idmap.json` so a
+ * later course import (C) places courses + applies fonts without redoing this.
+ */
+export async function importAccountSettings(
+  storage: Storage,
+  target: AccountIdentity | undefined,
+  opts: AccountSettingsOptions,
+  onEvent: (e: ProgressEvent) => void,
+): Promise<{ blocked?: string; summary?: AccountSettingsSummary }> {
+  const pacing = opts.pacing ?? DEFAULT_PACING;
+  const source = await readSourceIdentity(storage);
+  const verdict = checkSourceNotTarget(source, target, opts.override);
+  if (!verdict.ok && !opts.dryRun) {
+    onEvent({ kind: 'log', message: `BLOCKED: ${verdict.reason}` });
+    return { blocked: verdict.reason };
+  }
+  onEvent({
+    kind: 'log',
+    message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} account settings → ${target?.name ?? 'unknown target'}`,
+  });
+
+  // Folders.
+  const folderIdMap =
+    opts.recreateFolders === false
+      ? new Map<string, string>()
+      : await setupFolders(storage, opts.dryRun, pacing, onEvent);
+
+  // Custom fonts (uploaded once, account-level).
+  const tfRaw = await storage.readTypefaces();
+  const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map<string, Typeface>();
+  const targetTypefaces = await fetchTargetTypefaces(onEvent);
+  const readFontBytes = makeFontReader(storage, await readFontManifest(storage));
+  const fonts = await importAccountFonts({
+    sourceTypefaces,
+    targetTypefaces,
+    readFontBytes,
+    dryRun: opts.dryRun,
+    pacing,
+    onEvent,
+  });
+
+  // Persist for B/C (and re-runs).
+  await writeAccountIdMap(storage, folderIdMap, fonts.idMap);
+
+  const summary: AccountSettingsSummary = {
+    folders: { mapped: folderIdMap.size },
+    fonts: { matched: fonts.matched, created: fonts.created, unresolved: fonts.unresolved, mapped: fonts.idMap.size },
+  };
+  onEvent({
+    kind: 'log',
+    message: `Account settings ${opts.dryRun ? 'planned' : 'imported'}: ${summary.folders.mapped} folder(s) mapped; fonts — ${fonts.matched} matched, ${fonts.created} created, ${fonts.unresolved} unresolved.`,
+  });
+  return { summary };
+}
+
+/** Upload + register the account's custom fonts (match-by-name dedup; recreate
+ *  the rest). Returns source typeface id → target id for ALL resolved fonts. */
+async function importAccountFonts(args: {
+  sourceTypefaces: Map<string, Typeface>;
+  targetTypefaces: Map<string, Typeface>;
+  readFontBytes: (k: string) => Promise<{ base64: string; contentType: string } | null>;
+  dryRun: boolean;
+  pacing: PacingConfig;
+  onEvent: (e: ProgressEvent) => void;
+}): Promise<{ idMap: Map<string, string>; matched: number; created: number; unresolved: number }> {
+  const { sourceTypefaces, targetTypefaces, readFontBytes, dryRun, pacing, onEvent } = args;
+  const allIds = [...sourceTypefaces.keys()];
+  const { idMap, toRecreate, unresolved } = resolveTypefaces(
+    allIds,
+    sourceTypefaces,
+    targetByName(targetTypefaces),
+  );
+  const matched = idMap.size;
+  if (toRecreate.length === 0) {
+    return { idMap, matched, created: 0, unresolved: unresolved.length };
+  }
+
+  const courseId = (await liveTargetCourseId()) ?? 'dry-course';
+  let n = 0;
+  const mint = () => `gen${(++n).toString(36)}${Date.now().toString(36)}`;
+  let created = 0;
+  for (const tf of toRecreate) {
+    const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();
+    for (const f of tf.fonts) {
+      const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
+      if (!dryRun) await pacedDelay(pacing);
+      const yresp = await relayThroughTab(getYurl({ courseId, filename, assetPath: 'fonts/' }));
+      const yurl = payloadOf(yresp.text);
+      const newKey = dryRun ? `rise/fonts/${mint()}.woff` : String(yurl.key ?? '');
+      const url = String(yurl.url ?? '');
+      const type = String(yurl.type ?? 'font/woff');
+      if (!dryRun) {
+        const bytes = await readFontBytes(f.key);
+        if (!bytes) {
+          onEvent({ kind: 'log', message: `WARN missing archived font bytes for ${f.key} (skipping)` });
+          continue;
+        }
+        const put = await relayThroughTab(s3Put({ url, base64Body: bytes.base64, contentType: type }));
+        if (!put.ok) {
+          onEvent({ kind: 'log', message: `WARN font S3 PUT failed for "${tf.name}" (HTTP ${put.status})` });
+          continue;
+        }
+      }
+      uploaded.set(f.key, { key: newKey, url, type, filename: String(yurl.filename ?? filename) });
+    }
+    if (uploaded.size === 0) {
+      onEvent({ kind: 'log', message: `WARN custom font "${tf.name}" has no archived bytes — provision manually` });
+      continue;
+    }
+    if (!dryRun) await pacedDelay(pacing);
+    const cresp = payloadOf(
+      (await relayThroughTab(createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }))).text,
+    );
+    const newId = dryRun ? `dry-tf-${mint()}` : String(cresp.id ?? '');
+    if (newId) {
+      idMap.set(tf.id, newId);
+      created += 1;
+    } else {
+      onEvent({ kind: 'log', message: `WARN CREATE_TYPEFACE returned no id for "${tf.name}"` });
+    }
+  }
+  return { idMap, matched, created, unresolved: unresolved.length };
+}
+
+// --- B) Question banks: list + standalone import ------------------------------
+
+export interface LocalBank {
+  id: string;
+  title: string;
+  questionCount: number;
+}
+
+/** List the question banks saved locally (id + title + question count) for the
+ *  selectable B list. Titles come from the saved bank index when present. */
+export async function listLocalBanks(storage: Storage): Promise<LocalBank[]> {
+  const titleById = new Map<string, string>();
+  const indexRaw = await storage.readBankIndex();
+  if (indexRaw) {
+    try {
+      const doc = JSON.parse(indexRaw) as unknown;
+      const arr = Array.isArray(doc)
+        ? doc
+        : (((doc as Record<string, unknown>).items as unknown[]) ??
+           ((doc as Record<string, unknown>).questionBanks as unknown[]) ??
+           Object.values(doc as Record<string, unknown>));
+      for (const it of (arr ?? []) as Record<string, unknown>[]) {
+        if (it && typeof it.id === 'string' && typeof it.title === 'string') {
+          titleById.set(it.id, it.title);
+        }
+      }
+    } catch {
+      /* tolerate */
+    }
+  }
+  const ids = await storage.listSavedBanks();
+  const out: LocalBank[] = [];
+  for (const id of ids) {
+    let questionCount = 0;
+    const raw = await storage.readQuestionBank(id);
+    if (raw) {
+      try {
+        const b = JSON.parse(raw) as SourceBank;
+        questionCount = Array.isArray(b.questions) ? b.questions.length : 0;
+      } catch {
+        /* tolerate */
+      }
+    }
+    out.push({ id, title: titleById.get(id) ?? id, questionCount });
+  }
+  return out;
+}
+
+export interface BankImportOutcome {
+  sourceBankId: string;
+  title: string;
+  newBankId?: string;
+  questionCount: number;
+  ok: boolean;
+  error?: string;
+}
+
+export interface BankImportOptions {
+  dryRun: boolean;
+  override?: boolean;
+  pacing?: PacingConfig;
+}
+
+/**
+ * Operation B — import selected question banks as standalone resources. Creates
+ * each bank (POST → PUT questions, copy-faithful with regenerated ids) and
+ * persists source bank id → { newBankId, questionIds } so course import (C)
+ * auto-binds draw-from-bank blocks. (Bank-question media is not re-uploaded — it
+ * stays flagged, consistent with the course path.)
+ */
+export async function importBanks(
+  storage: Storage,
+  target: AccountIdentity | undefined,
+  bankIds: string[],
+  opts: BankImportOptions,
+  onEvent: (e: ProgressEvent) => void,
+): Promise<{ blocked?: string; outcomes: BankImportOutcome[] }> {
+  const pacing = opts.pacing ?? DEFAULT_PACING;
+  const outcomes: BankImportOutcome[] = [];
+
+  const source = await readSourceIdentity(storage);
+  const verdict = checkSourceNotTarget(source, target, opts.override);
+  if (!verdict.ok && !opts.dryRun) {
+    onEvent({ kind: 'log', message: `BLOCKED: ${verdict.reason}` });
+    return { blocked: verdict.reason, outcomes };
+  }
+
+  // Merge into any previously-imported banks so C sees the full set.
+  const bound = await readBankIdMap(storage);
+  const author = target?.sub ?? 'unknown';
+
+  for (const [i, bankId] of bankIds.entries()) {
+    const raw = await storage.readQuestionBank(bankId);
+    if (!raw) {
+      onEvent({ kind: 'log', message: `Skipped bank (not in archive): ${bankId}` });
+      continue;
+    }
+    let bank: SourceBank;
+    try {
+      bank = JSON.parse(raw) as SourceBank;
+    } catch {
+      outcomes.push({ sourceBankId: bankId, title: bankId, questionCount: 0, ok: false, error: 'unreadable bank JSON' });
+      continue;
+    }
+    const title = bank.title ?? bankId;
+    const qCount = Array.isArray(bank.questions) ? bank.questions.length : 0;
+    onEvent({ kind: 'log', message: `[${i + 1}/${bankIds.length}] Bank "${title}" (${qCount} question(s))` });
+
+    // Regenerate question ids (copy-faithful) so the target bank owns fresh ids.
+    const ids = new IdMap();
+    const questions = remapIds(bank.questions ?? [], ids) as Array<{ id?: string }>;
+    const questionIds = questions.map((q) => String(q.id ?? '')).filter(Boolean);
+
+    try {
+      let newBankId: string;
+      if (opts.dryRun) {
+        newBankId = `dry-bank-${bankId}`;
+      } else {
+        await pacedDelay(pacing);
+        const cresp = await relayThroughTab(postBank({ folderId: null, title }));
+        if (!cresp.ok) throw new Error(`create failed (HTTP ${cresp.status})`);
+        newBankId = String((safeJson(cresp.text) as { id?: string } | null)?.id ?? '');
+        if (!newBankId) throw new Error('create returned no id');
+
+        await pacedDelay(pacing);
+        const presp = await relayThroughTab(
+          putBank({
+            bankId: newBankId,
+            questions: questions as unknown[],
+            session: `${Date.now()}`,
+            lockData: { user_id: author, staff: false, content_team_admin: false },
+          }),
+        );
+        if (!presp.ok) throw new Error(`write questions failed (HTTP ${presp.status})`);
+      }
+      bound.set(bankId, { newBankId, questionIds });
+      outcomes.push({ sourceBankId: bankId, title, newBankId, questionCount: qCount, ok: true });
+      onEvent({ kind: 'log', message: `  ${opts.dryRun ? 'planned' : 'OK'} → bank ${newBankId}` });
+    } catch (e) {
+      outcomes.push({ sourceBankId: bankId, title, questionCount: qCount, ok: false, error: (e as Error).message });
+      onEvent({ kind: 'log', message: `  FAILED: ${(e as Error).message}` });
+    }
+    if (i < bankIds.length - 1) await pacedDelay(pacing);
+  }
+
+  // Persist the merged map (skip in dry-run so a preview never alters state).
+  if (!opts.dryRun) await writeBankIdMap(storage, bound);
+  return { outcomes };
 }

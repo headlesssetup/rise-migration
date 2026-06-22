@@ -51,6 +51,11 @@ export interface ExecutorDeps {
    *  We can't FETCH_TYPEFACES on the brand-new course (404 until it settles),
    *  so this must be pre-fetched against an existing target course. */
   targetTypefaces?: Map<string, Typeface>;
+  /** source typeface id → target typeface id, pre-resolved by the account-settings
+   *  step (A): all fonts already matched-by-name + custom ones recreated. When a
+   *  course's typeface id is seeded here, set-theme reuses it (no per-course font
+   *  upload); ids NOT seeded fall back to in-loop resolve/recreate. */
+  typefaceIdMap?: Map<string, string>;
   /** Read a custom font's archived `.woff` bytes by its source key. */
   readFontBytes?: (fontKey: string) => Promise<AssetBytes | null>;
   ids?: IdMap;
@@ -274,8 +279,8 @@ export async function executePlan(
           // fonts to the TARGET account by name and recreate any custom font it
           // lacks — otherwise the course renders with the wrong (default) font.
           const src = deps.sourceTypefaces;
-          if (src && src.size) {
-            const idMap = await resolveAndRecreateTypefaces(course, src);
+          if ((src && src.size) || (deps.typefaceIdMap && deps.typefaceIdMap.size)) {
+            const idMap = await resolveAndRecreateTypefaces(course, src ?? new Map());
             const applied = applyTypefaceIds(course, theme, idMap);
             await send(
               env.updateCourseThemeAndTypefaces({
@@ -465,12 +470,15 @@ export async function executePlan(
             });
             throw new WriteError('draw-from-bank block missing a bank reference', step.kind);
           }
-          const newBankId = ids.get(step.sourceBankId);
+          // Bank may have been imported in step B (boundBanks) or created in this
+          // same run (ids/bankQuestionIds). Prefer the pre-imported one.
+          const bound = deps.input.boundBanks?.get(step.sourceBankId);
+          const newBankId = bound?.newBankId ?? ids.get(step.sourceBankId);
           if (!newBankId) throw new WriteError('bind before bank create', step.kind);
           const meta = blockMeta.get(step.sourceBlockId);
           const newLessonId = ids.get(step.sourceLessonId)!;
           const pendingItemId = mint();
-          const questionList = bankQuestionIds.get(step.sourceBankId) ?? [];
+          const questionList = bound?.questionIds ?? bankQuestionIds.get(step.sourceBankId) ?? [];
           await send(
             env.insertQuestionBankQuestions({
               lesson: { id: newLessonId, courseId: newCourseId },
@@ -651,8 +659,13 @@ export async function executePlan(
     // Target typefaces are pre-fetched by the orchestrator against a live
     // existing course — FETCH_TYPEFACES 404s on a just-created course id.
     const target = deps.targetTypefaces ?? new Map<string, Typeface>();
+    // Seed from the account-settings step (A): ids it already resolved/created
+    // are reused as-is; only ids it didn't cover go through resolve/recreate.
+    const seed = deps.typefaceIdMap ?? new Map<string, string>();
     const used = usedTypefaceIds(course);
-    const { idMap, toRecreate, unresolved } = resolveTypefaces(used, source, targetByName(target));
+    const unseeded = used.filter((id) => !seed.has(id));
+    const { idMap, toRecreate, unresolved } = resolveTypefaces(unseeded, source, targetByName(target));
+    for (const [k, v] of seed) idMap.set(k, v);
 
     for (const tf of toRecreate) {
       const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();

@@ -575,6 +575,28 @@ Recreation (optional, lower priority): recreate the groups (`POST`), then for
 each bookmarked course create/move a bookmark referencing the **new** course id.
 User-scoped and dashboard-only — migrate after folders if wanted.
 
+## 10d. Operation decomposition (A → B → C) + cross-step id maps
+
+The import UI is split into **three independent, ordered operations**, each with
+its own dry-run + live run. They share state through small id-map artifacts under
+`_import/` so they can run in sequence (even across sessions) without redoing work:
+
+- **A — Account settings:** folder tree (§10b) + custom fonts (§10a), account-level.
+  Persists `_import/account.idmap.json` = `{ folders: {srcFolderId: tgtFolderId},
+  typefaces: {srcTypefaceId: tgtTypefaceId} }`. Fonts are matched-by-name +
+  recreated **once** (a typeface is an account resource — not per course).
+- **B — Question banks:** create selected banks standalone (`POST` bank → `PUT`
+  questions, copy-faithful with regenerated ids). Persists
+  `_import/banks.idmap.json` = `{ srcBankId: { newBankId, questionIds:[…new ids…] } }`
+  (merged across runs). Bank-question media stays flagged (not re-uploaded).
+- **C — Courses:** the per-course sequence in §1, but it **consumes** A's maps
+  (place into the mapped folder; apply the pre-resolved typeface ids — no
+  per-course font upload) and B's map (**auto-bind** each draw-from-bank block to
+  its imported bank via `INSERT_QUESTION_BANK_QUESTIONS` with the persisted
+  `questionList`). A draw-from-bank block whose bank wasn't imported in B stays an
+  unbound placeholder. If A wasn't run, C falls back to creating folders inline +
+  resolving fonts per course (back-compat).
+
 ## 11. Safe-import gates (required UX, enforced before any write)
 
 1. **Write mode is never the default.** A distinct Import/write-mode entry, separate

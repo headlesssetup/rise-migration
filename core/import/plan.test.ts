@@ -94,6 +94,38 @@ describe('buildPlan ordering', () => {
     expect(kinds).not.toContain('bind-draw-from-bank');
   });
 
+  it('auto-binds draw-from-bank to a bank imported in step B (boundBanks) WITHOUT creating it', () => {
+    const steps = buildPlan(
+      input({
+        // No recreateBanks; the bank was imported separately (step B).
+        boundBanks: new Map([['bank1', { newBankId: 'NEWBANK', questionIds: ['q1', 'q2'] }]]),
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              items: [
+                {
+                  id: 'cblk1',
+                  family: 'knowledgeCheck',
+                  variant: 'draw from question bank',
+                  items: [{ id: 'cit1', type: 'DRAW_FROM_QUESTION_BANK', questionBankId: 'bank1', drawCount: 2 }],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    const kinds = steps.map((s) => s.kind);
+    expect(kinds).toContain('bind-draw-from-bank'); // bound → bind
+    expect(kinds).not.toContain('create-bank'); // bank already exists (step B)
+    expect(kinds).not.toContain('flag-draw-from-bank');
+  });
+
   it('orders lessons by ascending position', () => {
     const steps = buildPlan(
       input({

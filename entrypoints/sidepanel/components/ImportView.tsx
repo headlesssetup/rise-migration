@@ -1,8 +1,11 @@
 // Phase 3 — Import (write mode) panel. Deliberate, gated entry into writing:
 // a write-mode banner, a target-account confirmation gate (shows the live tab's
 // identity + plane), a Source ≠ Target guard (read from the archive manifest),
-// a dry-run plan preview, and only then a live import. The archive stays
-// read-only; outputs land under _import/.
+// then THREE ordered operations — each with its own dry-run + live run:
+//   A) account settings (folders + custom fonts)
+//   B) question banks (selectable, filterable)
+//   C) courses (selectable, filterable)
+// The archive stays read-only; outputs land under _import/.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -14,9 +17,17 @@ import {
 import type { Storage } from '@/core/storage/storage';
 import type { SessionState } from '@/shared/messaging';
 import {
+  importAccountSettings,
+  importBanks,
+  listLocalBanks,
+  readArchiveInfo,
   readSourceIdentity,
   runImport,
+  type AccountSettingsSummary,
+  type ArchiveInfo,
+  type BankImportOutcome,
   type CourseImportOutcome,
+  type LocalBank,
   type ProgressEvent,
 } from '../orchestrator';
 
@@ -34,16 +45,10 @@ export function ImportView({
   session: SessionState | null;
   addLog: (m: string) => void;
 }) {
-  const [courses, setCourses] = useState<ArchiveCourse[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [source, setSource] = useState<AccountIdentity | undefined>(undefined);
   const [confirmTarget, setConfirmTarget] = useState(false);
   const [override, setOverride] = useState(false);
-  const [recreateBanks, setRecreateBanks] = useState(false);
-  const [recreateFolders, setRecreateFolders] = useState(true);
   const [running, setRunning] = useState(false);
-  const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
-  const [blocked, setBlocked] = useState<string | null>(null);
 
   const target: AccountIdentity | undefined = useMemo(
     () =>
@@ -64,30 +69,12 @@ export function ImportView({
   );
   const sameAccount = !verdict.ok && 'sameAccount' in verdict && verdict.sameAccount;
 
-  // Load the archive's saved courses + the recorded source identity.
   useEffect(() => {
     let alive = true;
     (async () => {
-      if (!storage) {
-        setCourses([]);
-        return;
-      }
-      setSource(await readSourceIdentity(storage));
-      const raw = await storage.readManifest();
-      let list: ArchiveCourse[] = [];
-      if (raw) {
-        try {
-          const m = JSON.parse(raw) as { courses?: ArchiveCourse[] };
-          if (Array.isArray(m.courses)) list = m.courses;
-        } catch {
-          /* fall through to listSaved */
-        }
-      }
-      if (list.length === 0) {
-        const ids = await storage.listSaved();
-        list = ids.map((id) => ({ id }));
-      }
-      if (alive) setCourses(list);
+      if (!storage) return;
+      const s = await readSourceIdentity(storage);
+      if (alive) setSource(s);
     })();
     return () => {
       alive = false;
@@ -97,56 +84,20 @@ export function ImportView({
   const onEvent = useCallback(
     (e: ProgressEvent) => {
       if (e.kind === 'log') addLog(e.message);
-      else if (e.kind === 'course')
-        addLog(`[${e.index + 1}/${e.total}] ${e.courseId}`);
+      else if (e.kind === 'course') addLog(`[${e.index + 1}/${e.total}] ${e.courseId}`);
     },
     [addLog],
   );
 
-  const toggle = (id: string) =>
-    setSelected((s) => {
-      const next = new Set(s);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-
-  const run = useCallback(
-    async (dryRun: boolean) => {
-      if (!storage) return;
-      setRunning(true);
-      setBlocked(null);
-      setOutcomes([]);
-      try {
-        const res = await runImport(
-          storage,
-          [...selected],
-          target,
-          { dryRun, override, recreateBanks, recreateFolders },
-          onEvent,
-        );
-        if (res.blocked) setBlocked(res.blocked);
-        setOutcomes(res.outcomes);
-      } finally {
-        setRunning(false);
-      }
-    },
-    [storage, selected, target, override, recreateBanks, recreateFolders, onEvent],
-  );
-
-  const canLive =
-    !!storage &&
-    !!session?.risePresent &&
-    selected.size > 0 &&
-    confirmTarget &&
-    verdict.ok &&
-    !running;
+  // Live runs need an explicit target confirmation + the guard + a Rise tab.
+  const liveOk = !!storage && !!session?.risePresent && confirmTarget && verdict.ok && !running;
 
   return (
     <section className="card" style={{ borderColor: '#b00', borderWidth: 2 }}>
       <h2 style={{ color: '#b00' }}>⚠ Import (write mode)</h2>
       <p className="hint">
-        This mode <b>writes into a live Rise account</b>. It rebuilds courses from
-        the archive into the account on your current Rise tab. Dry-run first.
+        This mode <b>writes into a live Rise account</b>. Run the three steps in
+        order: account settings → question banks → courses. Dry-run each first.
       </p>
 
       {/* Target-account confirmation gate */}
@@ -179,70 +130,425 @@ export function ImportView({
         </label>
       )}
 
-      {/* Course selection (from the archive) */}
+      <label>
+        <input
+          type="checkbox"
+          checked={confirmTarget}
+          onChange={(e) => setConfirmTarget(e.target.checked)}
+        />{' '}
+        I confirm writing into <b>{target?.name ?? 'this account'}</b>
+      </label>
+
+      <AccountSettingsSection
+        storage={storage}
+        target={target}
+        override={override}
+        liveOk={liveOk}
+        running={running}
+        setRunning={setRunning}
+        onEvent={onEvent}
+      />
+      <BanksSection
+        storage={storage}
+        target={target}
+        override={override}
+        liveOk={liveOk}
+        running={running}
+        setRunning={setRunning}
+        onEvent={onEvent}
+      />
+      <CoursesSection
+        storage={storage}
+        target={target}
+        override={override}
+        liveOk={liveOk}
+        running={running}
+        setRunning={setRunning}
+        onEvent={onEvent}
+      />
+    </section>
+  );
+}
+
+interface SectionProps {
+  storage: Storage | null;
+  target: AccountIdentity | undefined;
+  override: boolean;
+  liveOk: boolean;
+  running: boolean;
+  setRunning: (b: boolean) => void;
+  onEvent: (e: ProgressEvent) => void;
+}
+
+const STEP_STYLE: React.CSSProperties = {
+  border: '1px solid color-mix(in srgb, currentColor 18%, transparent)',
+  borderRadius: 8,
+  padding: 10,
+  marginTop: 10,
+};
+
+// --- A) Account settings ------------------------------------------------------
+
+function AccountSettingsSection({
+  storage,
+  target,
+  override,
+  liveOk,
+  running,
+  setRunning,
+  onEvent,
+}: SectionProps) {
+  const [info, setInfo] = useState<ArchiveInfo | null>(null);
+  const [summary, setSummary] = useState<AccountSettingsSummary | null>(null);
+  const [recreateFolders, setRecreateFolders] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!storage) return;
+      const i = await readArchiveInfo(storage);
+      if (alive) setInfo(i);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [storage]);
+
+  const run = useCallback(
+    async (dryRun: boolean) => {
+      if (!storage) return;
+      setRunning(true);
+      setSummary(null);
+      try {
+        const res = await importAccountSettings(
+          storage,
+          target,
+          { dryRun, override, recreateFolders },
+          onEvent,
+        );
+        if (res.summary) setSummary(res.summary);
+      } finally {
+        setRunning(false);
+      }
+    },
+    [storage, target, override, recreateFolders, onEvent, setRunning],
+  );
+
+  return (
+    <div style={STEP_STYLE}>
+      <h3 style={{ marginTop: 0 }}>A · Account settings</h3>
+      {info ? (
+        <p className="hint">
+          Archive{info.sourceName ? ` (${info.sourceName})` : ''}: {info.folders} folder(s),{' '}
+          {info.customFonts} custom font(s) of {info.totalFonts}, {info.banks} bank(s),{' '}
+          {info.courses} course(s).
+        </p>
+      ) : (
+        <p className="hint">Reading archive…</p>
+      )}
+      <p className="hint">Imports the folder tree + custom fonts (account-level, once).</p>
+      <label title="Recreate the source folder tree on the target (deduped by name). Ownership/sharing stays manual.">
+        <input
+          type="checkbox"
+          checked={recreateFolders}
+          onChange={(e) => setRecreateFolders(e.target.checked)}
+        />{' '}
+        Recreate folders
+      </label>
+      <div className="row">
+        <button onClick={() => run(true)} disabled={!storage || running}>
+          {running ? 'Working…' : 'Dry-run'}
+        </button>
+        <button
+          onClick={() => run(false)}
+          disabled={!liveOk}
+          style={liveOk ? { background: '#b00', color: '#fff' } : undefined}
+        >
+          Import account settings →
+        </button>
+      </div>
+      {summary && (
+        <p className="hint">
+          Folders mapped: {summary.folders.mapped}. Fonts — {summary.fonts.matched} matched,{' '}
+          {summary.fonts.created} created, {summary.fonts.unresolved} unresolved.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// --- B) Question banks --------------------------------------------------------
+
+function BanksSection({
+  storage,
+  target,
+  override,
+  liveOk,
+  running,
+  setRunning,
+  onEvent,
+}: SectionProps) {
+  const [banks, setBanks] = useState<LocalBank[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState('');
+  const [outcomes, setOutcomes] = useState<BankImportOutcome[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!storage) return;
+      const list = await listLocalBanks(storage);
+      if (alive) setBanks(list);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [storage]);
+
+  const shown = useMemo(() => filterByName(banks, (b) => b.title, filter), [banks, filter]);
+
+  const run = useCallback(
+    async (dryRun: boolean) => {
+      if (!storage) return;
+      setRunning(true);
+      setOutcomes([]);
+      try {
+        const res = await importBanks(storage, target, [...selected], { dryRun, override }, onEvent);
+        setOutcomes(res.outcomes);
+      } finally {
+        setRunning(false);
+      }
+    },
+    [storage, target, override, selected, onEvent, setRunning],
+  );
+
+  return (
+    <div style={STEP_STYLE}>
+      <h3 style={{ marginTop: 0 }}>B · Question banks</h3>
+      {banks.length === 0 ? (
+        <p className="hint">No question banks in this archive.</p>
+      ) : (
+        <>
+          <FilterRow
+            value={filter}
+            onChange={setFilter}
+            placeholder="Filter banks by name…"
+            selected={selected.size}
+            shown={shown.length}
+            total={banks.length}
+          />
+          <ul className="course-list">
+            {shown.map((b) => (
+              <li key={b.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(b.id)}
+                    onChange={() => setSelected((s) => toggle(s, b.id))}
+                  />{' '}
+                  {b.title} <span className="hint">({b.questionCount}q)</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="row">
+            <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>
+              {running ? 'Working…' : `Dry-run (${selected.size})`}
+            </button>
+            <button
+              onClick={() => run(false)}
+              disabled={!liveOk || selected.size === 0}
+              style={liveOk && selected.size > 0 ? { background: '#b00', color: '#fff' } : undefined}
+            >
+              Import banks →
+            </button>
+          </div>
+          {outcomes.length > 0 && (
+            <p className="hint">
+              {outcomes.filter((o) => o.ok).length} ok, {outcomes.filter((o) => !o.ok).length} failed.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- C) Courses ---------------------------------------------------------------
+
+function CoursesSection({
+  storage,
+  target,
+  override,
+  liveOk,
+  running,
+  setRunning,
+  onEvent,
+}: SectionProps) {
+  const [courses, setCourses] = useState<ArchiveCourse[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState('');
+  const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
+  const [blocked, setBlocked] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!storage) {
+        setCourses([]);
+        return;
+      }
+      const raw = await storage.readManifest();
+      let list: ArchiveCourse[] = [];
+      if (raw) {
+        try {
+          const m = JSON.parse(raw) as { courses?: ArchiveCourse[] };
+          if (Array.isArray(m.courses)) list = m.courses;
+        } catch {
+          /* fall through */
+        }
+      }
+      if (list.length === 0) {
+        const ids = await storage.listSaved();
+        list = ids.map((id) => ({ id }));
+      }
+      if (alive) setCourses(list);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [storage]);
+
+  const shown = useMemo(
+    () => filterByName(courses, (c) => c.title ?? c.id, filter),
+    [courses, filter],
+  );
+
+  const run = useCallback(
+    async (dryRun: boolean) => {
+      if (!storage) return;
+      setRunning(true);
+      setBlocked(null);
+      setOutcomes([]);
+      try {
+        const res = await runImport(
+          storage,
+          [...selected],
+          target,
+          { dryRun, override },
+          onEvent,
+        );
+        if (res.blocked) setBlocked(res.blocked);
+        setOutcomes(res.outcomes);
+      } finally {
+        setRunning(false);
+      }
+    },
+    [storage, target, override, selected, onEvent, setRunning],
+  );
+
+  return (
+    <div style={STEP_STYLE}>
+      <h3 style={{ marginTop: 0 }}>C · Courses</h3>
       {courses.length === 0 ? (
         <p className="hint">No courses in this archive folder. Export some first.</p>
       ) : (
         <>
-          <p className="hint">{selected.size} selected of {courses.length} archived</p>
+          <FilterRow
+            value={filter}
+            onChange={setFilter}
+            placeholder="Filter courses by name…"
+            selected={selected.size}
+            shown={shown.length}
+            total={courses.length}
+          />
           <ul className="course-list">
-            {courses.map((c) => (
+            {shown.map((c) => (
               <li key={c.id}>
                 <label>
                   <input
                     type="checkbox"
                     checked={selected.has(c.id)}
-                    onChange={() => toggle(c.id)}
+                    onChange={() => setSelected((s) => toggle(s, c.id))}
                   />{' '}
                   {c.title ?? c.id}
                 </label>
               </li>
             ))}
           </ul>
+          <div className="row">
+            <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>
+              {running ? 'Working…' : `Dry-run (${selected.size})`}
+            </button>
+            <button
+              onClick={() => run(false)}
+              disabled={!liveOk || selected.size === 0}
+              style={liveOk && selected.size > 0 ? { background: '#b00', color: '#fff' } : undefined}
+            >
+              Import courses →
+            </button>
+          </div>
         </>
       )}
-
-      <label title="Off: draw-from-bank blocks are created as unbound placeholders (like Storyline) — no banks are created in the target.">
-        <input
-          type="checkbox"
-          checked={recreateBanks}
-          onChange={(e) => setRecreateBanks(e.target.checked)}
-        />{' '}
-        Recreate question banks (default off → placeholders)
-      </label>
-      <label title="Recreate the source folder tree on the target (deduped by name) and place each course into its folder.">
-        <input
-          type="checkbox"
-          checked={recreateFolders}
-          onChange={(e) => setRecreateFolders(e.target.checked)}
-        />{' '}
-        Recreate folders + place courses
-      </label>
-
-      <div className="row">
-        <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>
-          {running ? 'Working…' : `Dry-run plan (${selected.size})`}
-        </button>
-        <label>
-          <input
-            type="checkbox"
-            checked={confirmTarget}
-            onChange={(e) => setConfirmTarget(e.target.checked)}
-          />{' '}
-          I confirm writing into <b>{target?.name ?? 'this account'}</b>
-        </label>
-        <button onClick={() => run(false)} disabled={!canLive} style={{ background: canLive ? '#b00' : undefined, color: canLive ? '#fff' : undefined }}>
-          Import live →
-        </button>
-      </div>
-
-      {blocked && (
-        <p style={{ color: '#b00', fontWeight: 600 }}>BLOCKED: {blocked}</p>
-      )}
-
+      {blocked && <p style={{ color: '#b00', fontWeight: 600 }}>BLOCKED: {blocked}</p>}
       {outcomes.length > 0 && <OutcomeTable outcomes={outcomes} />}
-    </section>
+    </div>
   );
+}
+
+// --- Shared bits --------------------------------------------------------------
+
+function FilterRow({
+  value,
+  onChange,
+  placeholder,
+  selected,
+  shown,
+  total,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  selected: number;
+  shown: number;
+  total: number;
+}) {
+  return (
+    <>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '4px 8px',
+          margin: '4px 0',
+          font: 'inherit',
+          borderRadius: 6,
+          border: '1px solid color-mix(in srgb, currentColor 30%, transparent)',
+          background: 'transparent',
+          color: 'inherit',
+        }}
+      />
+      <p className="hint">
+        {selected} selected · {value ? `${shown} of ${total} shown` : `${total} total`}
+      </p>
+    </>
+  );
+}
+
+function filterByName<T>(items: T[], name: (t: T) => string, q: string): T[] {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return items;
+  return items.filter((it) => name(it).toLowerCase().includes(needle));
+}
+
+function toggle(set: Set<string>, id: string): Set<string> {
+  const next = new Set(set);
+  next.has(id) ? next.delete(id) : next.add(id);
+  return next;
 }
 
 function OutcomeTable({ outcomes }: { outcomes: CourseImportOutcome[] }) {
