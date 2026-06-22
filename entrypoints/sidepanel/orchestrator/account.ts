@@ -1,6 +1,8 @@
-// Account-level exports: block templates, custom typefaces (+ font files), and
-// the Review-360 items inventory (which flags Mighty bundles). Raw docs go to
-// account/, inventories to _metadata/, fonts into the shared assets/ store.
+// Account-level exports: block templates and custom typefaces (+ font files).
+// Raw docs go to account/, inventories to _metadata/, fonts into the shared
+// assets/ store. (We deliberately do NOT touch the Review 360 servers — Storyline
+// /Mighty blocks are recreated as placeholders; their bundles are handled out of
+// band.)
 
 import { downloadKeyList, type AssetSink } from '@/core/assets';
 import {
@@ -9,12 +11,6 @@ import {
   blockTemplatesToJson,
   extractBlockTemplates,
 } from '@/core/census/block-templates';
-import {
-  buildReviewItemsInventory,
-  extractReviewItems,
-  reviewItemsToCsv,
-  reviewItemsToJson,
-} from '@/core/census/review-items';
 import {
   buildTypefaceInventory,
   collectFontKeys,
@@ -32,8 +28,6 @@ export interface AccountExtrasSummary {
   blockTemplates: number;
   typefaces: number;
   fonts: { written: number; deduped: number; failed: number };
-  reviewItems: number;
-  mightyItems: number;
 }
 
 /** Fetch a RAW_RESULT export; returns {raw, doc} or null (logging the error). */
@@ -56,14 +50,12 @@ async function fetchRaw(
   req: BackgroundRequest,
   label: string,
   onEvent: (e: ProgressEvent) => void,
-  /** Map a failure to a custom log line (e.g. a known, non-error limitation). */
-  onFailNote?: (err: string) => string,
 ): Promise<{ raw: string; doc: unknown } | null> {
   const resp = await rpc(req);
   if (resp.type !== 'RAW_RESULT' || !resp.result.ok) {
     const err =
       resp.type === 'RAW_RESULT' && !resp.result.ok ? resp.result.error : 'unexpected response';
-    onEvent({ kind: 'log', message: onFailNote ? onFailNote(err ?? '') : `${label} unavailable: ${err}` });
+    onEvent({ kind: 'log', message: `${label} unavailable: ${err}` });
     return null;
   }
   return resp.result.data;
@@ -77,8 +69,6 @@ export async function fetchAccountExtras(
     blockTemplates: 0,
     typefaces: 0,
     fonts: { written: 0, deduped: 0, failed: 0 },
-    reviewItems: 0,
-    mightyItems: 0,
   };
 
   // 1) Block templates.
@@ -136,31 +126,8 @@ export async function fetchAccountExtras(
     }
   }
 
-  // 3) Review-360 items (flag Mighty). The Review API is a SEPARATE origin
-  // (api[.eu].articulate.com) that doesn't allow cross-origin fetch from the
-  // extension, so this expectedly fails "TypeError: Failed to fetch" — that's a
-  // known, parked limitation (Storyline/Mighty are flagged + handled separately),
-  // NOT an error. Surface it as such; real failures still log normally.
-  const ri = await fetchRaw(
-    { type: 'REVIEW_ITEMS' },
-    'Review items',
-    onEvent,
-    (err) =>
-      /failed to fetch/i.test(err)
-        ? 'Review items skipped — the Review 360 API is cross-origin and not reachable from the extension yet (Storyline/Mighty are flagged separately). Not an error.'
-        : `Review items unavailable: ${err}`,
-  );
-  if (ri) {
-    await storage.writeReviewItems(ri.raw);
-    const rows = buildReviewItemsInventory(extractReviewItems(ri.doc));
-    await storage.writeReviewItemsInventory(reviewItemsToJson(rows), reviewItemsToCsv(rows));
-    summary.reviewItems = rows.length;
-    summary.mightyItems = rows.filter((r) => r.mighty).length;
-    onEvent({
-      kind: 'log',
-      message: `Review items: ${rows.length} (${summary.mightyItems} Mighty) → account/ + _metadata/.`,
-    });
-  }
+  // (No Review 360 fetch — Storyline/Mighty blocks are recreated as placeholders;
+  // their bundles are obtained out of band, never from the Review servers.)
 
   return summary;
 }

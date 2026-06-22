@@ -430,11 +430,11 @@ export function App() {
     if (!storage) return;
     setPhase('exporting');
     setProgress(null);
-    addLog('Exporting account extras (block templates, typefaces, review items)…');
+    addLog('Exporting account extras (block templates, typefaces)…');
     const s = await fetchAccountExtras(storage, onEvent);
     setPhase('done');
     addLog(
-      `Account extras: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s), ${s.reviewItems} review item(s) (${s.mightyItems} Mighty).`,
+      `Account extras: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
     );
   }, [storage, onEvent, addLog]);
 
@@ -618,9 +618,8 @@ export function App() {
           {phase === 'exporting' ? 'Working…' : 'Export account extras'}
         </button>
         <p className="hint">
-          Block templates, custom typefaces (+ font files), and the Review-360
-          items inventory (flags Mighty bundles). Raw → account/, reports →
-          _metadata/.
+          Block templates and custom typefaces (+ font files). Raw → account/,
+          reports → _metadata/.
         </p>
       </section>
       </>

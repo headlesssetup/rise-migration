@@ -15,22 +15,23 @@ Companion to `rise-api-reference.md`; schemas for the big resources live in
 | Uploaded media | `GET https://articulateusercontent.com/{key}` (public-read) | `assets/<sha256>.<ext>`, per-owner `*.assets.json`, `_metadata/assets-summary.json` |
 | **Block templates** | `POST …/ducks/rise/blockTemplates/FETCH_BLOCK_TEMPLATES` (payload `null`) | `account/block-templates.json` + `_metadata/block-templates-inventory.*` |
 | **Custom typefaces** | `POST …/ducks/rise/typefaces/FETCH_TYPEFACES` (payload = a **live** courseId — must exist on the tab's account) | `account/typefaces.json` + `account/typefaces.assets.json` (font key→file map) + `_metadata/typefaces-inventory.*`; font `.woff` files downloaded into **`account/assets/`** (separate from the content-addressed course `assets/`) |
-| **Review-360 items** | `GET https://api.articulate.com/review/items?includeStackItems=true&productFilter=storyline` (cross-origin, bearer) | `account/review-items.json` + `_metadata/review-items-inventory.*` (flags `mighty`) |
+
+> **Review 360 is NOT exported.** We deliberately never contact the Review servers
+> (`api[.eu].articulate.com/review/*`). Storyline/Mighty content is recreated as
+> placeholders (see below); the actual bundle files are obtained out of band.
 
 ## Mighty
 
 Mighty is an external plugin whose interactive content appears in Rise as
 **Storyline-variant blocks** (`type:interactive, variant:storyline`, with
-`media.storyline.contentPrefix`/`src` under `rise/courses/{id}/…`) and as
-**Review-360 items** flagged `source.mighty_bundle: true` — whose `package` is
-**empty** (`key:""`, md5 of empty string). So there is no Review bundle to match.
+`media.storyline.contentPrefix`/`src` under `rise/courses/{id}/…`).
 
-**Treatment:** same as Storyline — **reference only**. We preserve the block +
-contentPrefix verbatim in the course JSON and enumerate/flag the items in
-`review-items-inventory` (`mighty: yes`). We do **not** grab bundle bytes yet; a
-later pass may archive the in-course `media.storyline.contentPrefix` files. At
-import these are conditional: the target needs the Mighty plugin provisioned and
-the same Review/360 reachable, else manual handling.
+**Treatment:** **recreate as placeholders.** We preserve the block +
+contentPrefix verbatim in the course JSON and recreate the block copy-faithful on
+import, flagged for manual handling. We do **NOT** fetch anything from Review 360
+(no `review/items`, no inventory) — the actual bundle/package files are obtained
+out of band and added separately. At import the target needs the Mighty plugin
+provisioned and the same Review/360 reachable, else it stays a manual step.
 
 ## Deferred (endpoints exist; empty in the sampled account)
 

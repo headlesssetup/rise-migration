@@ -120,18 +120,3 @@ export function buildFetchTypefacesRequest(courseId: string): RequestSpec {
     }),
   };
 }
-
-/**
- * GET api[.eu].articulate.com/review/items — Review 360 "storyline" items the
- * account can reach (incl. Mighty bundles, flagged `source.mighty_bundle`).
- * Absolute URL (cross-origin, bearer-auth, CORS-enabled); covered by
- * host_permissions. Host follows the plane — the US host 404s/CORS-fails from an
- * EU session, so pass `eu` for the EU plane.
- */
-export function buildReviewItemsRequest(eu = false): RequestSpec {
-  const host = eu ? 'api.eu.articulate.com' : 'api.articulate.com';
-  return {
-    url: `https://${host}/review/items?includeStackItems=true&productFilter=storyline`,
-    method: 'GET',
-  };
-}

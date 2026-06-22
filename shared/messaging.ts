@@ -34,14 +34,13 @@ export type BackgroundRequest =
   | { type: 'GET_QUESTION_BANK'; bankId: string }
   | { type: 'FETCH_BLOCK_TEMPLATES' }
   | { type: 'FETCH_TYPEFACES'; courseId: string }
-  | { type: 'REVIEW_ITEMS' }
   // Phase 3 — relay a single WRITE envelope through the live Rise tab. The panel
   // orchestrates the sequence + pacing; the background just performs the fetch
   // (supports POST/PUT/DELETE, JSON or base64 binary bodies, presigned S3 PUT).
   | { type: 'RELAY_WRITE'; spec: WriteSpec };
 
 /** Account-level raw exports that share a {raw, doc} result shape. */
-export type RawKind = 'blockTemplates' | 'typefaces' | 'reviewItems';
+export type RawKind = 'blockTemplates' | 'typefaces';
 
 /** Notifications the content script sends to the background. */
 export type ContentMessage =

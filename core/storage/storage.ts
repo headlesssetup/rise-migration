@@ -69,10 +69,6 @@ export interface Storage {
   readAccountAsset(name: string): Promise<Uint8Array | null>;
   /** Write the typefaces inventory. */
   writeTypefaceInventory(json: string, csv: string): Promise<void>;
-  /** Write the raw Review-360 items response. */
-  writeReviewItems(raw: string): Promise<void>;
-  /** Write the Review-360 items inventory. */
-  writeReviewItemsInventory(json: string, csv: string): Promise<void>;
 
   // --- Phase 2: assets (content-addressed binaries + per-owner manifests) ---
   /** Write a content-addressed asset blob: `assets/<name>` (name=`<sha256>.<ext>`). */

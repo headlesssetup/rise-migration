@@ -6,7 +6,7 @@
 //   <root>/question-banks/<id>.json|_index  raw banks (+ per-bank asset manifest)
 //   <root>/assets/<sha256>.<ext>            content-addressed media bytes (dedup)
 //   <root>/account/                         raw account source: folders.json,
-//                                           block-templates/typefaces/review-items
+//                                           block-templates/typefaces
 //   <root>/_metadata/                       derived reports (regenerated each run):
 //                                           inventory/census/catalog/novelty/
 //                                           *-inventory/*-catalog/assets-summary
@@ -311,15 +311,6 @@ export class FileSystemStorage implements Storage {
 
   async writeTypefaceInventory(json: string, csv: string): Promise<void> {
     await this.writeMetaPair('typefaces-inventory', json, csv);
-  }
-
-  async writeReviewItems(raw: string): Promise<void> {
-    const dir = await this.accountDir();
-    await this.writeFile(dir, 'review-items.json', raw);
-  }
-
-  async writeReviewItemsInventory(json: string, csv: string): Promise<void> {
-    await this.writeMetaPair('review-items-inventory', json, csv);
   }
 
   // --- Phase 2: assets --------------------------------------------------------
