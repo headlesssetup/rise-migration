@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   checkSourceNotTarget,
   describeTarget,
+  summarizeFlags,
   type AccountIdentity,
 } from '@/core/import';
 import type { Storage } from '@/core/storage/storage';
@@ -260,7 +261,9 @@ function OutcomeTable({ outcomes }: { outcomes: CourseImportOutcome[] }) {
             <td>{o.report.planned.lessons}</td>
             <td>{o.report.planned.blocks}</td>
             <td>{o.report.planned.uploads}</td>
-            <td>{o.report.flags.length}</td>
+            <td title={o.report.flags.map((f) => f.detail).join('\n')}>
+              {o.report.flags.length === 0 ? '0' : summarizeFlags(o.report.flags)}
+            </td>
             <td style={{ color: o.report.survivingSourceKeys.length ? '#b00' : undefined }}>
               {o.report.survivingSourceKeys.length}
             </td>

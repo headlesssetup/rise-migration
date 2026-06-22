@@ -69,6 +69,16 @@ type Mode = 'export' | 'import';
 
 const PAGE = 16;
 
+/** Classify a log line for colorization (CSS in style.css). */
+function logLineClass(line: string): string {
+  if (/^\s*(FAILED|BLOCKED|✗)|\berror\b|Unauthorized|HTTP [45]\d\d/i.test(line))
+    return 'log-line log-error';
+  if (/^\s*(\[\d+\/\d+\]\s*)?WARN|⚠/i.test(line)) return 'log-line log-warn';
+  if (/\bOK\b|✓|Imported|Planned|done\b/i.test(line)) return 'log-line log-ok';
+  if (/^\s*(\[\d+\/\d+\]\s*)?DRY\b/i.test(line)) return 'log-line log-dry';
+  return 'log-line';
+}
+
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [mode, setMode] = useState<Mode>('export');
@@ -91,6 +101,15 @@ export function App() {
   const [banks, setBanks] = useState<BankCatalog | null>(null);
   const [assets, setAssets] = useState<AssetsSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  // Only auto-scroll the log to the bottom when the user is already there — if
+  // they've scrolled up to read, leave their position alone.
+  const stickToBottomRef = useRef(true);
+  const onLogScroll = useCallback(() => {
+    const el = logRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }, []);
 
   const copyLog = useCallback(async () => {
     try {
@@ -161,7 +180,9 @@ export function App() {
   }, [risePresent, totalCount]);
 
   useEffect(() => {
-    logRef.current?.scrollTo(0, logRef.current.scrollHeight);
+    if (stickToBottomRef.current) {
+      logRef.current?.scrollTo(0, logRef.current.scrollHeight);
+    }
   }, [log]);
 
   const onEvent = useCallback(
@@ -658,9 +679,11 @@ export function App() {
             )}
           </button>
         </div>
-        <div className="log" ref={logRef}>
+        <div className="log" ref={logRef} onScroll={onLogScroll}>
           {log.map((line, i) => (
-            <div key={i}>{line}</div>
+            <div key={i} className={logLineClass(line)}>
+              {line}
+            </div>
           ))}
         </div>
       </section>

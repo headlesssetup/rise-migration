@@ -94,6 +94,24 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.log-line {
+  padding: 0 2px;
+}
+.log-error {
+  color: #b00020;
+  font-weight: 600;
+  background: rgba(176, 0, 32, 0.08);
+}
+.log-warn {
+  color: #9a6700;
+}
+.log-ok {
+  color: #1a7f37;
+}
+.log-dry {
+  color: #6b6b6b;
+}
+
 .log-header {
   display: flex;
   align-items: center;

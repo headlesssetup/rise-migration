@@ -59,6 +59,17 @@ export interface ManualFlag {
   detail: string;
 }
 
+/** Group manual-handling flags by kind into a compact summary, e.g.
+ *  "5 unsupported-media, 2 storyline". */
+export function summarizeFlags(flags: ManualFlag[]): string {
+  const counts = new Map<string, number>();
+  for (const f of flags) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([kind, n]) => `${n} ${kind}`)
+    .join(', ');
+}
+
 export interface ExecResult {
   ok: boolean;
   dryRun: boolean;
@@ -151,12 +162,17 @@ export async function executePlan(
   // sourceBankId → ordered new question ids (for INSERT_QUESTION_BANK_QUESTIONS).
   const bankQuestionIds = new Map<string, string[]>();
 
+  // Progress: a 1-based step counter (set in the loop) → `[i/N]` log prefix.
+  const total = steps.length;
+  let stepIdx = 0;
+  const pfx = (): string => `[${stepIdx}/${total}]`;
+
   // Relay + loud-fail wrapper. In dry-run, record the envelope and return a
   // synthetic empty body (callers synthesize ids separately).
   async function send(spec: WriteSpec, step: PlanStep['kind']): Promise<Record<string, unknown>> {
     result.envelopes.push({ step, label: spec.label });
     if (dryRun) {
-      log(`DRY  ${spec.method} ${spec.label}`);
+      log(`${pfx()} DRY  ${spec.method} ${spec.label}`);
       return {};
     }
     await pace();
@@ -168,13 +184,14 @@ export async function executePlan(
         r.text,
       );
     }
-    log(`OK   ${spec.method} ${spec.label}`);
+    log(`${pfx()} OK   ${spec.method} ${spec.label}`);
     return parseJson(r.text);
   }
 
   try {
     let done = 0;
     for (const step of steps) {
+      stepIdx++;
       switch (step.kind) {
         case 'create-bank': {
           const bank = deps.input.banksById.get(step.sourceBankId);

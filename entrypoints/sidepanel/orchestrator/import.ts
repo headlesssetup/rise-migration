@@ -15,6 +15,7 @@ import {
   findBankRef,
   verifyParity,
   parityReportToMarkdown,
+  summarizeFlags,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
@@ -269,6 +270,11 @@ export async function runImport(
         ? `${opts.dryRun ? 'Planned' : 'Imported'} "${course.course?.title ?? courseId}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`
         : `FAILED "${course.course?.title ?? courseId}": ${res.error}`,
     });
+    // Break flags down by kind so the operator knows WHAT needs manual handling
+    // (storyline vs orphan vs cover/header media …) without opening the report.
+    if (res.flags.length) {
+      onEvent({ kind: 'log', message: `  flags: ${summarizeFlags(res.flags)}` });
+    }
 
     if (i < courseIds.length - 1) await pacedDelay(pacing);
   }

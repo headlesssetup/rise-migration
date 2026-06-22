@@ -3,6 +3,24 @@ import { buildPlan, type PlanInput } from './plan';
 import { executePlan } from './executor';
 import { IdMap } from './ids';
 import { buildFidelityReport, fidelityReportToMarkdown, fidelityReportToJson } from './fidelity';
+import { summarizeFlags } from './executor';
+
+describe('summarizeFlags', () => {
+  it('groups by kind, most-frequent first', () => {
+    expect(
+      summarizeFlags([
+        { kind: 'unsupported-media', detail: '' },
+        { kind: 'storyline', detail: '' },
+        { kind: 'unsupported-media', detail: '' },
+        { kind: 'unsupported-media', detail: '' },
+      ]),
+    ).toBe('3 unsupported-media, 1 storyline');
+  });
+
+  it('is empty for no flags', () => {
+    expect(summarizeFlags([])).toBe('');
+  });
+});
 
 function dryInput(): PlanInput {
   return {

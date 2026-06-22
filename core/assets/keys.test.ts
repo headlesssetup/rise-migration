@@ -56,6 +56,22 @@ describe('extractUploadedKeys', () => {
     expect(extractUploadedKeys('rise/assets/themes/cover.jpg')).toEqual([]);
   });
 
+  it('excludes built-in shared assets served from usercontent (assets/rise/…)', () => {
+    // Regression: the default theme header is a usercontent URL but a SHARED
+    // built-in (assets/rise/...), not a course upload — must NOT be collected
+    // (it was a false "unsupported-media" flag on import).
+    expect(
+      extractUploadedKeys(
+        'https://articulateusercontent.com/assets/rise/assets/themes/example-header-image.jpg',
+      ),
+    ).toEqual([]);
+    expect(
+      extractUploadedKeys(
+        'https://articulateusercontent.eu/assets/rise/assets/themes/example-header-image.jpg',
+      ),
+    ).toEqual([]);
+  });
+
   it('keeps parentheses in a whole-value key (no truncation at ")")', () => {
     // Regression: the bounded regex used to cut "…(7).png" at the first ")".
     expect(
