@@ -494,8 +494,15 @@ target → **wrong (default) font**. Two facts from the theming capture:
   `assets/rise/fonts/…` (shared, universal); custom fonts have `rise/fonts/…`
   keys + an `original` filename.
 
+> ⚠ **`FETCH_TYPEFACES` needs an EXISTING course id.** Calling it with a
+> just-created course id 404s (`NotFoundError`) — the new course hasn't settled
+> as a valid typeface context yet. So fetch the target's typefaces **once, up
+> front, against a live existing course** (page-0 of the target library via
+> `SEARCH_COURSES`) and reuse that map for every course in the run — never
+> against the course we're building.
+
 **Migration algorithm (by NAME, with recreate):**
-1. `FETCH_TYPEFACES` on the **target** → `name → id`.
+1. `FETCH_TYPEFACES` on the **target** (an *existing* course id) → `name → id`.
 2. For each typeface the course uses, look up its **source name** (from the
    exported `account/typefaces.json`):
    - target has that name → **reuse the target id** (covers built-ins AND a brand

@@ -31,12 +31,13 @@ import {
   type FidelityReport,
   type ParityReport,
   type Relay,
+  type Typeface,
 } from '@/core/import';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
 import { rpc } from '../rpc';
-import { unwrap, type ProgressEvent } from './shared';
+import { extractItems, unwrap, type ProgressEvent } from './shared';
 
 /** The Relay the executor uses: one RELAY_WRITE round-trip to the background. */
 const relayThroughTab: Relay = async (spec) => {
@@ -71,6 +72,40 @@ export async function readSourceIdentity(
   } catch {
     return undefined;
   }
+}
+
+/** Fetch the TARGET account's typefaces once, via FETCH_TYPEFACES on a *live
+ *  existing* course (page-0 of the live library). The brand-new course can't be
+ *  used as context — it 404s until it settles — so we ask an existing one. A
+ *  read, so it runs in dry-run too (accurate preview). Empty map on any failure
+ *  (the executor then treats all source brand fonts as custom → recreate). */
+async function fetchTargetTypefaces(
+  onEvent: (e: ProgressEvent) => void,
+): Promise<Map<string, Typeface>> {
+  let courseId: string | undefined;
+  try {
+    const resp = await rpc({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+    if (resp.type === 'SEARCH_RESULT' && resp.result.ok) {
+      courseId = extractItems(resp.result.data)[0]?.id;
+    }
+  } catch {
+    /* fall through to empty */
+  }
+  if (!courseId) {
+    onEvent({
+      kind: 'log',
+      message: 'No live target course to read fonts from — custom fonts will be recreated',
+    });
+    return new Map();
+  }
+  const resp = await rpc({ type: 'FETCH_TYPEFACES', courseId });
+  if (resp.type !== 'RAW_RESULT' || !resp.result.ok) {
+    onEvent({ kind: 'log', message: 'Could not read target fonts — custom fonts will be recreated' });
+    return new Map();
+  }
+  const target = parseTypefaces(resp.result.data.doc);
+  onEvent({ kind: 'log', message: `Target account has ${target.size} typefaces (font matching enabled)` });
+  return target;
 }
 
 /** Map a course's saved asset manifest → plan AssetEntry[] (downloaded + orphan).
@@ -192,6 +227,11 @@ export async function runImport(
   const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map();
   const fontManifest = await readFontManifest(storage);
 
+  // TARGET account typefaces — fetched once against a *live existing* course.
+  // FETCH_TYPEFACES 404s on a just-created course id, so we can't ask the
+  // brand-new course; we match fonts by name + dedup recreation against this.
+  const targetTypefaces = await fetchTargetTypefaces(onEvent);
+
   // Account-level folder tree (created once, deduped) + course→folder map.
   const folderIdMap =
     opts.recreateFolders === false
@@ -255,6 +295,7 @@ export async function runImport(
       relay: relayThroughTab,
       readAsset,
       sourceTypefaces,
+      targetTypefaces,
       readFontBytes,
       ids,
       dryRun: opts.dryRun,

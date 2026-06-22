@@ -341,8 +341,6 @@ describe('executePlan — typography migration', () => {
     const relay: Relay = async (spec) => {
       seen.push(spec.label);
       if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
-      if (spec.label.includes('FETCH_TYPEFACES'))
-        return { ok: true, status: 200, text: JSON.stringify({ payload: { typefaces: [{ id: 'tgt-lato', name: 'Lato', default: true, fonts: [] }] } }) };
       if (spec.label.includes('GET_YURL'))
         return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/fonts/NEW.woff', url: 'https://s3/f', type: 'font/woff', filename: 'NEW.woff' } }) };
       if (spec.label.includes('CREATE_TYPEFACE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { id: 'NEWTF' } }) };
@@ -360,6 +358,11 @@ describe('executePlan — typography migration', () => {
       relay,
       readAsset: async () => null,
       sourceTypefaces,
+      // Target account has only Lato (a built-in) — the source brand font
+      // "AcmeBrand" isn't there by name, so it must be recreated.
+      targetTypefaces: parseTypefaces({
+        typefaces: [{ id: 'tgt-lato', name: 'Lato', default: true, fonts: [] }],
+      }),
       readFontBytes: async () => ({ base64: 'AAAA', contentType: 'font/woff' }),
       ids: new IdMap(counterMint()),
       mintId: counterMint(),
@@ -368,6 +371,9 @@ describe('executePlan — typography migration', () => {
     // The font was uploaded + registered, and the course got the NEW typeface id.
     expect(res.envelopes.some((e) => e.label === 'S3 PUT (font)')).toBe(true);
     expect(seen.some((s) => s.includes('CREATE_TYPEFACE'))).toBe(true);
+    // The executor must NOT FETCH_TYPEFACES on the brand-new course (it 404s);
+    // target fonts are pre-fetched by the orchestrator and passed in.
+    expect(seen.some((s) => s.includes('FETCH_TYPEFACES'))).toBe(false);
     expect(coverBody.bodyTypefaceId).toBe('NEWTF');
     expect(coverBody.theme.bodyTypefaceId).toBe('NEWTF');
   });

@@ -15,7 +15,6 @@ import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
 import { findBankRef, type PlanStep, type PlanInput, type SourceBank } from './plan';
 import {
-  parseTypefaces,
   targetByName,
   usedTypefaceIds,
   resolveTypefaces,
@@ -47,6 +46,11 @@ export interface ExecutorDeps {
    *  When provided, the import migrates fonts (match-by-name + recreate custom);
    *  otherwise it falls back to a plain theme round-trip. */
   sourceTypefaces?: Map<string, Typeface>;
+  /** TARGET account typefaces (FETCH_TYPEFACES on a *live existing* course),
+   *  fetched once by the orchestrator. Used to match by name + dedup recreation.
+   *  We can't FETCH_TYPEFACES on the brand-new course (404 until it settles),
+   *  so this must be pre-fetched against an existing target course. */
+  targetTypefaces?: Map<string, Typeface>;
   /** Read a custom font's archived `.woff` bytes by its source key. */
   readFontBytes?: (fontKey: string) => Promise<AssetBytes | null>;
   ids?: IdMap;
@@ -644,7 +648,9 @@ export async function executePlan(
     course: Record<string, unknown>,
     source: Map<string, Typeface>,
   ): Promise<Map<string, string>> {
-    const target = parseTypefaces(payloadOf(await send(env.fetchTypefaces(newCourseId), 'set-theme')));
+    // Target typefaces are pre-fetched by the orchestrator against a live
+    // existing course — FETCH_TYPEFACES 404s on a just-created course id.
+    const target = deps.targetTypefaces ?? new Map<string, Typeface>();
     const used = usedTypefaceIds(course);
     const { idMap, toRecreate, unresolved } = resolveTypefaces(used, source, targetByName(target));
 
