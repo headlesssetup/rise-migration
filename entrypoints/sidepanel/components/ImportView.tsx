@@ -40,6 +40,7 @@ export function ImportView({
   const [confirmTarget, setConfirmTarget] = useState(false);
   const [override, setOverride] = useState(false);
   const [recreateBanks, setRecreateBanks] = useState(false);
+  const [recreateFolders, setRecreateFolders] = useState(true);
   const [running, setRunning] = useState(false);
   const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -120,7 +121,7 @@ export function ImportView({
           storage,
           [...selected],
           target,
-          { dryRun, override, recreateBanks },
+          { dryRun, override, recreateBanks, recreateFolders },
           onEvent,
         );
         if (res.blocked) setBlocked(res.blocked);
@@ -129,7 +130,7 @@ export function ImportView({
         setRunning(false);
       }
     },
-    [storage, selected, target, override, recreateBanks, onEvent],
+    [storage, selected, target, override, recreateBanks, recreateFolders, onEvent],
   );
 
   const canLive =
@@ -208,6 +209,14 @@ export function ImportView({
           onChange={(e) => setRecreateBanks(e.target.checked)}
         />{' '}
         Recreate question banks (default off → placeholders)
+      </label>
+      <label title="Recreate the source folder tree on the target (deduped by name) and place each course into its folder.">
+        <input
+          type="checkbox"
+          checked={recreateFolders}
+          onChange={(e) => setRecreateFolders(e.target.checked)}
+        />{' '}
+        Recreate folders + place courses
       </label>
 
       <div className="row">

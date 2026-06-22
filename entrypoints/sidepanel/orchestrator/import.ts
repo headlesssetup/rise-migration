@@ -17,6 +17,13 @@ import {
   parityReportToMarkdown,
   summarizeFlags,
   parseTypefaces,
+  parseFolders,
+  rootIdsByType,
+  orderForCreation,
+  ownerPermissions,
+  createFolder,
+  fetchFolders,
+  moveCourseToFolder,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
@@ -132,6 +139,9 @@ export interface ImportOptions {
   /** Recreate referenced question banks + bind draw-from-bank blocks. Default
    *  OFF — draw-from-bank blocks become unbound placeholders (manual). */
   recreateBanks?: boolean;
+  /** Recreate the source folder tree on the target + place courses into it.
+   *  Default ON; deduped by name so re-runs don't spawn duplicate folders. */
+  recreateFolders?: boolean;
 }
 
 export interface CourseImportOutcome {
@@ -181,6 +191,13 @@ export async function runImport(
   const tfRaw = await storage.readTypefaces();
   const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map();
   const fontManifest = await readFontManifest(storage);
+
+  // Account-level folder tree (created once, deduped) + course→folder map.
+  const folderIdMap =
+    opts.recreateFolders === false
+      ? new Map<string, string>()
+      : await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
+  const courseFolders = await readCourseFolders(storage);
   const readFontBytes = async (fontKey: string) => {
     const file = fontManifest.get(fontKey);
     if (!file) return null;
@@ -244,6 +261,26 @@ export async function runImport(
       pace: () => pacedDelay(pacing),
       log: (m) => onEvent({ kind: 'log', message: m }),
     });
+
+    // Place the new course into its mapped folder (the course was created at
+    // root; folders are recreated account-level above). Best-effort + paced.
+    if (res.ok && res.newCourseId) {
+      const tgtFolder = folderIdMap.get(courseFolders.get(courseId) ?? '');
+      if (tgtFolder) {
+        if (!opts.dryRun) {
+          await pacedDelay(pacing);
+          const mv = await relayThroughTab(moveCourseToFolder(res.newCourseId, tgtFolder));
+          onEvent({
+            kind: 'log',
+            message: mv.ok
+              ? `Moved course into folder ${tgtFolder}`
+              : `WARN move-to-folder failed (HTTP ${mv.status})`,
+          });
+        } else {
+          onEvent({ kind: 'log', message: `DRY  move course → folder ${tgtFolder}` });
+        }
+      }
+    }
 
     const report = buildFidelityReport(steps, res, courseId);
     // Persist outputs (never into the read-only archive dirs).
@@ -311,6 +348,107 @@ function safeJson(raw: string): unknown {
   } catch {
     return null;
   }
+}
+
+/** Course id → source folderId, from `_metadata/inventory.json`. */
+async function readCourseFolders(storage: Storage): Promise<Map<string, string>> {
+  const m = new Map<string, string>();
+  const raw = await storage.readInventory();
+  if (!raw) return m;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const rows = Array.isArray(parsed)
+      ? parsed
+      : ((parsed as { items?: unknown[] }).items ?? []);
+    for (const r of rows as Record<string, unknown>[]) {
+      if (typeof r.id === 'string' && typeof r.folderId === 'string' && r.folderId) {
+        m.set(r.id, r.folderId);
+      }
+    }
+  } catch {
+    /* tolerate */
+  }
+  return m;
+}
+
+/**
+ * Recreate the source folder tree on the target (parent-first), deduped by
+ * name+parent against the target's existing folders so re-runs don't spawn
+ * duplicates. Returns source folderId → target folderId.
+ */
+async function setupFolders(
+  storage: Storage,
+  target: AccountIdentity | undefined,
+  dryRun: boolean,
+  pacing: PacingConfig,
+  onEvent: (e: ProgressEvent) => void,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const raw = await storage.readFolders();
+  if (!raw) return map;
+  const source = parseFolders(safeJson(raw));
+  const toCreate = orderForCreation(source);
+  if (!toCreate.length) return map;
+
+  // Target roots + an existing-folder index (parent|name → id) for dedup.
+  let roots: { shared?: string; private?: string } = { shared: 'dry-shared', private: 'dry-private' };
+  const existing = new Map<string, string>();
+  if (!dryRun) {
+    const resp = await relayThroughTab(fetchFolders());
+    if (!resp.ok) {
+      onEvent({ kind: 'log', message: `Folders skipped: could not read target folders (${resp.status})` });
+      return map;
+    }
+    const targetFolders = parseFolders(safeJson(resp.text));
+    roots = rootIdsByType(targetFolders);
+    for (const f of targetFolders.values()) {
+      if (!f.isRoot && f.parentFolderId) existing.set(`${f.parentFolderId}|${f.name.toLowerCase()}`, f.id);
+    }
+  }
+
+  let created = 0;
+  let reused = 0;
+  for (const f of toCreate) {
+    const parentTarget =
+      (f.parentFolderId && map.get(f.parentFolderId)) ||
+      (f.folderType === 'private' ? roots.private : roots.shared) ||
+      roots.shared ||
+      roots.private;
+    if (!parentTarget) {
+      onEvent({ kind: 'log', message: `Folder "${f.name}" skipped: no target root` });
+      continue;
+    }
+    const dedupKey = `${parentTarget}|${f.name.toLowerCase()}`;
+    let newId = existing.get(dedupKey);
+    if (newId) {
+      reused += 1;
+    } else if (dryRun) {
+      newId = `dry-folder-${f.id}`;
+    } else {
+      await pacedDelay(pacing);
+      const r = await relayThroughTab(
+        createFolder({
+          name: f.name,
+          parentFolderId: parentTarget,
+          permissions: f.folderType === 'shared' ? ownerPermissions(target ?? {}) : undefined,
+        }),
+      );
+      if (!r.ok) {
+        onEvent({ kind: 'log', message: `WARN folder "${f.name}" create failed (HTTP ${r.status})` });
+        continue;
+      }
+      newId = String((safeJson(r.text) as { id?: string } | null)?.id ?? '');
+      if (!newId) continue;
+      existing.set(dedupKey, newId);
+      created += 1;
+    }
+    map.set(f.id, newId);
+  }
+  onEvent({
+    kind: 'log',
+    message: `Folders: ${created} created, ${reused} reused (${map.size} mapped).`,
+  });
+  return map;
 }
 
 /** Read the font key→archive-file map (account/typefaces.assets.json). */

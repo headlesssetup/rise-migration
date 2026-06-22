@@ -518,6 +518,45 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
 
 ---
 
+## 10b. Folders & shortcuts (catalog) ✅ captured
+
+**Folders** (`/manage/api/folders`) — captured CRUD:
+- **Create:** `POST /manage/api/folders {name, parentFolderId, permissions?}` →
+  `{id, folderType, parentFolderId, ownerPrincipalId, subscriptionId, roleId, …}`.
+  - A **shared** folder includes `permissions:[{principalId, principalType:0,
+    roleId:3, profile:{user_id, email, first_name, last_name, avatars}}]` (the
+    creating user as owner). A **private** folder sends **no** `permissions`.
+  - There are **two roots** (both `isRoot:true`): a **shared** root and a
+    **private** root. A top-level folder's `parentFolderId` is the matching root
+    id; nested folders use their parent's id.
+- **Move (reparent):** `PATCH /manage/api/folders/{id}/move {parentId}`.
+- **Permissions:** `PATCH /manage/api/folders/{id}/permissions {permissions:[…]}`.
+- **Move a course into a folder:** `PATCH /manage/api/content/{courseId}/move`
+  with the **folder id as a bare `text/plain` body** (not JSON).
+
+**Recreation algorithm:** read the source `account/folders.json`; `GET
+/manage/api/folders` on the **target** to find its two root ids by `folderType`;
+create source folders **parent-first** (top-level → matching target root;
+nested → mapped parent), shared folders with owner `permissions`, recording
+old→new; then for each imported course, `PATCH content/{newCourseId}/move` to its
+**mapped** folder id (course→source-folderId comes from `_metadata/inventory.*`,
+not `GET_COURSE`). Team/subscription scoping may not map 1:1 — flag mismatches.
+
+## 10c. Shortcuts = bookmark-groups (dashboard collections)
+
+"Shortcuts" are **bookmark-groups** — user dashboard collections of pinned
+courses (NOT folders). Captured ops:
+- **Create:** `POST /manage/api/bookmark-groups {author, name}` → `{id, …}`.
+- **Rename:** `PATCH /manage/api/bookmark-groups/{id} {id, name}`.
+- **Delete:** `DELETE /manage/api/bookmark-groups/{id}`.
+- A **bookmark** = a pinned item `{id, itemId:<courseId>, itemType:"course",
+  bookmarkGroupId}`; assign to a group via `POST /manage/api/bookmarks/{id}/move
+  {id, bookmarkGroupId}`.
+
+Recreation (optional, lower priority): recreate the groups (`POST`), then for
+each bookmarked course create/move a bookmark referencing the **new** course id.
+User-scoped and dashboard-only — migrate after folders if wanted.
+
 ## 11. Safe-import gates (required UX, enforced before any write)
 
 1. **Write mode is never the default.** A distinct Import/write-mode entry, separate

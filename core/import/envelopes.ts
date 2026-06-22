@@ -9,7 +9,7 @@
  *  cross-origin S3 (absolute url, no auth), and binary (base64) bodies. */
 export interface WriteSpec {
   url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   /** JSON string body (rise.articulate.com calls). */
   body?: string;
   /** Base64-encoded raw bytes (S3 upload PUT). Mutually exclusive with `body`. */
@@ -318,6 +318,44 @@ export function putBank(args: {
       update_type: 'editor',
     }),
     label: `PUT question_banks/${args.bankId}`,
+  };
+}
+
+// --- Folders (catalog, protocol §10b) --------------------------------------
+
+/** GET /manage/api/folders — the target account's folder tree (to find roots). */
+export function fetchFolders(): WriteSpec {
+  return { url: '/manage/api/folders', method: 'GET', label: 'GET /manage/api/folders' };
+}
+
+/** POST /manage/api/folders — create a folder. Shared folders pass owner
+ *  `permissions`; private folders omit them. */
+export function createFolder(args: {
+  name: string;
+  parentFolderId: string;
+  permissions?: unknown[];
+}): WriteSpec {
+  return {
+    url: '/manage/api/folders',
+    method: 'POST',
+    body: JSON.stringify({
+      name: args.name,
+      parentFolderId: args.parentFolderId,
+      ...(args.permissions && args.permissions.length ? { permissions: args.permissions } : {}),
+    }),
+    label: 'POST /manage/api/folders (create folder)',
+  };
+}
+
+/** PATCH /manage/api/content/{courseId}/move — move a course into a folder. The
+ *  body is the folder id as a BARE text/plain string (confirmed in capture). */
+export function moveCourseToFolder(courseId: string, folderId: string): WriteSpec {
+  return {
+    url: `/manage/api/content/${encodeURIComponent(courseId)}/move`,
+    method: 'PATCH',
+    body: folderId,
+    contentType: 'text/plain;charset=UTF-8',
+    label: `move course → folder ${folderId}`,
   };
 }
 
