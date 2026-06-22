@@ -328,16 +328,15 @@ export function fetchFolders(): WriteSpec {
   return { url: '/manage/api/folders', method: 'GET', label: 'GET /manage/api/folders' };
 }
 
-/** POST /manage/api/folders — create a folder. We omit `permissions`: the owner
- *  principal would have to exist on the TARGET account, but the token's `sub`
- *  (global Okta subject) isn't a valid account-local user id, so an ACL is
- *  rejected "Invalid users" (400). Created without one, the folder is owned by
- *  the authenticated admin. (Param kept for callers that can source a valid
- *  target-local principal.) See docs/rise-import-protocol.md §10b. */
+/** POST /manage/api/folders — create a folder. We never send `permissions`: the
+ *  owner principal would have to exist on the TARGET account, but the token's
+ *  `sub` (global Okta subject) isn't a valid account-local user id, so an ACL is
+ *  rejected "Invalid users" (400). Without one, the folder is owned by the
+ *  authenticated admin — ownership/sharing is a manual post-migration step. See
+ *  docs/rise-import-protocol.md §10b. */
 export function createFolder(args: {
   name: string;
   parentFolderId: string;
-  permissions?: unknown[];
 }): WriteSpec {
   return {
     url: '/manage/api/folders',
@@ -345,7 +344,6 @@ export function createFolder(args: {
     body: JSON.stringify({
       name: args.name,
       parentFolderId: args.parentFolderId,
-      ...(args.permissions && args.permissions.length ? { permissions: args.permissions } : {}),
     }),
     label: 'POST /manage/api/folders (create folder)',
   };

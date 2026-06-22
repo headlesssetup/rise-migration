@@ -3,7 +3,6 @@ import {
   parseFolders,
   rootIdsByType,
   orderForCreation,
-  ownerPermissions,
 } from './folders';
 
 // id-keyed map shape (the documented GET /manage/api/folders response)
@@ -44,17 +43,5 @@ describe('orderForCreation', () => {
     expect(ordered.indexOf('a')).toBeLessThan(ordered.indexOf('b'));
     expect(ordered.indexOf('b')).toBeLessThan(ordered.indexOf('c'));
     expect(ordered).toContain('p');
-  });
-});
-
-describe('ownerPermissions', () => {
-  it('builds an owner entry from the identity', () => {
-    const p = ownerPermissions({ sub: 'auth0|x', email: 'a@b.c' }) as any[];
-    expect(p[0].principalId).toBe('auth0|x');
-    expect(p[0].roleId).toBe(3);
-    expect(p[0].profile.email).toBe('a@b.c');
-  });
-  it('is empty without a sub', () => {
-    expect(ownerPermissions({})).toEqual([]);
   });
 });
