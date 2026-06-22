@@ -127,4 +127,43 @@ describe('verifyParity', () => {
     expect(md).toContain('Read-back parity');
     expect(md).toContain('Unexpected divergences: 0');
   });
+
+  // Regression: parity must align both sides by the authoritative `course.lessons`
+  // id list — NOT by `position` (which scrambles a real course). Here the source's
+  // position order is the REVERSE of its course.lessons order; the target was built
+  // in course.lessons order (positions 0,1). Sorting by position would compare a
+  // section against a content lesson and manufacture divergences. With the correct
+  // ordering both sides align and the round-trip passes.
+  it('orders lessons by course.lessons, not position (scramble-proof)', () => {
+    const scrambledSource: GetCourseDocument = {
+      course: { id: 'SRC', title: 'C', lessons: ['Lsec', 'Lcontent'] } as any,
+      lessons: [
+        // Array/position order is the OPPOSITE of course.lessons order.
+        {
+          id: 'Lcontent',
+          position: 0,
+          type: 'blocks',
+          title: 'Content',
+          items: [{ id: 'b1src', family: 'text', variant: 'paragraph', items: [{ id: 'i1', paragraph: '<p>Hi</p>' }] }],
+        },
+        { id: 'Lsec', position: 1, type: 'section', title: 'Section' },
+      ],
+    };
+    const builtTarget: GetCourseDocument = {
+      course: { id: 'NEW', title: 'C', lessons: ['Tsec', 'Tcontent'] } as any,
+      lessons: [
+        { id: 'Tsec', position: 0, type: 'section', title: 'Section' },
+        {
+          id: 'Tcontent',
+          position: 1,
+          type: 'blocks',
+          title: 'Content',
+          items: [{ id: 'b1new', family: 'text', variant: 'paragraph', items: [{ id: 'i1new', paragraph: '<p>Hi</p>' }] }],
+        },
+      ],
+    };
+    const r = verifyParity(scrambledSource, builtTarget);
+    expect(r.issues).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
 });

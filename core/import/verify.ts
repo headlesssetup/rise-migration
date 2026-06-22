@@ -12,6 +12,7 @@ import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 import { classifyString } from '@/core/census/scan';
 import { extractUploadedKeys } from '@/core/assets/keys';
 import { looksLikeClientId } from './ids';
+import { orderLessons } from './plan';
 import type { ManualFlag } from './executor';
 
 // Fields the server assigns / that are inherently volatile between two copies —
@@ -116,9 +117,15 @@ export interface ParityReport {
   expectedDivergences: ParityIssue[];
 }
 
+// Order lessons by the course's authoritative ordered lesson-id list
+// (`course.lessons`) — the SAME ordering the plan builds with. ⚠ Do NOT sort by
+// `position`: that field scrambles a real course (the very reason the plan stopped
+// using it). Sorting either side by position aligns source-vs-target in different
+// orders and manufactures phantom block-type-changed / missing-block divergences.
 function orderedLessons(doc: GetCourseDocument): Lesson[] {
-  const ls = Array.isArray(doc.lessons) ? [...doc.lessons] : [];
-  return ls.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  const ls = Array.isArray(doc.lessons) ? doc.lessons : [];
+  const orderField = (doc.course as Record<string, unknown> | undefined)?.lessons;
+  return orderLessons(ls, orderField);
 }
 
 function blockKey(b: Block): string {
