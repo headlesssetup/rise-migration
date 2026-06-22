@@ -20,7 +20,6 @@ import {
   parseFolders,
   rootIdsByType,
   orderForCreation,
-  ownerPermissions,
   createFolder,
   fetchFolders,
   moveCourseToFolder,
@@ -236,7 +235,7 @@ export async function runImport(
   const folderIdMap =
     opts.recreateFolders === false
       ? new Map<string, string>()
-      : await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
+      : await setupFolders(storage, opts.dryRun, pacing, onEvent);
   const courseFolders = await readCourseFolders(storage);
   const readFontBytes = async (fontKey: string) => {
     const file = fontManifest.get(fontKey);
@@ -417,9 +416,15 @@ async function readCourseFolders(storage: Storage): Promise<Map<string, string>>
  * name+parent against the target's existing folders so re-runs don't spawn
  * duplicates. Returns source folderId → target folderId.
  */
+// Folders are created WITHOUT an explicit `permissions` ACL. The owner principal
+// would be the operator's account-local user id, but on a US→EU migration the
+// bearer token's `sub` (the global Okta subject) is NOT a valid principal on the
+// target account — the folders API rejects it ("Invalid users", 400). Created
+// without an ACL, a folder is simply owned by the authenticated admin (same as
+// every private folder). Folder-level sharing is not replicated across accounts
+// — re-share in the Rise UI if needed. See docs/rise-import-protocol.md §10b.
 async function setupFolders(
   storage: Storage,
-  target: AccountIdentity | undefined,
   dryRun: boolean,
   pacing: PacingConfig,
   onEvent: (e: ProgressEvent) => void,
@@ -468,11 +473,7 @@ async function setupFolders(
     } else {
       await pacedDelay(pacing);
       const r = await relayThroughTab(
-        createFolder({
-          name: f.name,
-          parentFolderId: parentTarget,
-          permissions: f.folderType === 'shared' ? ownerPermissions(target ?? {}) : undefined,
-        }),
+        createFolder({ name: f.name, parentFolderId: parentTarget }),
       );
       if (!r.ok) {
         onEvent({ kind: 'log', message: `WARN folder "${f.name}" create failed (HTTP ${r.status})` });

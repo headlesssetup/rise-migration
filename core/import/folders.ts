@@ -82,7 +82,11 @@ export function orderForCreation(folders: Map<string, SourceFolder>): SourceFold
     .sort((a, b) => depth(a) - depth(b));
 }
 
-/** Owner `permissions` for a shared folder, built from the target identity. */
+/** Owner `permissions` for a shared folder, built from the target identity.
+ *  NOTE: currently UNUSED by the importer — `identity.sub` is the global Okta
+ *  subject, which the folders API rejects as "Invalid users" because it isn't a
+ *  valid account-local principal (the `_articulate_user_id` cookie is). Kept for
+ *  when we can source the target-local user id and want to replicate the ACL. */
 export function ownerPermissions(identity: {
   sub?: string | null;
   email?: string | null;

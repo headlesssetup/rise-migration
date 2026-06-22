@@ -530,9 +530,19 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
 **Folders** (`/manage/api/folders`) — captured CRUD:
 - **Create:** `POST /manage/api/folders {name, parentFolderId, permissions?}` →
   `{id, folderType, parentFolderId, ownerPrincipalId, subscriptionId, roleId, …}`.
-  - A **shared** folder includes `permissions:[{principalId, principalType:0,
-    roleId:3, profile:{user_id, email, first_name, last_name, avatars}}]` (the
-    creating user as owner). A **private** folder sends **no** `permissions`.
+  - A **shared** folder *may* include `permissions:[{principalId, principalType:0,
+    roleId:3, profile:{user_id, …}}]` (the creating user as owner). A **private**
+    folder sends **no** `permissions`.
+  - ⚠ **`permissions` is NOT portable across accounts.** The `principalId` must be
+    a user that exists **on the target account**. The bearer token's `sub`/`aid`
+    (the global Okta subject, e.g. `auth0|5c5c…`) is **not** the same as the
+    account-local Rise user id (in the `_articulate_user_id` cookie, e.g.
+    `auth0|671e…`) — sending the Okta subject is rejected `400 {"message":"Error
+    creating folder with permissions - Invalid users", errors:[{principalId,
+    error:true}]}`. On a US→EU migration these always differ. **We therefore
+    create every folder WITHOUT a `permissions` array** — it's then owned by the
+    authenticated admin (identical to a private-folder create). Folder-level
+    sharing/ACLs are **not replicated**; re-share in the UI if needed.
   - There are **two roots** (both `isRoot:true`): a **shared** root and a
     **private** root. A top-level folder's `parentFolderId` is the matching root
     id; nested folders use their parent's id.
@@ -544,8 +554,9 @@ Built-in theme cover/header images stay as `cdn.…/assets/rise/…` references.
 **Recreation algorithm:** read the source `account/folders.json`; `GET
 /manage/api/folders` on the **target** to find its two root ids by `folderType`;
 create source folders **parent-first** (top-level → matching target root;
-nested → mapped parent), shared folders with owner `permissions`, recording
-old→new; then for each imported course, `PATCH content/{newCourseId}/move` to its
+nested → mapped parent) **without a `permissions` ACL** (see the cross-account
+caveat above), recording old→new; then for each imported course,
+`PATCH content/{newCourseId}/move` to its
 **mapped** folder id (course→source-folderId comes from `_metadata/inventory.*`,
 not `GET_COURSE`). Team/subscription scoping may not map 1:1 — flag mismatches.
 
