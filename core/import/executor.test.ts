@@ -170,6 +170,56 @@ describe('executePlan — multi-key block (key + crushedKey)', () => {
   });
 });
 
+describe('executePlan — reused asset (dedup)', () => {
+  it('uploads a key shared across blocks ONCE and reuses it', async () => {
+    // The same logo key referenced by TWO blocks in one lesson.
+    const logo = 'rise/courses/SRC/logo.png';
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [{ key: logo, kind: 'media-image', file: 'assets/logo.png', ext: 'png' }],
+      banksById: new Map(),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: [
+              { id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'image', variant: 'hero', items: [{ id: 'ci1aaaaaaaaaaaaaaaaaaaaaa', media: { image: { key: logo } } }] },
+              { id: 'cb2aaaaaaaaaaaaaaaaaaaaaa', family: 'image', variant: 'hero', items: [{ id: 'ci2aaaaaaaaaaaaaaaaaaaaaa', media: { image: { key: logo } } }] },
+            ],
+          },
+        ],
+      },
+    };
+    let yurlN = 0;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      'GET_YURL': () => ({ payload: { key: `rise/courses/NEWCOURSE/up${yurlN++}.png`, url: 'https://s3/put', type: 'image/png' } }),
+      // Return metadata for ALL blocks in the batch (this lesson has two).
+      'CREATE_BLOCKS': (body: unknown) => {
+        const blocks = (body as { payload: { blocks: { id: string }[] } }).payload.blocks;
+        return { payload: { success: true, blockMetadata: blocks.map((b, i) => ({ id: b.id, globalBlockId: `g${i}` })) } };
+      },
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/png' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    // Uploaded ONCE despite two references (one GET_YURL, one S3 PUT).
+    expect(yurlN).toBe(1);
+    expect(res.envelopes.filter((e) => e.label === 'S3 PUT (upload bytes)').length).toBe(1);
+  });
+});
+
 describe('executePlan — course with a cover image', () => {
   it('flags course-level media (no captured write path) without false-failing', async () => {
     const input: PlanInput = {

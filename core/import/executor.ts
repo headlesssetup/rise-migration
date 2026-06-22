@@ -501,6 +501,15 @@ export async function executePlan(
           break;
         }
         case 'upload-asset': {
+          // Dedup: a source asset reused across blocks (e.g. a logo) uploads ONCE.
+          // The plan emits an upload step per (block, key), so the SAME source key
+          // can recur — if it's already uploaded, reuse the new key instead of
+          // creating a duplicate copy in the target. (CLAUDE.md: upload once, reuse
+          // the key for all references.)
+          if (keyMap.has(step.sourceKey)) {
+            log(`${pfx()} reuse ${step.sourceKey} (already uploaded)`);
+            break;
+          }
           // Faithful upload: GET_YURL → S3 PUT of the EXACT exported bytes → map
           // the source key. We do NOT crush images or transcode a/v — the source
           // asset is the source of truth (Rise already crushed/transcoded it at
