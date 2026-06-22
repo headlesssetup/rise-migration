@@ -1049,35 +1049,62 @@ export interface PurgeOutcome {
   coursesFailed: number;
 }
 
-/** TARGET course ids this tool created, from each course's joblog id-map. */
-async function importedCourseTargetIds(storage: Storage): Promise<string[]> {
+/** A target course this tool created, with provenance (which source course +
+ *  title it came from), so the purge can show exactly what it will delete. */
+interface ImportedCourse {
+  targetId: string;
+  sourceId: string;
+  title?: string;
+  /** Where we learned the target id — a per-course job log, or the ledger. */
+  via: 'joblog' | 'ledger';
+}
+
+/** TARGET courses this tool created — read from each course's joblog id-map
+ *  (`joblog[sourceCourseId]` = newCourseId, recorded at create time) plus the
+ *  append-only ledger. Carries the source title for an auditable purge preview. */
+async function importedCourses(storage: Storage): Promise<ImportedCourse[]> {
+  const titleBySrc = new Map<string, string>();
   let srcIds: string[] = [];
   const manifestRaw = await storage.readManifest();
   if (manifestRaw) {
     try {
-      const m = JSON.parse(manifestRaw) as { courses?: { id?: string }[] };
-      if (Array.isArray(m.courses)) srcIds = m.courses.map((c) => c.id ?? '').filter(Boolean);
+      const m = JSON.parse(manifestRaw) as { courses?: { id?: string; title?: string }[] };
+      for (const c of m.courses ?? []) {
+        if (c.id) {
+          srcIds.push(c.id);
+          if (c.title) titleBySrc.set(c.id, c.title);
+        }
+      }
     } catch {
       /* fall through */
     }
   }
   if (srcIds.length === 0) srcIds = await storage.listSaved();
 
-  const out: string[] = [];
+  const out: ImportedCourse[] = [];
+  const seen = new Set<string>();
   for (const src of srcIds) {
     const log = await storage.readImportArtifact(`${src}.joblog.json`);
     if (!log) continue;
     try {
       const m = JSON.parse(log) as Record<string, string>;
       const newId = m[src];
-      if (newId && newId !== src) out.push(newId);
+      if (newId && newId !== src && !seen.has(newId)) {
+        seen.add(newId);
+        out.push({ targetId: newId, sourceId: src, title: titleBySrc.get(src), via: 'joblog' });
+      }
     } catch {
       /* tolerate */
     }
   }
-  // Union the append-only ledger so RETRIED courses' orphan shells are caught.
-  out.push(...(await readCreatedCourses(storage)));
-  return [...new Set(out)];
+  // Append-only ledger catches RETRIED courses' orphan shells (no source link).
+  for (const t of await readCreatedCourses(storage)) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      out.push({ targetId: t, sourceId: '(unknown)', via: 'ledger' });
+    }
+  }
+  return out;
 }
 
 /** TARGET folder ids this tool created, CHILD-FIRST (so a parent isn't deleted
@@ -1122,11 +1149,18 @@ export async function purgeImported(
   // 1) Courses we created (half-imported shells litter the content list).
   //    Delete ONE id per call (matches the UI; a batch 500s if any single id is
   //    bad). Two-step per course: soft-delete → bin, then hard-delete → gone.
-  const courseIds = await importedCourseTargetIds(storage);
-  if (courseIds.length) {
-    onEvent({ kind: 'log', message: `Purge: deleting ${courseIds.length} imported course(s)…` });
+  const courses = await importedCourses(storage);
+  if (courses.length) {
+    onEvent({ kind: 'log', message: `Purge: ${courses.length} imported course(s) (from job logs we wrote at create time):` });
+    // Provenance: show source course + title → target id, so it's auditable.
+    for (const c of courses) {
+      onEvent({
+        kind: 'log',
+        message: `  • ${c.title ?? c.sourceId} [src ${c.sourceId}] → target ${c.targetId} (${c.via})`,
+      });
+    }
   }
-  for (const id of courseIds) {
+  for (const { targetId: id } of courses) {
     if (opts.dryRun) {
       onEvent({ kind: 'log', message: `DRY  soft+hard delete course ${id}` });
       out.coursesDeleted += 1;
