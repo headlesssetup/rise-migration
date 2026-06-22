@@ -32,6 +32,7 @@ import type { SearchResultItem } from '@/shared/types/rise';
 import { AssetsView } from './components/AssetsView';
 import { BanksView } from './components/BanksView';
 import { CensusView } from './components/CensusView';
+import { ImportView } from './components/ImportView';
 import { NoveltyView } from './components/NoveltyView';
 import { SessionView } from './components/SessionView';
 import {
@@ -42,8 +43,10 @@ import {
 } from './folder-store';
 import {
   buildFolders,
+  cdnBasesForPlane,
   countCourses,
   downloadAllAssets,
+  makeCdnDownloader,
   exportCourses,
   fetchAccountExtras,
   fetchFolders,
@@ -62,11 +65,23 @@ type DirPicker = (opts?: {
 }) => Promise<FileSystemDirectoryHandle>;
 
 type Phase = 'idle' | 'listing' | 'listed' | 'exporting' | 'done';
+type Mode = 'export' | 'import';
 
 const PAGE = 16;
 
+/** Classify a log line for colorization (CSS in style.css). */
+function logLineClass(line: string): string {
+  if (/^\s*(FAILED|BLOCKED|✗)|\berror\b|Unauthorized|HTTP [45]\d\d/i.test(line))
+    return 'log-line log-error';
+  if (/^\s*(\[\d+\/\d+\]\s*)?WARN|⚠/i.test(line)) return 'log-line log-warn';
+  if (/\bOK\b|✓|Imported|Planned|done\b/i.test(line)) return 'log-line log-ok';
+  if (/^\s*(\[\d+\/\d+\]\s*)?DRY\b/i.test(line)) return 'log-line log-dry';
+  return 'log-line';
+}
+
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
+  const [mode, setMode] = useState<Mode>('export');
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [storage, setStorage] = useState<Storage | null>(null);
   const [folderName, setFolderName] = useState<string | null>(null);
@@ -77,6 +92,7 @@ export function App() {
   const [courses, setCourses] = useState<SearchResultItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<string[]>([]);
+  const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -85,6 +101,25 @@ export function App() {
   const [banks, setBanks] = useState<BankCatalog | null>(null);
   const [assets, setAssets] = useState<AssetsSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  // Only auto-scroll the log to the bottom when the user is already there — if
+  // they've scrolled up to read, leave their position alone.
+  const stickToBottomRef = useRef(true);
+  const onLogScroll = useCallback(() => {
+    const el = logRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }, []);
+
+  const copyLog = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(log.join('\n'));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable — ignore */
+    }
+  }, [log]);
 
   const addLog = useCallback((message: string) => {
     setLog((l) => [...l, message]);
@@ -145,7 +180,9 @@ export function App() {
   }, [risePresent, totalCount]);
 
   useEffect(() => {
-    logRef.current?.scrollTo(0, logRef.current.scrollHeight);
+    if (stickToBottomRef.current) {
+      logRef.current?.scrollTo(0, logRef.current.scrollHeight);
+    }
   }, [log]);
 
   const onEvent = useCallback(
@@ -215,17 +252,7 @@ export function App() {
     if (storage) {
       await storage.writeInventory(inventoryToJson(rows), inventoryToCsv(rows));
       addLog(`Inventory written (${rows.length} rows) → inventory.csv/json.`);
-
-      // Folder structure (course folders now; bank folders after a bank fetch).
-      await fetchFolders(storage, onEvent);
-      const folders = await buildFolders(storage);
-      if (folders.length) {
-        const course = folders.filter((f) => f.source === 'course').length;
-        const bank = folders.filter((f) => f.source === 'bank').length;
-        addLog(
-          `Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`,
-        );
-      }
+      // (Folder tree is exported under Account Data, not here.)
     } else {
       addLog(
         `Inventory built (${rows.length} rows) — connect a folder to save it.`,
@@ -281,6 +308,14 @@ export function App() {
 
     await storage.writeManifest({
       generatedAt: new Date().toISOString(),
+      // Source account identity — the import side's Source ≠ Target guard reads
+      // this to refuse writing back into the account the archive came from.
+      sourceAccount: {
+        name: session?.accountName ?? session?.identity?.name ?? null,
+        sub: session?.identity?.sub ?? null,
+        email: session?.identity?.email ?? null,
+        plane: session?.plane ?? null,
+      },
       courseCount: scans.length,
       saved,
       skipped,
@@ -299,7 +334,7 @@ export function App() {
     addLog(
       `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s).`,
     );
-  }, [storage, selectedCourses, onEvent, addLog]);
+  }, [storage, selectedCourses, onEvent, addLog, session]);
 
   const runBanks = useCallback(async () => {
     if (!storage) return;
@@ -348,8 +383,20 @@ export function App() {
     setPhase('exporting');
     setAssets(null);
     setProgress(null);
-    addLog('Downloading assets from articulateusercontent.com (parallel)…');
-    const summary = await downloadAllAssets(storage, onEvent);
+    // Plane-aware CDN host: prefer the account plane recorded in the archive
+    // manifest (the account the media belongs to), else the live tab's plane,
+    // else try both (US then EU).
+    let plane: 'us' | 'eu' | null = session?.plane ?? null;
+    try {
+      const m = await storage.readManifest();
+      const recorded = m ? (JSON.parse(m).sourceAccount?.plane as typeof plane) : null;
+      if (recorded === 'us' || recorded === 'eu') plane = recorded;
+    } catch {
+      /* fall back to the live session plane / both */
+    }
+    const bases = cdnBasesForPlane(plane);
+    addLog(`Downloading assets from ${bases.join(' / ')} (parallel)…`);
+    const summary = await downloadAllAssets(storage, onEvent, makeCdnDownloader(bases));
     setAssets(summary);
     setPhase('done');
     const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
@@ -367,35 +414,72 @@ export function App() {
       const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
       addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
     }
-  }, [storage, onEvent, addLog]);
+  }, [storage, onEvent, addLog, session]);
 
   const runAccount = useCallback(async () => {
     if (!storage) return;
     setPhase('exporting');
     setProgress(null);
-    addLog('Exporting account extras (block templates, typefaces, review items)…');
+    addLog('Exporting account data (folders, block templates, typefaces)…');
+
+    // Folder tree — account-level data, independent of the course listing.
+    await fetchFolders(storage, onEvent);
+    const folders = await buildFolders(storage);
+    if (folders.length) {
+      const course = folders.filter((f) => f.source === 'course').length;
+      const bank = folders.filter((f) => f.source === 'bank').length;
+      addLog(`Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`);
+    }
+
     const s = await fetchAccountExtras(storage, onEvent);
     setPhase('done');
     addLog(
-      `Account extras: ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s), ${s.reviewItems} review item(s) (${s.mightyItems} Mighty).`,
+      `Account data: ${folders.length} folder(s), ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
     );
   }, [storage, onEvent, addLog]);
 
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
 
+  // Setup gate: a Rise tab, a destination folder, and a captured token.
+  const ready = !!session?.risePresent && !!storage && !!session?.hasToken;
+  const setupNeeds = [
+    !session?.risePresent && 'open a logged-in Rise tab',
+    !storage && 'pick a destination folder',
+    // The token is read from the Rise cookie automatically once a logged-in tab
+    // is found — surfaced as a transient status, not an action.
+    session?.risePresent &&
+      !session?.hasToken &&
+      'capturing the session token… (reload your Rise tab if it doesn’t appear)',
+  ].filter(Boolean) as string[];
+
   return (
     <div className="app">
-      <h1>Rise Migration — Exporter</h1>
+      <h1>Rise Migration — {mode === 'export' ? 'Exporter' : 'Importer'}</h1>
+
+      <div className="row" role="tablist" style={{ marginBottom: 8 }}>
+        <button
+          onClick={() => setMode('export')}
+          disabled={busy}
+          aria-pressed={mode === 'export'}
+          style={mode === 'export' ? { fontWeight: 700 } : undefined}
+        >
+          Export (read-only)
+        </button>
+        <button
+          onClick={() => setMode('import')}
+          disabled={busy}
+          aria-pressed={mode === 'import'}
+          style={mode === 'import' ? { fontWeight: 700, color: '#b00' } : undefined}
+        >
+          Import (write)
+        </button>
+      </div>
 
       <section className="card">
-        <h2>Session</h2>
+        <h2>Setup</h2>
         <SessionView session={session} totalCount={totalCount} />
-      </section>
-
-      <section className="card">
-        <h2>Destination folder</h2>
-        <div className="row">
+        <div className="row" style={{ marginTop: 6 }}>
           <button onClick={pickFolder} disabled={busy}>
             {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
           </button>
@@ -411,10 +495,51 @@ export function App() {
             <button onClick={reconnectFolder}>Reconnect</button>
           </p>
         )}
+        {!ready && setupNeeds.length > 0 && (
+          <p className="hint">To continue: {setupNeeds.join(' · ')}.</p>
+        )}
       </section>
 
+      {ready && mode === 'import' && (
+        <ImportView storage={storage} session={session} addLog={addLog} />
+      )}
+
+      {ready && mode === 'export' && (
+      <>
+      {/* A · Account Data */}
       <section className="card">
-        <h2>Courses</h2>
+        <h2>A · Account Data</h2>
+        <button
+          onClick={runAccount}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Export account data'}
+        </button>
+        <p className="hint">
+          Block templates and custom typefaces (+ font files). Raw → account/,
+          reports → _metadata/.
+        </p>
+      </section>
+
+      {/* B · Question banks */}
+      <section className="card">
+        <h2>B · Question banks</h2>
+        <button
+          onClick={runBanks}
+          disabled={busy || !storage || !session?.risePresent}
+        >
+          {phase === 'exporting' ? 'Working…' : 'Fetch question banks (paced)'}
+        </button>
+        <p className="hint">
+          Reusable banks referenced by draw-from-bank blocks — saved to
+          question-banks/, profiled in question-banks-catalog.csv/json.
+        </p>
+        {banks && <BanksView banks={banks} />}
+      </section>
+
+      {/* C · Courses */}
+      <section className="card">
+        <h2>C · Courses</h2>
         <div className="row">
           <label>
             List{' '}
@@ -438,18 +563,11 @@ export function App() {
             All{totalCount !== null ? ` (${totalCount})` : ''}
           </button>
         </div>
-        <button onClick={list} disabled={busy || !session?.risePresent}>
+        <button onClick={list} disabled={busy}>
           {phase === 'listing'
             ? 'Listing…'
             : `List ${atAll ? 'all' : listLimit} course(s) (paced)`}
         </button>
-        {!session?.risePresent && (
-          <p className="hint">
-            Open and log into a Rise tab (US rise.articulate.com or EU
-            rise.eu.articulate.com) and keep it open — the panel rides that
-            tab's live session.
-          </p>
-        )}
 
         {courses.length > 0 && (
           <>
@@ -494,23 +612,9 @@ export function App() {
         )}
       </section>
 
+      {/* C2 · Assets */}
       <section className="card">
-        <h2>Question banks</h2>
-        <button
-          onClick={runBanks}
-          disabled={busy || !storage || !session?.risePresent}
-        >
-          {phase === 'exporting' ? 'Working…' : 'Fetch question banks (paced)'}
-        </button>
-        <p className="hint">
-          Reusable banks referenced by draw-from-bank blocks — saved to
-          question-banks/, profiled in question-banks-catalog.csv/json.
-        </p>
-        {banks && <BanksView banks={banks} />}
-      </section>
-
-      <section className="card">
-        <h2>Assets (Phase 2)</h2>
+        <h2>C2 · Assets</h2>
         <button onClick={runAssets} disabled={busy || !storage}>
           {phase === 'exporting' ? 'Working…' : 'Download assets'}
         </button>
@@ -522,21 +626,8 @@ export function App() {
         </p>
         {assets && <AssetsView summary={assets} />}
       </section>
-
-      <section className="card">
-        <h2>Account extras</h2>
-        <button
-          onClick={runAccount}
-          disabled={busy || !storage || !session?.risePresent}
-        >
-          {phase === 'exporting' ? 'Working…' : 'Export account extras'}
-        </button>
-        <p className="hint">
-          Block templates, custom typefaces (+ font files), and the Review-360
-          items inventory (flags Mighty bundles). Raw → account/, reports →
-          _metadata/.
-        </p>
-      </section>
+      </>
+      )}
 
       {progress && (
         <section className="card">
@@ -564,11 +655,42 @@ export function App() {
         </details>
       )}
 
-      <section className="card">
-        <h2>Log</h2>
-        <div className="log" ref={logRef}>
+      <section className="card log-card">
+        <div className="log-header">
+          <h2>Log</h2>
+          <button
+            className="copy-btn"
+            onClick={copyLog}
+            disabled={log.length === 0}
+            title="Copy log to clipboard"
+            aria-label="Copy log to clipboard"
+          >
+            {copied ? (
+              '✓ Copied'
+            ) : (
+              <>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>{' '}
+                Copy
+              </>
+            )}
+          </button>
+        </div>
+        <div className="log" ref={logRef} onScroll={onLogScroll}>
           {log.map((line, i) => (
-            <div key={i}>{line}</div>
+            <div key={i} className={logLineClass(line)}>
+              {line}
+            </div>
           ))}
         </div>
       </section>

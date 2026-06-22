@@ -13,6 +13,8 @@ export interface Storage {
   listSaved(): Promise<string[]>;
   /** Write the run manifest (index/counts/version/validation summary). */
   writeManifest(manifest: unknown): Promise<void>;
+  /** Read the run manifest (for the import side: source identity + course list). */
+  readManifest(): Promise<string | null>;
   /** Write the list-level inventory (catalog from the search listing). */
   writeInventory(json: string, csv: string): Promise<void>;
   /** Read the list-level inventory JSON (for folder counts), or null. */
@@ -53,16 +55,26 @@ export interface Storage {
   writeBlockTemplateInventory(json: string, csv: string): Promise<void>;
   /** Write the raw typefaces response. */
   writeTypefaces(raw: string): Promise<void>;
+  /** Read the raw typefaces response (import: typeface name→id + fonts), or null. */
+  readTypefaces(): Promise<string | null>;
+  /** Write the font key→archive-file map (account/typefaces.assets.json) so the
+   *  import can re-upload custom font bytes by their source key. */
+  writeFontManifest(json: string): Promise<void>;
+  /** Read the font key→archive-file map, or null. */
+  readFontManifest(): Promise<string | null>;
+  /** Account-level binaries (fonts) live under `account/assets/` — kept separate
+   *  from the (often huge) content-addressed course `assets/` store. */
+  writeAccountAsset(name: string, bytes: Uint8Array): Promise<void>;
+  hasAccountAsset(name: string): Promise<boolean>;
+  readAccountAsset(name: string): Promise<Uint8Array | null>;
   /** Write the typefaces inventory. */
   writeTypefaceInventory(json: string, csv: string): Promise<void>;
-  /** Write the raw Review-360 items response. */
-  writeReviewItems(raw: string): Promise<void>;
-  /** Write the Review-360 items inventory. */
-  writeReviewItemsInventory(json: string, csv: string): Promise<void>;
 
   // --- Phase 2: assets (content-addressed binaries + per-owner manifests) ---
   /** Write a content-addressed asset blob: `assets/<name>` (name=`<sha256>.<ext>`). */
   writeAsset(name: string, bytes: Uint8Array): Promise<void>;
+  /** Read a content-addressed asset's bytes (import: re-upload to target), or null. */
+  readAsset(name: string): Promise<Uint8Array | null>;
   /** Is this content-addressed asset already stored? (cross-owner dedup). */
   hasAsset(name: string): Promise<boolean>;
   /** Write a course/bank's asset manifest → `<scope>/<id>.assets.json`. */
@@ -83,4 +95,11 @@ export interface Storage {
   ): Promise<string | null>;
   /** Write the run-wide assets summary (totals + un-downloaded-key assertion). */
   writeAssetsSummary(json: string): Promise<void>;
+
+  // --- Phase 3: import artifacts (kept separate from the read-only archive) ---
+  /** Write an import artifact (fidelity report / resumable job log) under
+   *  `_import/<name>`. Never touches the immutable source archive. */
+  writeImportArtifact(name: string, contents: string): Promise<void>;
+  /** Read a prior import artifact (resume the job log), or null if absent. */
+  readImportArtifact(name: string): Promise<string | null>;
 }

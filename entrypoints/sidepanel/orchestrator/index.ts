@@ -20,5 +20,28 @@ export {
   buildBankInventoryRows,
   type BankFetchResult,
 } from './banks';
-export { cdnDownload, downloadAllAssets, type AssetsSummary } from './assets';
+export {
+  cdnDownload,
+  makeCdnDownloader,
+  cdnBasesForPlane,
+  downloadAllAssets,
+  type AssetsSummary,
+} from './assets';
 export { fetchAccountExtras, type AccountExtrasSummary } from './account';
+export {
+  runImport,
+  readSourceIdentity,
+  readArchiveInfo,
+  importAccountSettings,
+  listLocalBanks,
+  importBanks,
+  type ImportOptions,
+  type ImportRunResult,
+  type CourseImportOutcome,
+  type ArchiveInfo,
+  type AccountSettingsSummary,
+  type AccountSettingsOptions,
+  type LocalBank,
+  type BankImportOutcome,
+  type BankImportOptions,
+} from './import';

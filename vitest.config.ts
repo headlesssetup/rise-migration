@@ -7,6 +7,11 @@ export default defineConfig({
   plugins: [WxtVitest()],
   test: {
     environment: 'node',
-    include: ['core/**/*.test.ts', 'shared/**/*.test.ts'],
+    include: [
+      'core/**/*.test.ts',
+      'shared/**/*.test.ts',
+      // Panel-side orchestrator tests (WxtVitest mocks the extension APIs).
+      'entrypoints/**/*.test.ts',
+    ],
   },
 });

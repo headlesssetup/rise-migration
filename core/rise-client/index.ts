@@ -120,15 +120,3 @@ export function buildFetchTypefacesRequest(courseId: string): RequestSpec {
     }),
   };
 }
-
-/**
- * GET api.articulate.com/review/items — Review 360 "storyline" items the account
- * can reach (incl. Mighty bundles, flagged `source.mighty_bundle`). Absolute URL
- * (cross-origin, bearer-auth, CORS-enabled); covered by host_permissions.
- */
-export function buildReviewItemsRequest(): RequestSpec {
-  return {
-    url: 'https://api.articulate.com/review/items?includeStackItems=true&productFilter=storyline',
-    method: 'GET',
-  };
-}

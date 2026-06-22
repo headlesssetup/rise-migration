@@ -69,7 +69,11 @@ export function extractUploadedKeys(value: string): string[] {
   const seen = new Set<string>();
   const add = (raw: string): void => {
     const key = canonicalizeKey(raw);
-    if (key && !seen.has(key)) {
+    // Only course/bank UPLOADS are migratable. A usercontent URL can also point
+    // at a built-in SHARED asset (`assets/rise/...themes/...`) — those are kept
+    // as references, never re-uploaded/flagged, so exclude anything that isn't
+    // under rise/courses/ or rise/questionBanks/.
+    if (key && /^rise\/(?:courses|questionBanks)\//.test(key) && !seen.has(key)) {
       seen.add(key);
       out.push(key);
     }

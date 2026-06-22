@@ -14,11 +14,12 @@ import {
   buildGetQuestionBankRequest,
   buildListFoldersRequest,
   buildListQuestionBanksRequest,
-  buildReviewItemsRequest,
   buildSearchRequest,
   REFRESH_URL,
   type RequestSpec,
 } from '@/core/rise-client';
+import type { WriteSpec } from '@/core/import/envelopes';
+import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
   BackgroundRequest,
@@ -26,6 +27,7 @@ import type {
   ContentMessage,
   FetchResult,
   RawKind,
+  WriteRelayResult,
 } from '@/shared/messaging';
 
 const TOKEN_KEY = 'riseToken';
@@ -37,22 +39,59 @@ interface InPageResult {
   error?: string;
 }
 
+/** What relayFetch needs from a spec — RequestSpec (reads) or WriteSpec (writes).
+ *  Write-only fields are optional so a read RequestSpec is assignable. */
+interface RelaySpec {
+  url: string;
+  method: string;
+  body?: string;
+  base64Body?: string;
+  contentType?: string;
+  noAuth?: boolean;
+}
+
 // Executed INSIDE the Rise tab (isolated world) — a same-origin fetch that
 // rides the live session's first-party cookies, plus the bearer if we have it.
 // Must be self-contained (no closures): it is serialized by executeScript.
+//
+// Phase 3 adds write support: PUT/DELETE, a base64 binary body (presigned S3
+// upload — the same cross-origin PUT the real editor issues from the Rise page),
+// an explicit Content-Type, and `noAuth` (the presigned url carries its own
+// signature, so no bearer/cookies on the S3 PUT).
 async function fetchInRiseTab(
-  spec: { url: string; method: string; body?: string },
+  spec: {
+    url: string;
+    method: string;
+    body?: string;
+    base64Body?: string;
+    contentType?: string;
+    noAuth?: boolean;
+  },
   token: string | null,
 ): Promise<InPageResult> {
   try {
     const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (spec.body) headers['Content-Type'] = 'application/json';
+    if (token && !spec.noAuth) headers.Authorization = `Bearer ${token}`;
+
+    let body: BodyInit | undefined;
+    if (spec.base64Body !== undefined) {
+      const bin = atob(spec.base64Body);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      body = new Blob([bytes], { type: spec.contentType || 'application/octet-stream' });
+      if (spec.contentType) headers['Content-Type'] = spec.contentType;
+    } else if (spec.body !== undefined) {
+      body = spec.body;
+      headers['Content-Type'] = spec.contentType || 'application/json';
+    }
+
     const res = await fetch(spec.url, {
       method: spec.method,
       headers,
-      body: spec.body,
-      credentials: 'include',
+      body,
+      // Presigned S3 PUT is cross-origin and must NOT send cookies; rise.* calls
+      // need first-party cookies. Gate credentials on noAuth.
+      credentials: spec.noAuth ? 'omit' : 'include',
     });
     return { ok: res.ok, status: res.status, text: await res.text() };
   } catch (e) {
@@ -124,8 +163,46 @@ export default defineBackground(() => {
     return any.find((t) => typeof t.id === 'number');
   }
 
+  // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
+  // the access token Rise sends as `Authorization: Bearer`. This needs no course
+  // navigation and no page reload: the Cookies API reads it (even httpOnly) for
+  // the live tab's plane. Returns true if a JWT-shaped value was captured.
+  async function grabTokenFromCookie(): Promise<boolean> {
+    const tab = await findRiseTab();
+    const url = tab?.url;
+    if (!url) return false;
+    try {
+      const c = await browser.cookies.get({ url, name: '_articulate_rise_' });
+      const value = c?.value?.trim();
+      // A JWT has three dot-separated segments; guard against a stray cookie.
+      if (value && value.split('.').length === 3) {
+        setToken(value);
+        return true;
+      }
+    } catch {
+      /* cookies permission/host missing — fall back to the reload path */
+    }
+    return false;
+  }
+
+  // The account-local Rise user id (`_articulate_user_id` cookie) — the valid
+  // principal for folder ownership. May be URL-encoded (`auth0%7C…`).
+  async function readAccountUserId(): Promise<string | null> {
+    const tab = await findRiseTab();
+    const url = tab?.url;
+    if (!url) return null;
+    try {
+      const c = await browser.cookies.get({ url, name: '_articulate_user_id' });
+      const raw = c?.value?.trim();
+      if (!raw) return null;
+      return decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+  }
+
   // Locate the live Rise tab and run the fetch inside it (first-party cookies).
-  async function relayFetch(spec: RequestSpec): Promise<InPageResult> {
+  async function relayFetch(spec: RelaySpec): Promise<InPageResult> {
     const tab = await findRiseTab();
     if (!tab || typeof tab.id !== 'number') {
       return {
@@ -140,7 +217,17 @@ export default defineBackground(() => {
         target: { tabId: tab.id },
         world: 'ISOLATED',
         func: fetchInRiseTab,
-        args: [{ url: spec.url, method: spec.method, body: spec.body }, token],
+        args: [
+          {
+            url: spec.url,
+            method: spec.method,
+            body: spec.body,
+            base64Body: spec.base64Body,
+            contentType: spec.contentType,
+            noAuth: spec.noAuth,
+          },
+          token,
+        ],
       });
       return (
         (injection?.result as InPageResult | undefined) ?? {
@@ -158,22 +245,23 @@ export default defineBackground(() => {
     }
   }
 
-  // --- In-page fetch with one-shot 401 refresh ------------------------------
+  // --- In-page fetch with one-shot 401/403 re-auth --------------------------
   async function rawFetch(
     spec: RequestSpec,
     attempt = 0,
   ): Promise<FetchResult<string>> {
     const r = await relayFetch(spec);
 
-    if (r.status === 401 && attempt === 0 && (await tryRefresh())) {
+    // An expired bearer reads back as 401 OR 403 (the authoring endpoints answer
+    // 403 "Forbidden") — re-auth (refresh + re-grab the cookie) and retry once.
+    if ((r.status === 401 || r.status === 403) && attempt === 0 && (await reauth())) {
       return rawFetch(spec, 1);
     }
-    if (r.status === 401) {
+    if (r.status === 401 || r.status === 403) {
       return {
         ok: false,
-        status: 401,
-        error:
-          'Unauthorized (401) from Rise. Make sure you are logged into the open Rise tab, then retry.',
+        status: r.status,
+        error: `Unauthorized (${r.status}) from Rise. Make sure you are logged into the open Rise tab, then retry.`,
       };
     }
     if (!r.ok) {
@@ -184,6 +272,22 @@ export default defineBackground(() => {
       };
     }
     return { ok: true, status: r.status, data: r.text ?? '' };
+  }
+
+  // Relay one WRITE envelope through the live Rise tab. Unlike rawFetch, it
+  // returns the raw body even on non-2xx so the importer can loud-fail with the
+  // server's message (protocol §12). One-shot 401 refresh + retry.
+  async function relayWrite(spec: WriteSpec): Promise<WriteRelayResult> {
+    // Proactive: refresh before the token lapses so a long import never trips a
+    // mid-flight 403 (throttled, so a non-rotating token can't spam refresh).
+    if (tokenExpiringSoon() && Date.now() - lastReauthMs > 30_000) await reauth();
+    let r = await relayFetch(spec);
+    // Reactive: Rise returns 401 OR 403 on an expired/invalid bearer — re-auth
+    // (refresh + re-grab the rotated cookie) and retry once.
+    if ((r.status === 401 || r.status === 403) && (await reauth())) {
+      r = await relayFetch(spec);
+    }
+    return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
   }
 
   // Best-effort refresh (rides the id.articulate.com session cookie). The fresh
@@ -199,6 +303,25 @@ export default defineBackground(() => {
     } catch {
       return false;
     }
+  }
+
+  // Re-establish a fresh bearer mid-import: nudge the id.articulate.com session,
+  // THEN re-read the rotated `_articulate_rise_` cookie (during an import there's
+  // no page traffic for the webRequest observer to catch, so we must pull it
+  // ourselves). Throttled so a doomed token can't spam the refresh endpoint.
+  let lastReauthMs = 0;
+  async function reauth(): Promise<boolean> {
+    lastReauthMs = Date.now();
+    const refreshed = await tryRefresh();
+    const regrabbed = await grabTokenFromCookie();
+    return refreshed || regrabbed;
+  }
+
+  // The held bearer is short-lived (~15 min). On a long import it expires
+  // mid-run; Rise answers an expired token on the authoring endpoints with 403
+  // (not 401) — e.g. GET_YURL "Forbidden" — so we must treat 403 as re-auth too.
+  function tokenExpiringSoon(skewMs = 60_000): boolean {
+    return identity?.expiresAt !== undefined && identity.expiresAt - skewMs <= Date.now();
   }
 
   // Fetch a raw JSON resource and wrap it as a RAW_RESULT (shared by the
@@ -235,17 +358,29 @@ export default defineBackground(() => {
     switch (msg.type) {
       case 'GET_SESSION_STATE': {
         // Live tab query is authoritative (survives SW restarts; the content
-        // script ping only updates the cached flag).
+        // script ping only updates the cached flag). Derive the plane from the
+        // SAME tab writes target (active/last-focused first, then any Rise tab)
+        // so a US-source + EU-target multi-tab setup reports the plane writes
+        // actually go to — the Source ≠ Target guard depends on it.
         let present = risePresent;
+        let plane: 'us' | 'eu' | null = null;
         try {
-          const tabs = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
-          present = tabs.some((t) => typeof t.id === 'number');
+          const all = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
+          present = all.some((t) => typeof t.id === 'number');
+          const writeTab = await findRiseTab();
+          const url = writeTab?.url ?? all.find((t) => typeof t.url === 'string')?.url;
+          plane = planeFromHost(url);
         } catch {
           /* keep the ping-based value */
         }
+        // Opportunistically grab the bearer from the cookie when we don't have
+        // one yet — so the panel shows a ready session without the operator
+        // clicking "grab token" or opening a course.
+        if (!token && present) await grabTokenFromCookie();
+        const userId = present ? await readAccountUserId() : null;
         return {
           type: 'SESSION_STATE',
-          state: { hasToken: !!token, risePresent: present, identity, accountName },
+          state: { hasToken: !!token, risePresent: present, identity, accountName, plane, userId },
         };
       }
 
@@ -380,12 +515,8 @@ export default defineBackground(() => {
           'Typefaces response',
         );
 
-      case 'REVIEW_ITEMS':
-        return rawResult(
-          'reviewItems',
-          buildReviewItemsRequest(),
-          'Review items response',
-        );
+      case 'RELAY_WRITE':
+        return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
     }
   }
 

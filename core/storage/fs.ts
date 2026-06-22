@@ -6,7 +6,7 @@
 //   <root>/question-banks/<id>.json|_index  raw banks (+ per-bank asset manifest)
 //   <root>/assets/<sha256>.<ext>            content-addressed media bytes (dedup)
 //   <root>/account/                         raw account source: folders.json,
-//                                           block-templates/typefaces/review-items
+//                                           block-templates/typefaces
 //   <root>/_metadata/                       derived reports (regenerated each run):
 //                                           inventory/census/catalog/novelty/
 //                                           *-inventory/*-catalog/assets-summary
@@ -113,6 +113,15 @@ export class FileSystemStorage implements Storage {
       'manifest.json',
       JSON.stringify(manifest, null, 2),
     );
+  }
+
+  async readManifest(): Promise<string | null> {
+    try {
+      const handle = await this.root.getFileHandle('manifest.json');
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
   }
 
   async writeInventory(json: string, csv: string): Promise<void> {
@@ -247,17 +256,61 @@ export class FileSystemStorage implements Storage {
     await this.writeFile(dir, 'typefaces.json', raw);
   }
 
+  async readTypefaces(): Promise<string | null> {
+    try {
+      const dir = await this.accountDir();
+      return await (await (await dir.getFileHandle('typefaces.json')).getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
+  async writeFontManifest(json: string): Promise<void> {
+    const dir = await this.accountDir();
+    await this.writeFile(dir, 'typefaces.assets.json', json);
+  }
+
+  async readFontManifest(): Promise<string | null> {
+    try {
+      const dir = await this.accountDir();
+      return await (await (await dir.getFileHandle('typefaces.assets.json')).getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
+  // Account-level binaries (fonts) → account/assets/<name> (separate from the
+  // content-addressed course assets/ store).
+  private async accountAssetsDir(): Promise<FileSystemDirectoryHandle> {
+    const account = await this.accountDir();
+    return account.getDirectoryHandle('assets', { create: true });
+  }
+
+  async writeAccountAsset(name: string, bytes: Uint8Array): Promise<void> {
+    const dir = await this.accountAssetsDir();
+    await this.writeFile(dir, name, bytes as BufferSource);
+  }
+
+  async hasAccountAsset(name: string): Promise<boolean> {
+    try {
+      await (await this.accountAssetsDir()).getFileHandle(name);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async readAccountAsset(name: string): Promise<Uint8Array | null> {
+    try {
+      const handle = await (await this.accountAssetsDir()).getFileHandle(name);
+      return new Uint8Array(await (await handle.getFile()).arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
+
   async writeTypefaceInventory(json: string, csv: string): Promise<void> {
     await this.writeMetaPair('typefaces-inventory', json, csv);
-  }
-
-  async writeReviewItems(raw: string): Promise<void> {
-    const dir = await this.accountDir();
-    await this.writeFile(dir, 'review-items.json', raw);
-  }
-
-  async writeReviewItemsInventory(json: string, csv: string): Promise<void> {
-    await this.writeMetaPair('review-items-inventory', json, csv);
   }
 
   // --- Phase 2: assets --------------------------------------------------------
@@ -277,6 +330,17 @@ export class FileSystemStorage implements Storage {
     // Cast: BufferSource is pinned to ArrayBuffer in the DOM lib, but a
     // Uint8Array view is an accepted write chunk at runtime.
     await this.writeFile(dir, name, bytes as BufferSource);
+  }
+
+  async readAsset(name: string): Promise<Uint8Array | null> {
+    try {
+      const dir = await this.assetsDir();
+      const handle = await dir.getFileHandle(name);
+      const buf = await (await handle.getFile()).arrayBuffer();
+      return new Uint8Array(buf);
+    } catch {
+      return null;
+    }
   }
 
   async hasAsset(name: string): Promise<boolean> {
@@ -327,5 +391,26 @@ export class FileSystemStorage implements Storage {
   async writeAssetsSummary(json: string): Promise<void> {
     const dir = await this.metaDir();
     await this.writeFile(dir, 'assets-summary.json', json);
+  }
+
+  // --- Phase 3: import artifacts (under _import/, separate from the archive) ---
+
+  private importDir(): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('_import', { create: true });
+  }
+
+  async writeImportArtifact(name: string, contents: string): Promise<void> {
+    const dir = await this.importDir();
+    await this.writeFile(dir, name, contents);
+  }
+
+  async readImportArtifact(name: string): Promise<string | null> {
+    try {
+      const dir = await this.importDir();
+      const handle = await dir.getFileHandle(name);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
   }
 }
