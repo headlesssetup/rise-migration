@@ -438,8 +438,26 @@ export function App() {
     );
   }, [storage, onEvent, addLog]);
 
+  const grabToken = useCallback(async () => {
+    addLog('Grabbing token — reloading the Rise tab…');
+    const resp = await rpc({ type: 'GRAB_TOKEN' });
+    if (resp.type === 'GRAB_TOKEN_RESULT' && !resp.ok) {
+      addLog(`Grab token failed: ${resp.error ?? 'unknown error'}`);
+    } else {
+      addLog('Rise tab reloaded — the token should appear in a moment.');
+    }
+  }, [addLog]);
+
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
+
+  // Setup gate: a Rise tab, a destination folder, and a captured token.
+  const ready = !!session?.risePresent && !!storage && !!session?.hasToken;
+  const setupNeeds = [
+    !session?.risePresent && 'open a logged-in Rise tab',
+    !storage && 'pick a destination folder',
+    session?.risePresent && !session?.hasToken && 'grab the token',
+  ].filter(Boolean) as string[];
 
   return (
     <div className="app">
@@ -465,13 +483,9 @@ export function App() {
       </div>
 
       <section className="card">
-        <h2>Session</h2>
+        <h2>Setup</h2>
         <SessionView session={session} totalCount={totalCount} />
-      </section>
-
-      <section className="card">
-        <h2>Destination folder</h2>
-        <div className="row">
+        <div className="row" style={{ marginTop: 6 }}>
           <button onClick={pickFolder} disabled={busy}>
             {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
           </button>
@@ -480,6 +494,13 @@ export function App() {
               Forget
             </button>
           )}
+          <button
+            onClick={grabToken}
+            disabled={busy || !session?.risePresent}
+            title="Reloads the Rise tab to capture the session token — no need to open a course"
+          >
+            {session?.hasToken ? 'Token ✓ — re-grab' : 'Grab token'}
+          </button>
         </div>
         {pendingHandle && (
           <p className="hint">
@@ -487,13 +508,16 @@ export function App() {
             <button onClick={reconnectFolder}>Reconnect</button>
           </p>
         )}
+        {!ready && setupNeeds.length > 0 && (
+          <p className="hint">To continue: {setupNeeds.join(' · ')}.</p>
+        )}
       </section>
 
-      {mode === 'import' && (
+      {ready && mode === 'import' && (
         <ImportView storage={storage} session={session} addLog={addLog} />
       )}
 
-      {mode === 'export' && (
+      {ready && mode === 'export' && (
       <>
       <section className="card">
         <h2>Courses</h2>
@@ -520,18 +544,11 @@ export function App() {
             All{totalCount !== null ? ` (${totalCount})` : ''}
           </button>
         </div>
-        <button onClick={list} disabled={busy || !session?.risePresent}>
+        <button onClick={list} disabled={busy}>
           {phase === 'listing'
             ? 'Listing…'
             : `List ${atAll ? 'all' : listLimit} course(s) (paced)`}
         </button>
-        {!session?.risePresent && (
-          <p className="hint">
-            Open and log into a Rise tab (US rise.articulate.com or EU
-            rise.eu.articulate.com) and keep it open — the panel rides that
-            tab's live session.
-          </p>
-        )}
 
         {courses.length > 0 && (
           <>
@@ -592,7 +609,7 @@ export function App() {
       </section>
 
       <section className="card">
-        <h2>Assets (Phase 2)</h2>
+        <h2>Assets</h2>
         <button onClick={runAssets} disabled={busy || !storage}>
           {phase === 'exporting' ? 'Working…' : 'Download assets'}
         </button>

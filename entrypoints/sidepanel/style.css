@@ -98,18 +98,18 @@ button:disabled {
   padding: 0 2px;
 }
 .log-error {
-  color: #b00020;
+  color: #ff6b6b;
   font-weight: 600;
-  background: rgba(176, 0, 32, 0.08);
+  background: rgba(255, 107, 107, 0.1);
 }
 .log-warn {
-  color: #9a6700;
+  color: #e0a33a;
 }
 .log-ok {
-  color: #1a7f37;
+  color: #4caf6d;
 }
 .log-dry {
-  color: #6b6b6b;
+  color: #8a8a8a;
 }
 
 .log-header {

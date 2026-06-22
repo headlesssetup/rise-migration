@@ -31,6 +31,9 @@ export type BackgroundRequest =
   | { type: 'FETCH_BLOCK_TEMPLATES' }
   | { type: 'FETCH_TYPEFACES'; courseId: string }
   | { type: 'REVIEW_ITEMS' }
+  // Reload the live Rise tab so the app re-issues authed requests → the
+  // background captures the bearer token (no manual course-opening needed).
+  | { type: 'GRAB_TOKEN' }
   // Phase 3 — relay a single WRITE envelope through the live Rise tab. The panel
   // orchestrates the sequence + pacing; the background just performs the fetch
   // (supports POST/PUT/DELETE, JSON or base64 binary bodies, presigned S3 PUT).
@@ -61,7 +64,8 @@ export type BackgroundResponse =
       kind: RawKind;
       result: FetchResult<{ raw: string; doc: unknown }>;
     }
-  | { type: 'WRITE_RESULT'; result: WriteRelayResult };
+  | { type: 'WRITE_RESULT'; result: WriteRelayResult }
+  | { type: 'GRAB_TOKEN_RESULT'; ok: boolean; error?: string };
 
 /** Raw outcome of a single relayed write (the executor's Relay consumes this). */
 export interface WriteRelayResult {

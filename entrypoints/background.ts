@@ -463,6 +463,25 @@ export default defineBackground(() => {
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
+
+      case 'GRAB_TOKEN': {
+        // Reload the Rise tab; the app's boot requests carry the bearer, which
+        // the webRequest observer captures — no manual course-opening needed.
+        const tab = await findRiseTab();
+        if (!tab || typeof tab.id !== 'number') {
+          return {
+            type: 'GRAB_TOKEN_RESULT',
+            ok: false,
+            error: 'No open Rise tab — open and log into Rise first.',
+          };
+        }
+        try {
+          await chrome.tabs.reload(tab.id);
+          return { type: 'GRAB_TOKEN_RESULT', ok: true };
+        } catch (e) {
+          return { type: 'GRAB_TOKEN_RESULT', ok: false, error: (e as Error).message };
+        }
+      }
     }
   }
 
