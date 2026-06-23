@@ -100,13 +100,26 @@ poster→media-image, vtt→media-other) and re-uploaded + remapped. **`skipProc
 + `isSkipCrush:true` confirm Rise itself does NOT transcode/crush on upload** — exactly
 our stance. No special video handling needed. ✅ TODO resolved.
 
-⚠ The upload-time `UPDATE_BLOCK_DEBOUNCE` also carries **transient client-only fields**
-— `url` (presigned S3 PUT), `cancelSource` (axios token), `filename`, and a composite
-`id` (`<lessonId>-items:<blockId>/items:<itemId>`). These are NOT in the persisted
-`GET_COURSE` (what our export reads), so they never reach our import. We never got a
-GET_COURSE of a *settled* uploaded video to 100% confirm the persisted shape; if that
-composite `id` ever persists, our remap rewrites its `items:` segments but not the bare
-leading lessonId — opaque/low-impact, worth one check on a settled read.
+### Persisted shape — confirmed from a settled `GET_COURSE` (view capture `b706eabc`)
+A `GET_COURSE` of the finished course (the operator just *viewing* it) shows what our
+export actually reads:
+- **`key` / `poster` / `thumbnail` / `captions[].key`** are all `rise/courses/{id}/…`
+  uploads (mp4 / png-via-`images.eu`-transform / `.vtt`) → all caught + remapped. ✅
+- **`url`** persists but is a presigned READ url **derived from `key`** (regenerated per
+  fetch). Our blank-then-key-remap is fine — Rise re-derives it from `key`; a stale
+  signature is irrelevant. **`cancelSource`** persists as harmless empty junk
+  (`{token:{promise:{},_listeners:[]}}`), copied verbatim.
+- ⚠ **Open finding (stale embedded id):** `media.video.id` persists as a composite
+  `"<lessonId>-items:<blockId>/items:<itemId>"`, and AI captions carry
+  `"id":"ai-caption-<blockId>-<itemId>-<ts>"`. `remapIds` rewrites the `items:<id>`
+  segments + the media keys, but the **leading lessonId** (and the ai-caption's embedded
+  block/item ids, which aren't in `items:` form) are **left as stale SOURCE ids**. The
+  `key`s migrate correctly so playback should be unaffected, and parity ignores `id`
+  (VOLATILE) — but a source id technically survives inside an internal `id` field.
+  NOT yet fixed: it's unclear whether Rise regenerates `media.video.id` on `CREATE_BLOCKS`
+  (→ no-op) or stores it verbatim (→ stale but opaque). Decide after a live import
+  round-trip before changing `remapRefString` (a speculative remap could itself break a
+  format Rise expects).
 
 **Theme (`UPDATE_COURSE {theme}`):** `themeId:"classic"`, `coverImage:
 "https://cdn.eu.articulate.com/assets/rise/assets/themes/classic/cover-image/2_wfh.jpg"`,
