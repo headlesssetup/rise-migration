@@ -497,12 +497,20 @@ export async function runImport(
         if (!opts.dryRun) {
           await pacedDelay(pacing);
           const mv = await relayThroughTab(moveCourseToFolder(res.newCourseId, tgtFolder));
-          onEvent({
-            kind: 'log',
-            message: mv.ok
-              ? `Moved course into folder ${tgtFolder}`
-              : `WARN move-to-folder failed (HTTP ${mv.status})`,
-          });
+          if (mv.ok) {
+            onEvent({ kind: 'log', message: `Moved course into folder ${tgtFolder}` });
+          } else {
+            // The envelope is capture-confirmed (PATCH /content/{id}/move, bare
+            // folder id as text/plain → 200), so a failure here is almost always a
+            // STALE/invalid target folder id (e.g. a persisted account.idmap.json
+            // pointing at a folder that no longer exists). Surface the server's
+            // reason + the folder id so it's diagnosable, not a bare HTTP code.
+            const reason = (mv.text || mv.error || '').toString().slice(0, 200);
+            onEvent({
+              kind: 'log',
+              message: `WARN move-to-folder failed (HTTP ${mv.status}) — folder ${tgtFolder}${reason ? ` — ${reason}` : ''} — course left in root, move it manually`,
+            });
+          }
         } else {
           onEvent({ kind: 'log', message: `DRY  move course → folder ${tgtFolder}` });
         }
@@ -616,8 +624,12 @@ export async function runImport(
   for (const id of notStarted) {
     csvCourses.push({ courseId: id, status: 'not-started', manual: [] });
   }
-  await storage.writeImportArtifact('import-summary.csv', buildRunCsv(csvCourses));
-  onEvent({ kind: 'log', message: 'Wrote run summary → import-summary.csv' });
+  // Timestamped so each run keeps its own summary (no overwrite). e.g.
+  // import-summary-2026-06-23T18-52-46.csv
+  const csvStamp = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, 'Z');
+  const csvName = `import-summary-${csvStamp}.csv`;
+  await storage.writeImportArtifact(csvName, buildRunCsv(csvCourses));
+  onEvent({ kind: 'log', message: `Wrote run summary → ${csvName}` });
 
   emitRunSummary(onEvent, outcomes, notStarted, stopped, opts.dryRun);
 

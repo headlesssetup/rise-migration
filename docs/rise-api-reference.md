@@ -59,6 +59,14 @@ A single-author headless script ignores it entirely and just issues the HTTP "du
     rotated cookie; then re-read `_articulate_rise_`. A renewal counts only when the
     JWT `exp` advances. (Revisit a no-reload silent path later — see
     `entrypoints/background.ts` `TODO(refresh)`.)
+  - **Idle does NOT keep the bearer fresh (capture-confirmed 2026-06-23).** In a
+    ~35-min idle capture with a course open, the bearer rotated exactly ONCE — at
+    SPA boot (a `prompt=none` authorize at +0:00), `exp` jumping ~5 min forward —
+    then EXPIRED ~15 min later with NO further rotation; only `lifecycle/refresh`
+    keep-warm pings (204) kept firing. So the rotation is triggered by the SPA
+    booting/opening a course, not by a pure idle timer. This is exactly why
+    reloading the course tab works (it re-triggers the boot-time authorize) and why
+    "open a course and walk away" is not sufficient past ~15 min of inactivity.
 - Tokens are short-lived → on `401`/`403` refresh (as above) and retry.
 - SSO/2FA makes fully-programmatic login painful; easiest is a one-time browser capture
   (or Playwright with a real login) to grab a fresh token, then run the API client.
@@ -137,6 +145,33 @@ body `{type, payload}`, bearer auth.
    Blocks can be **batched**; `id`/item-`id`s are **client-generated** (cuid-style) — you
    choose them, keep internal refs consistent. `rise/lessons/UPDATE_BLOCK` for later edits
    (`UPDATE_BLOCK_DEBOUNCE` is the autosave-coalesced variant — use the plain form when scripting).
+
+---
+
+## 4b. Folders & content placement (REST, capture-confirmed 2026-06-23)
+
+Folder ids are **UUIDs**. Two roots exist per account (`folderType: shared` / `private`,
+both `isRoot`); a top-level folder hangs off the matching root via `parentFolderId`.
+
+- **Create folder** — `POST /manage/api/folders` (JSON)
+  `{"name":"new-a","parentFolderId":"<uuid>"}` → `200` the new folder
+  (`{id, name, parentFolderId, folderType, ownerPrincipalId, roleId:3, …}`).
+- **Rename folder** — `PATCH /manage/api/folder/<id>/rename` (JSON, note SINGULAR `folder`)
+  `{"name":"courses-renamed"}` → `200` the folder.
+- **Move folder** — `PATCH /manage/api/folders/<id>/move` (JSON, PLURAL `folders`)
+  `{"parentId":"<uuid>"}` → `200` (note: key is `parentId`, not `parentFolderId`).
+- **Move a COURSE into a folder** — `PATCH /manage/api/content/<courseId>/move`
+  body is the **bare folder id as `text/plain;charset=UTF-8`** (NOT JSON), e.g.
+  `163aa790-e4c5-4036-bc36-5bfca9397615` → `200` (empty body). ⚠ Asymmetry: course move
+  = bare text id; folder move = JSON `{parentId}`. Our `moveCourseToFolder` matches this
+  exactly — a `400` here means a **stale/invalid target folder id**, not a wrong shape.
+- **Content permissions** — `GET`/`PUT /manage/api/content/<courseId>/permissions`
+  (owner/collaborator ACL); `GET /manage/api/collaborators` lists members.
+
+Question-bank folders are a SEPARATE namespace:
+- **Create bank folder** — `POST /manage/api/question-banks/folder` (JSON).
+- **Move bank** — `PUT /manage/api/question-banks/question-bank/<bankId>/move`.
+- **Delete bank folder** — `DELETE /manage/api/question-banks/folder/<folderId>`.
 
 ---
 

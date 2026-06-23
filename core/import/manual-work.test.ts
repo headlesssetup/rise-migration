@@ -78,10 +78,10 @@ describe('resolveManualWork', () => {
   const idx = buildBlockIndex(doc);
 
   it('resolves a storyline flag to a human location + action', () => {
-    const [item] = resolveManualWork(
+    const item = resolveManualWork(
       [{ kind: 'storyline', sourceBlockId: 'b4', detail: 'x' }],
       idx,
-    );
+    )[0]!;
     expect(item.location).toBe('Lesson 1 "How to Econ" › block 2 (Storyline/Mighty)');
     expect(item.itemType).toBe('Storyline/Mighty block');
     expect(item.action).toMatch(/Review 360/);
@@ -89,7 +89,7 @@ describe('resolveManualWork', () => {
   });
 
   it('names the missing media file for an orphan-media flag', () => {
-    const [item] = resolveManualWork(
+    const item = resolveManualWork(
       [
         {
           kind: 'orphan-media',
@@ -99,22 +99,22 @@ describe('resolveManualWork', () => {
         },
       ],
       idx,
-    );
+    )[0]!;
     expect(item.location).toBe('Lesson 2 "Intro" › block 2 (image/full-width)');
     expect(item.action).toContain('"Audio clip.mp3"');
   });
 
   it('categorizes flags with no block id (typeface → Theme / fonts)', () => {
-    const [item] = resolveManualWork([{ kind: 'typeface', detail: 'x' }], idx);
+    const item = resolveManualWork([{ kind: 'typeface', detail: 'x' }], idx)[0]!;
     expect(item.location).toBe('Theme / fonts');
     expect(item.itemType).toBe('Missing font');
   });
 
   it('falls back to the raw id when the block is not in the index', () => {
-    const [item] = resolveManualWork(
+    const item = resolveManualWork(
       [{ kind: 'storyline', sourceBlockId: 'unknown', detail: 'x' }],
       idx,
-    );
+    )[0]!;
     expect(item.location).toBe('block unknown');
   });
 });
@@ -126,7 +126,16 @@ const baseReport: FidelityReport = {
   sourceCourseId: 'C',
   title: 'Econ 101',
   newCourseId: 'TGT',
-  planned: { lessons: 2, blocks: 4, banks: 0, uploads: 0, drawFromBank: 0 },
+  planned: {
+    total: 6,
+    lessons: 2,
+    blocks: 4,
+    banks: 0,
+    uploads: 0,
+    storylineFlags: 0,
+    orphanFlags: 0,
+    drawFromBank: 0,
+  },
   flags: [],
   survivingSourceKeys: [],
   idMappings: 8,
