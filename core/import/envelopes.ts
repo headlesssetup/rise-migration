@@ -116,17 +116,23 @@ export function updateCourseThemeAndTypefaces(args: {
   });
 }
 
-/** UPDATE_COURSE setting a user-uploaded cover/card image (after upload+crush).
- *  `coverImage`/`cardImage` are `{media:{image:{key,crushedKey,…}}}` or `{}`. */
+/** UPDATE_COURSE setting user-uploaded course images (after upload+crush).
+ *  Capture-confirmed shapes (docs/rise-api-reference.md):
+ *   - `coverImage`/`cardImage`: `{media:{image:{key,crushedKey,…}}}` or `{}`
+ *   - `media`: the cover-page LOGO — `{image:{key,crushedKey,isSkipCrush,
+ *     sourcedFrom,useCrushedKey,originalUrl}}` (note: NO `media` wrapper).
+ *  The editor sends only the changed field(s); we mirror that. */
 export function setCourseImages(args: {
   courseId: string;
   coverImage?: unknown;
   cardImage?: unknown;
+  media?: unknown;
 }): WriteSpec {
   return ducks('courses', 'UPDATE_COURSE', {
     id: args.courseId,
     ...(args.coverImage !== undefined ? { coverImage: args.coverImage } : {}),
     ...(args.cardImage !== undefined ? { cardImage: args.cardImage } : {}),
+    ...(args.media !== undefined ? { media: args.media } : {}),
   });
 }
 

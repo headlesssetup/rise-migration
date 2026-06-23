@@ -367,6 +367,54 @@ describe('executePlan — course cover image', () => {
     // and it's not left flagged
     expect(res.flags.some((f) => f.sourceKey === 'rise/courses/SRC/cover.jpg')).toBe(false);
   });
+
+  it('uploads the cover-page logo (course.media) + sets it via UPDATE_COURSE media (no surviving key, no flag)', async () => {
+    // Capture-confirmed: the logo lives at course.media = {image:{key,crushedKey,…}}
+    // (no inner `media` wrapper) and is set via UPDATE_COURSE {media:{image:{…}}}.
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [{ key: 'rise/courses/SRC/logo.png', kind: 'media-image', file: 'assets/l.png', ext: 'png' }],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          media: { image: { key: 'rise/courses/SRC/logo.png', crushedKey: 'rise/courses/SRC/logoc.png', isSkipCrush: true, sourcedFrom: 'USER', useCrushedKey: false, originalUrl: 'logo.png' } },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    let mediaPayload: any = null;
+    let yurlN = 0;
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.png`, url: 'https://s3/l', type: 'image/png' } }) };
+      if (spec.label.endsWith('/UPDATE_COURSE')) { const p = JSON.parse(spec.body!).payload; if (p.media) mediaPayload = p; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/png' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    expect(mediaPayload).toBeTruthy();
+    // logo `key` + `crushedKey` each remapped to their own faithful upload; the
+    // `image` sits directly under `media` (no inner wrapper), and flags are clean.
+    expect(mediaPayload.media.image.key).toBe('rise/courses/NEWCOURSE/srv0.png');
+    expect(mediaPayload.media.image.crushedKey).toBe('rise/courses/NEWCOURSE/srv1.png');
+    expect(mediaPayload.media.image.originalUrl).toBe('logo.png'); // verbatim round-trip
+    expect(res.flags.some((f) => f.sourceKey === 'rise/courses/SRC/logo.png')).toBe(false);
+  });
 });
 
 describe('executePlan — typography migration', () => {

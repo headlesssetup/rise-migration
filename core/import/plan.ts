@@ -89,11 +89,14 @@ export type PlanStep =
   | { kind: 'set-theme'; sourceCourseId: string; summary: string }
   | { kind: 'set-title'; sourceCourseId: string; title: string; summary: string }
   | {
-      // Upload + set the course's user-uploaded cover / card image (course-level
-      // media, not on a block) via UPDATE_COURSE coverImage/cardImage.
+      // Upload + set the course's user-uploaded cover / card / logo image
+      // (course-level media, not on a block) via UPDATE_COURSE
+      // coverImage/cardImage/media (logo).
       kind: 'set-course-images';
       hasCover: boolean;
       hasCard: boolean;
+      /** Course-level `media` object — the cover-page logo. */
+      hasMedia: boolean;
       summary: string;
     }
   | {
@@ -238,6 +241,14 @@ function fileBasename(key: string): string {
  *  (`{media:{image:{key}}}`), or null if absent / not a course-bank upload. */
 export function coverCardImageKey(img: unknown): string | null {
   const k = (img as { media?: { image?: { key?: unknown } } })?.media?.image?.key;
+  return typeof k === 'string' && /^rise\/(?:courses|questionBanks)\//.test(k) ? k : null;
+}
+
+/** The uploaded media key of the course-level `media` object — the cover-page
+ *  LOGO. Capture-confirmed shape is `{image:{key}}` (NO `media` wrapper, unlike
+ *  coverImage/cardImage). Null if absent / not a course-bank upload. */
+export function courseMediaImageKey(img: unknown): string | null {
+  const k = (img as { image?: { key?: unknown } })?.image?.key;
   return typeof k === 'string' && /^rise\/(?:courses|questionBanks)\//.test(k) ? k : null;
 }
 
@@ -565,19 +576,22 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   }
 
-  // Course cover / card images (user-uploaded) — upload + set via UPDATE_COURSE.
-  // Mark their keys handled so the flagger below skips them.
+  // Course cover / card / logo images (user-uploaded) — upload + set via
+  // UPDATE_COURSE. Mark their keys handled so the flagger below skips them.
+  // `media` is the cover-page logo (capture-confirmed; `{image:{key,…}}`).
   const coverKey = coverCardImageKey(course.coverImage);
   const cardKey = coverCardImageKey(course.cardImage);
-  if (coverKey || cardKey) {
-    for (const img of [course.coverImage, course.cardImage]) {
+  const mediaKey = courseMediaImageKey(course.media);
+  if (coverKey || cardKey || mediaKey) {
+    for (const img of [course.coverImage, course.cardImage, course.media]) {
       for (const ak of collectAssetKeys(img, sourceCourseId)) handledKeys.add(ak.key);
     }
     steps.push({
       kind: 'set-course-images',
       hasCover: !!coverKey,
       hasCard: !!cardKey,
-      summary: `Set course ${[coverKey && 'cover', cardKey && 'card'].filter(Boolean).join(' + ')} image`,
+      hasMedia: !!mediaKey,
+      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo'].filter(Boolean).join(' + ')} image`,
     });
   }
 

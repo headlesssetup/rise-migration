@@ -463,7 +463,11 @@ export async function executePlan(
         case 'set-course-images': {
           const course = (deps.input.course.course ?? {}) as Record<string, unknown>;
           const build = async (img: unknown): Promise<unknown | undefined> => {
-            const image = (img as { media?: { image?: Record<string, unknown> } })?.media?.image;
+            // coverImage/cardImage nest the image under `.media.image`; the
+            // course-level `media` (logo) carries it directly under `.image`.
+            const image =
+              (img as { media?: { image?: Record<string, unknown> } })?.media?.image ??
+              (img as { image?: Record<string, unknown> })?.image;
             const mainKey = typeof image?.key === 'string' ? image.key : '';
             if (!mainKey || !/^rise\/(?:courses|questionBanks)\//.test(mainKey)) return undefined;
             const newMain = await uploadImageAsset(mainKey);
@@ -483,9 +487,10 @@ export async function executePlan(
           };
           const coverImage = step.hasCover ? await build(course.coverImage) : undefined;
           const cardImage = step.hasCard ? await build(course.cardImage) : undefined;
-          if (coverImage !== undefined || cardImage !== undefined) {
+          const media = step.hasMedia ? await build(course.media) : undefined;
+          if (coverImage !== undefined || cardImage !== undefined || media !== undefined) {
             await send(
-              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage }),
+              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage, media }),
               step.kind,
             );
           }

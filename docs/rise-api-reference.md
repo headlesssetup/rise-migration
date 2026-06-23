@@ -131,6 +131,20 @@ body `{type, payload}`, bearer auth.
 4. **Rewrite the block's media `key`** to the new key.
    Embeds (YouTube/Vimeo) are plain URLs — no upload needed.
 
+**Course-level images (cover / card / logo).** MITM-confirmed (2026-06-23). Upload chain
+is the same `GET_YURL → S3 PUT → CRUSH_IMAGE {courseId, original} → {key:<crushedKey>}`
+(SVG returns a crushedKey but with `isSkipCrush:true`). The SET is a partial
+`rise/courses/UPDATE_COURSE {id, <field>}` sending only the changed field(s):
+   - **cover / card** → `coverImage` / `cardImage` = `{media:{image:{key, crushedKey,
+     isSkipCrush, sourcedFrom:"USER", dimensions, useCrushedKey, originalUrl}}}` (or `{}`).
+   - **cover-page logo** → `media` = `{image:{key, crushedKey, isSkipCrush, sourcedFrom,
+     useCrushedKey, originalUrl}}` — note: the `image` sits DIRECTLY under `media` (no inner
+     `media` wrapper), unlike coverImage/cardImage.
+   Migration re-uploads the exported `key` + `crushedKey` verbatim and remaps both (no
+   re-crush). Other course image fields (`lessonHeaderImage` with nested `originalImage`,
+   `overlayNavigationImage`, `blockBackgroundImage`, and user-uploaded `theme.*` keys) are
+   NOT yet MITM-captured → still flagged `unsupported-media` (no guessing — see CLAUDE.md).
+
 `refs` ties an asset to a block item via the path `items:<itemId>/items:<subItemId>`.
 
 ---
