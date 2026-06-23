@@ -26,12 +26,21 @@
 >
 > **Key validation:** every EU authoring envelope is **byte-identical** to US —
 > `CREATE_LESSON`, `CREATE_BLOCKS`, `CRUSH_IMAGE`, `GET_YURL`→S3 PUT,
-> `UPDATE_BLOCK_DEBOUNCE`, `PUT_LOCK`/`DEL_LOCK`. The EU **S3 PUT that succeeded
-> sent only `Content-Type`** — no `x-amz-acl` header, no `Authorization` (the
-> `x-amz-acl=public-read` rides the presigned query even though SigV4 lists it in
-> `SignedHeaders`; the browser omits the header and S3 still returns 200). So the
-> US-built upload path works on EU **unchanged**. Relative URLs + the
+> `UPDATE_BLOCK_DEBOUNCE`, `PUT_LOCK`/`DEL_LOCK`. Relative URLs + the
 > GET_YURL-returned host make the importer genuinely plane-agnostic.
+>
+> ⚠ **S3 PUT must echo `x-amz-acl: public-read` (font uploads).** Earlier notes
+> claimed the `x-amz-acl=public-read` in the presigned query was enough and the
+> header could be omitted (S3 returned 200 either way). That is FALSE for **font**
+> uploads: a PUT without the header returns 200 but stores the object **private**,
+> so the directly-served `.woff` later **403s** and Rise marks the typeface
+> **`inactive`** (root cause of dozens of dead imported typefaces). The SigV4
+> `SignedHeaders=host;x-amz-acl` means the client MUST send the header. Fix: send
+> `x-amz-acl` whenever the presigned url signs it (`s3PutHeaders` in
+> `import-shared.ts`) — signature-safe, and a no-op for urls that don't sign it.
+> Fonts are the visible victim because the `.woff` is served straight from the
+> uploaded bytes (no CRUSH/TRANSCODE in our import, §8); any asset served the same
+> way needs the same ACL.
 
 ---
 
@@ -116,7 +125,8 @@ for lesson in source.lessons (ASC position):
             for each media key on the block (original, crushedKey, poster, caption):
                 {key,url,type} = GET_YURL {assetPath:"courses/"+newCourseId,
                                            courseId:newCourseId, filename}
-                PUT bytes -> url   (Content-Type:type, public-read in the presigned url)
+                PUT bytes -> url   (Content-Type:type; + header x-amz-acl:public-read
+                                    when the url signs it — required or object is private)
                 # NO CRUSH_IMAGE / NO TRANSCODE_ASSET — upload the EXACT exported
                 # bytes (Rise already crushed/transcoded at author time; every
                 # variant key is its own upload + remap). See §8.

@@ -72,6 +72,31 @@ function base64ToBlob(b64: string, type: string): Blob {
 }
 
 /**
+ * Headers for a presigned S3 PUT. Always sends `Content-Type`; additionally sends
+ * `x-amz-acl` whenever the presigned URL signs it (`X-Amz-SignedHeaders` lists
+ * `x-amz-acl`). Captured FONT GET_YURL urls sign `x-amz-acl=public-read`; omitting
+ * the header stores the object WITHOUT the public-read ACL, so the directly-served
+ * `.woff` later 403s and Rise marks the typeface "inactive". Sending the header
+ * only when the url demands it is signature-safe (it's in the signed set) and a
+ * no-op for urls that don't sign the ACL — so any upload whose url omits it is
+ * left exactly as before.
+ */
+export function s3PutHeaders(url: string, contentType?: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (contentType) headers['Content-Type'] = contentType;
+  try {
+    const params = new URL(url).searchParams;
+    const signed = params.get('X-Amz-SignedHeaders') ?? '';
+    if (signed.split(';').includes('x-amz-acl')) {
+      headers['x-amz-acl'] = params.get('x-amz-acl') ?? 'public-read';
+    }
+  } catch {
+    // Unparseable URL — fall back to Content-Type only.
+  }
+  return headers;
+}
+
+/**
  * S3 upload PUT (presigned, noAuth) — executed DIRECT from the side panel so the
  * bytes don't cross the 64MB chrome.runtime message hops (panel→background→tab).
  * host_permissions for the S3 buckets exempt this cross-origin fetch from CORS;
@@ -83,7 +108,7 @@ async function panelS3Put(spec: WriteSpec): Promise<RelayResponse> {
     const body = base64ToBlob(spec.base64Body ?? '', spec.contentType || 'application/octet-stream');
     const res = await fetch(spec.url, {
       method: 'PUT',
-      headers: spec.contentType ? { 'Content-Type': spec.contentType } : {},
+      headers: s3PutHeaders(spec.url, spec.contentType),
       body,
       credentials: 'omit',
     });
