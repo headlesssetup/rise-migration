@@ -6,7 +6,7 @@
 //   - Exposes typed fetch RPCs to the side panel (search, get-course).
 //   - Pacing lives in the panel, NOT here.
 
-import { identityFromToken, type Identity } from '@/core/auth/jwt';
+import { decodeJwt, identityFromToken, type Identity } from '@/core/auth/jwt';
 import {
   buildFetchBlockTemplatesRequest,
   buildFetchTypefacesRequest,
@@ -294,36 +294,104 @@ export default defineBackground(() => {
     return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
   }
 
-  // Nudge a real token rotation the way the editor does: run the refresh POST
-  // INSIDE the Rise tab (first-party context), with the live session cookies and
-  // NO bearer header — exactly as Rise's own editor does. The rotated
-  // `_articulate_rise_` then lands in the page's cookie jar for grabTokenFromCookie
-  // to pick up. Two details matter:
-  //   - credentials:'include' so the id.articulate.com session cookie rides along
-  //     (run from the service-worker origin it is withheld cross-site — the bug);
-  //   - NO Authorization header — a bearer would force a CORS preflight to
-  //     id.articulate.com that the editor never triggers (relayFetch couples a
-  //     bearer with cookies and `noAuth` drops cookies, so we can't use it here).
-  async function tryRefresh(): Promise<boolean> {
+  // Rotate the bearer the way the editor actually does — MITM-confirmed Okta
+  // silent re-auth (2026-06-23). lifecycle/refresh is only a 204 SSO keep-alive
+  // (it does NOT rotate the bearer); the real renewal is a hidden iframe to the
+  // Okta `/authorize?prompt=none&response_type=id_token+token&response_mode=
+  // okta_post_message` endpoint, which posts `{access_token,…}` back to the rise
+  // origin via postMessage. We replicate it IN the Rise tab (first-party):
+  //   1. keep the SSO session warm (lifecycle/refresh, 204), then
+  //   2. open the silent-auth iframe and capture the posted access_token.
+  // The authorize URL is derived entirely from the CURRENT token's own claims
+  // (iss/cid/scp) — no hardcoded account/plane values.
+  function buildSilentAuthUrl(riseOrigin: string): string | null {
+    if (!token) return null;
+    const c = decodeJwt(token);
+    const iss = typeof c?.iss === 'string' ? c.iss : '';
+    const cid = typeof c?.cid === 'string' ? c.cid : '';
+    const scope = Array.isArray((c as { scp?: unknown })?.scp)
+      ? ((c as { scp: unknown[] }).scp as string[]).join(' ')
+      : 'openid';
+    if (!iss || !cid) return null;
+    const nonce = `${Math.random().toString(36).slice(2)}${Date.now()}`;
+    const p = new URLSearchParams({
+      client_id: cid,
+      nonce,
+      prompt: 'none',
+      redirect_uri: `${riseOrigin}/auth-callback`,
+      response_mode: 'okta_post_message',
+      response_type: 'id_token token',
+      scope,
+      state: nonce,
+    });
+    return `${iss}/v1/authorize?${p.toString()}`;
+  }
+
+  async function tryRefresh(): Promise<void> {
     const tab = await findRiseTab();
-    if (!tab || typeof tab.id !== 'number') return false;
+    const url = tab?.url;
+    if (!tab || typeof tab.id !== 'number' || !url) return;
+    // 1. Keep the Okta SSO session warm so prompt=none succeeds (204 no-op for
+    //    the bearer, but required). First-party, no bearer header.
+    await relayFetch({ url: REFRESH_URL, method: 'POST' }).catch(() => {});
+    // 2. Silent re-auth via the okta_post_message iframe; capture access_token.
+    const riseOrigin = (() => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return '';
+      }
+    })();
+    const authorizeUrl = riseOrigin ? buildSilentAuthUrl(riseOrigin) : null;
+    if (!authorizeUrl) return;
+    const idOrigin = new URL(authorizeUrl).origin;
     try {
       const [inj] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         world: 'ISOLATED',
-        func: async (url: string): Promise<boolean> => {
-          try {
-            const res = await fetch(url, { method: 'POST', credentials: 'include' });
-            return res.ok;
-          } catch {
-            return false;
-          }
-        },
-        args: [REFRESH_URL],
+        // Self-contained (serialized): open a hidden iframe to the Okta
+        // prompt=none authorize endpoint and resolve the access_token it posts
+        // back to this (rise-origin) window. Times out so a failed renewal can't
+        // hang the import.
+        func: (authUrl: string, expectOrigin: string): Promise<string | null> =>
+          new Promise((resolve) => {
+            let done = false;
+            let frame: HTMLIFrameElement | undefined;
+            const onMsg = (e: MessageEvent): void => {
+              if (e.origin !== expectOrigin) return;
+              const d = e.data as { access_token?: unknown } | null;
+              if (d && typeof d === 'object' && typeof d.access_token === 'string') {
+                finish(d.access_token);
+              }
+            };
+            const finish = (v: string | null): void => {
+              if (done) return;
+              done = true;
+              try {
+                window.removeEventListener('message', onMsg);
+              } catch {
+                /* ignore */
+              }
+              try {
+                frame?.remove();
+              } catch {
+                /* ignore */
+              }
+              resolve(v);
+            };
+            window.addEventListener('message', onMsg);
+            frame = document.createElement('iframe');
+            frame.style.display = 'none';
+            frame.src = authUrl;
+            (document.body ?? document.documentElement).appendChild(frame);
+            setTimeout(() => finish(null), 12_000);
+          }),
+        args: [authorizeUrl, idOrigin],
       });
-      return Boolean(inj?.result);
+      const at = inj?.result;
+      if (typeof at === 'string' && at.split('.').length === 3) setToken(at);
     } catch {
-      return false;
+      /* tab gone / CSP / timeout — reauth() reports no-advance honestly */
     }
   }
 

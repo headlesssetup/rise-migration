@@ -30,10 +30,28 @@ A single-author headless script ignores it entirely and just issues the HTTP "du
 
 ## 2. Auth
 
-- Capture the bearer JWT from a logged-in session (Okta `oauth2/default/v1/token`,
-  refreshed via `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh`).
-- Send `Authorization: Bearer <jwt>` on every `manage/api` and `ducks` call.
-- Tokens are short-lived → handle `401` by refreshing and retrying.
+- The bearer is the `_articulate_rise_` cookie value: an Okta access JWT (`aud:
+  api://default`, `~15 min` lifetime, claims include `iss`, `cid`, `scp`). Send it
+  as `Authorization: Bearer <jwt>` on every `manage/api` and `ducks` call.
+- **Token refresh — MITM-confirmed (2026-06-23), do NOT confuse the two calls:**
+  - `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh` → **`204 No
+    Content`, no body, no `Set-Cookie`**. It ONLY keeps the Okta SSO session
+    (`sid`/`xids` cookies on `id.articulate.com`) warm. It does **not** rotate the
+    bearer. (Same-site from the rise origin; `prefer: return=minimal`.)
+  - The bearer is actually rotated by **Okta silent re-auth**: a hidden iframe to
+    `GET {iss}/v1/authorize?client_id={cid}&prompt=none&response_type=id_token+token
+    &response_mode=okta_post_message&redirect_uri={riseOrigin}/auth-callback
+    &scope={scp}&nonce=…&state=…`. Okta (relying on the warm SSO session) returns an
+    HTML page that does `window.parent.postMessage(data, "{riseOrigin}")` where
+    `data = {id_token, access_token, token_type:"Bearer", expires_in:"900", scope,
+    state}`. `data.access_token` is the new bearer. **No `oauth2/token` call and no
+    `Set-Cookie`** for the bearer — the SPA writes the (non-httpOnly)
+    `_articulate_rise_` cookie in JS. Build the authorize URL from the *current
+    token's own claims* (`iss`/`cid`/`scp`) — no hardcoded account/plane values.
+  - To renew headlessly: run IN the rise tab (first-party) — POST lifecycle/refresh
+    (keep-warm), then open the prompt=none iframe and capture the posted
+    `access_token`. A renewal counts only when the JWT `exp` advances.
+- Tokens are short-lived → on `401`/`403` refresh (as above) and retry.
 - SSO/2FA makes fully-programmatic login painful; easiest is a one-time browser capture
   (or Playwright with a real login) to grab a fresh token, then run the API client.
 
@@ -283,3 +301,33 @@ actually vary: **media keys** (download + re-upload + remap) and **cross-refs**
 `family/variant` and media-ref shapes actually occur in your library, and which carry assets.
 Build the copy-faithful path first; only the media-bearing and cross-ref blocks need
 per-type handling.
+
+---
+
+## 12. Capturing the protocol (MITM) — method + format
+
+Everything above is reverse-engineered from man-in-the-middle captures of the live editor.
+**Immutable: never wire an API shape that isn't confirmed from a capture** (see CLAUDE.md).
+
+**How to capture.** Run mitmproxy/mitmweb (or Charles/Proxyman) with its CA trusted, drive the
+Rise editor in the browser, exercise the action of interest (e.g. set a theme image; or leave
+an authoring course idle ~15–20 min to catch the token renewal), then export the flows. Two
+useful export formats:
+- **Plain text dump** (mitmproxy `: export` / "Save as cURL/raw") — human-readable
+  request+response lines (used for most sections here).
+- **`.mitm` flow file** — mitmproxy's native binary. It is a sequence of **tnetstring**-encoded
+  flow dicts (`<len>:<payload><type>`; types: `,`=bytes, `;`=unicode str, `#`=int, `^`=float,
+  `!`=bool, `~`=null, `}`=dict, `]`=list). Response bodies are under `response.content` and may
+  be `gzip`-encoded (check the `content-encoding` header). Parse with a tiny tnetstring reader
+  (no mitmproxy install needed) and `gzip.decompress` the body — this is how the §2 silent-auth
+  HTML (`buildMessageData()` / `postMessage`) was recovered.
+
+**What to capture for a clean wire-up.** For any write: the full request **URL + method +
+JSON body** (the field shape) AND, where rotation/state matters, the **response** incl.
+`Set-Cookie`. For media: the `GET_YURL → S3 PUT → CRUSH/TRANSCODE` chain plus the `UPDATE_*`
+that sets the key. Record the confirmed envelope here before coding.
+
+**Captured-but-not-yet-wired (need their own capture):** course `lessonHeaderImage` (with
+nested `originalImage`), `overlayNavigationImage`, `blockBackgroundImage`, user-uploaded
+`theme.*` image keys; US-plane silent-auth (only EU confirmed — though the URL is derived from
+token claims so it should port).
