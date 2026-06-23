@@ -570,3 +570,4 @@ describe('executePlan — lesson header image', () => {
     expect(res.flags.some((f) => f.sourceKey === key)).toBe(false);
   });
 });
+

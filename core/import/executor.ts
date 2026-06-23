@@ -8,7 +8,6 @@
 // All I/O is injected so the whole executor is unit-testable without a browser
 // or a live Rise account.
 
-import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 import { IdMap, newId } from './ids';
 import {
   remapIds,

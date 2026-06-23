@@ -141,7 +141,6 @@ export function parseJson(text: string): Record<string, unknown> {
     return {};
   }
 }
-
 export function payloadOf(obj: Record<string, unknown>): Record<string, unknown> {
   const p = obj.payload;
   return p && typeof p === 'object' ? (p as Record<string, unknown>) : obj;

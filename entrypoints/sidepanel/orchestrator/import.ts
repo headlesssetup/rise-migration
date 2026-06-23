@@ -1,13 +1,13 @@
-// Phase 3 — Operation C: course import orchestration (panel-side). Reads a course
-// out of the read-only archive, builds the plan, and runs it (dry or live) through
-// the background's RELAY_WRITE, strictly sequential + human-paced. Persists a
-// fidelity report + the resumable job log under `_import/`. The archive itself is
-// never mutated (the immutable source of truth).
+// Phase 3 — import orchestration (panel-side). Reads a course out of the
+// read-only archive, builds the plan, and runs it (dry or live) through the
+// background's RELAY_WRITE, strictly sequential + human-paced. Persists a
+// fidelity report + the resumable job log under `_import/`. The archive itself
+// is never mutated (the immutable source of truth).
 //
-// Shared plumbing lives in ./import-shared; the account-settings (A) and
-// question-bank (B) operations live in ./import-account and ./import-banks and are
-// re-exported here so `import … from './import'` (and the orchestrator barrel)
-// stays a single stable entry point.
+// Shared helpers (relay, token refresh, folders, fonts, id maps) live in
+// ./import-shared; account settings (A) in ./import-account; banks (B) in
+// ./import-banks. They are re-exported below so `./import` (and the orchestrator
+// barrel) keeps the same surface after the split.
 
 import {
   buildPlan,
@@ -41,16 +41,16 @@ import { unwrap, type ProgressEvent } from './shared';
 import {
   refreshToken,
   relayThroughTab,
-  readSourceIdentity,
-  fetchTargetTypefaces,
-  makeFontReader,
-  readFontManifest,
-  readAccountIdMap,
-  readBankIdMap,
-  setupFolders,
   bytesToBase64,
   contentTypeForExt,
   safeJson,
+  makeFontReader,
+  readFontManifest,
+  fetchTargetTypefaces,
+  readAccountIdMap,
+  readBankIdMap,
+  setupFolders,
+  readSourceIdentity,
 } from './import-shared';
 
 // Re-export the shared + A + B surface so existing importers of './import' (and

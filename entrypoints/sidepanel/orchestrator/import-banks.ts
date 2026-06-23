@@ -1,7 +1,7 @@
-// Phase 3 — Operation B: import selected question banks as standalone resources
-// (POST → PUT questions, copy-faithful with regenerated ids) and persist source
-// bank id → { newBankId, questionIds } so course import (C) auto-binds
-// draw-from-bank blocks. Split out of import.ts.
+// Phase 3 — Operation B: question-bank listing + standalone import. Split out of
+// import.ts; shares the relay, source identity, refresh, and bank id-map
+// persistence from ./import-shared. Re-exported from ./import so the public
+// surface is unchanged.
 
 import {
   checkSourceNotTarget,
@@ -16,13 +16,15 @@ import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/del
 import type { Storage } from '@/core/storage/storage';
 import type { ProgressEvent } from './shared';
 import {
+  readSourceIdentity,
   refreshToken,
-  relayThroughTab,
   readBankIdMap,
   writeBankIdMap,
-  readSourceIdentity,
+  relayThroughTab,
   safeJson,
 } from './import-shared';
+
+// --- B) Question banks: list + standalone import ------------------------------
 
 export interface LocalBank {
   id: string;

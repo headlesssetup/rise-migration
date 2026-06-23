@@ -1,9 +1,9 @@
-// Phase 3 — shared import plumbing used by all three import operations
-// (A: account settings, B: question banks, C: course import). Split out of the
-// old monolithic import.ts so each operation file stays focused and readable.
-// Holds the bearer refresh, the panel/background Relay, base64 ⇄ bytes helpers,
-// archive readers shared across operations, folder recreation, and the cross-step
-// id maps persisted under `_import/` (A → B → C).
+// Phase 3 — import SHARED helpers, split out of import.ts so the course-run
+// orchestrator (runImport) and the A/B operations (import-account, import-banks)
+// share one copy: token refresh, the panel/tab relay (incl. the direct S3 PUT),
+// base64/content-type helpers, source identity + target typefaces, folder
+// recreation, the font reader, and the cross-step id maps persisted under
+// `_import/`. Re-exported from ./import so the public surface is unchanged.
 
 import {
   parseTypefaces,

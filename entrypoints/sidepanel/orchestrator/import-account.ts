@@ -1,18 +1,19 @@
-// Phase 3 — Operation A: import account-level settings (a brief archive summary +
-// the folder tree + custom fonts). Persists the folder + typeface id maps under
-// `_import/account.idmap.json` so B/C reuse them. Split out of import.ts.
+// Phase 3 — Operation A: account-level settings import (folders + custom fonts)
+// and the read-only archive summary. Split out of import.ts; shares the relay,
+// folder recreation, font reader, and id-map persistence from ./import-shared.
+// Re-exported from ./import so the public surface is unchanged.
 
 import {
   checkSourceNotTarget,
   parseTypefaces,
+  parseFolders,
+  orderForCreation,
   resolveTypefaces,
   targetByName,
   buildCreateTypefaceFonts,
   getYurl,
   s3Put,
   createTypeface,
-  parseFolders,
-  orderForCreation,
   type AccountIdentity,
   type Typeface,
 } from '@/core/import';
@@ -21,14 +22,14 @@ import type { Storage } from '@/core/storage/storage';
 import { rpc } from '../rpc';
 import { extractItems, type ProgressEvent } from './shared';
 import {
+  readSourceIdentity,
   refreshToken,
-  relayThroughTab,
   setupFolders,
   fetchTargetTypefaces,
   makeFontReader,
   readFontManifest,
   writeAccountIdMap,
-  readSourceIdentity,
+  relayThroughTab,
   safeJson,
 } from './import-shared';
 
@@ -55,6 +56,8 @@ async function liveTargetCourseId(): Promise<string | undefined> {
   }
   return undefined;
 }
+
+// --- A) Account settings: brief info + folders + custom fonts -----------------
 
 export interface ArchiveInfo {
   /** Source account display name (from the manifest), if recorded. */

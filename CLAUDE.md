@@ -5,8 +5,6 @@ Chrome extension (Manifest V3, Side Panel) that **exports** a Rise course (conte
 
 **API & schema:** `docs/rise-api-reference.md` is the authoritative, captured protocol. Read it for endpoints/payloads/schema — never infer Rise's API from memory. The living **block catalog** is `docs/rise-block-catalog.md` (grown by novelty review — see invariants). Also in `docs/`: `rise-migration-prd.md` (what/why), `rise-tool-build-plan.md` (how/sequence).
 
-**Captures are big — read them with tools, not into context.** The raw HAR/JSONL captures under `docs/captures/` (some >1MB, long single-line JSON) are reference fixtures, NOT prose. NEVER read one wholesale into context. Query them with targeted tools — `grep`/`Grep` for an action/path, `Read` with `offset`/`limit` for a known span, `jq`/`scripts/mitm-to-jsonl.py` to slice — and pull only the matching envelope. The distilled protocol already lives in `docs/rise-api-reference.md`; reach for a capture only to confirm an exact payload.
-
 ## Stack
 - TypeScript; React (side panel); **WXT** (MV3 scaffold); Vitest.
 - Model blocks as discriminated unions only where we transform them; everything else is copied verbatim.
@@ -38,6 +36,5 @@ Rise blocks **round-trip verbatim** — read each block's JSON and write it back
 ## Conventions
 - Asset/cross-ref discovery is a **generic recursive scan** of the full document, not a per-block-type walk.
 - Dedup binaries by content hash: upload once, reuse the key for all references.
-- **Keep modules AI-readable: ≤~800 lines, split by area.** No source file should grow past ~800 lines; when one does, split it along its natural seams (types/helpers vs. logic; one module per operation; a frequently-read shell file delegates auxiliary logic to a hook/sibling). Preserve the public surface by re-exporting from the original entry point. E.g. the import executor is `core/import/executor.ts` + `executor-types.ts`; the import orchestrator is `import.ts` (course/op C) + `import-shared.ts` + `import-account.ts` (A) + `import-banks.ts` (B); the side panel is `App.tsx` (shell) + `useExportController.ts` + `components/LogView.tsx`.
 - **Every repeatable action shows `[i/N]` progress.** Any loop that does N units of work (folders, fonts, banks, lessons, courses, blocks, assets, purges, deletes…) logs per-item progress in the same form — e.g. `[3/20 folders] OK created "Name"`, `[12/77 fonts] OK created typeface "X"`, `[1/5] course …`. Never run a long loop that looks frozen; the operator must always see which item N-of-total is in flight.
 - Keep this file under ~200 lines.
