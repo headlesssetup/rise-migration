@@ -406,7 +406,16 @@ export async function runImport(
       onEvent({ kind: 'log', message: 'Stop requested — halting before the next course.' });
       break;
     }
-    onEvent({ kind: 'course', index: i, total: courseIds.length, courseId });
+    // Read the course first so the per-course log header can show its real name.
+    const raw = await storage.readCourse(courseId);
+    if (!raw) {
+      onEvent({ kind: 'log', message: `Skipped (not in archive): ${courseId}` });
+      continue;
+    }
+    const course = unwrap(raw);
+    const courseTitle =
+      typeof course.course?.title === 'string' ? course.course.title : undefined;
+    onEvent({ kind: 'course', index: i, total: courseIds.length, courseId, title: courseTitle });
     emitStatus(i, 0, 1);
 
     // Refresh the bearer before EACH course: every course is many paced writes,
@@ -416,14 +425,6 @@ export async function runImport(
     await refreshToken(onEvent, `[${i + 1}/${courseIds.length}]`);
     lastAuthMs = Date.now();
 
-    const raw = await storage.readCourse(courseId);
-    if (!raw) {
-      onEvent({ kind: 'log', message: `Skipped (not in archive): ${courseId}` });
-      continue;
-    }
-    const course = unwrap(raw);
-    const courseTitle =
-      typeof course.course?.title === 'string' ? course.course.title : undefined;
     const { entries, fileByKey } = await readCourseAssets(storage, courseId);
     const banksById = await readReferencedBanks(storage, course);
 

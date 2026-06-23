@@ -40,11 +40,14 @@ export function ImportView({
   storage,
   session,
   addLog,
+  logBreak,
   onStatus,
 }: {
   storage: Storage | null;
   session: SessionState | null;
   addLog: (m: string) => void;
+  /** Start a new log section: a blank line + optional bold ▶ header. */
+  logBreak: (label?: string) => void;
   /** Live import status for the log-header countdown. */
   onStatus?: (e: Extract<ProgressEvent, { kind: 'import-status' }>) => void;
 }) {
@@ -109,10 +112,14 @@ export function ImportView({
   const onEvent = useCallback(
     (e: ProgressEvent) => {
       if (e.kind === 'log') addLog(e.message);
-      else if (e.kind === 'course') addLog(`[${e.index + 1}/${e.total}] ${e.courseId}`);
-      else if (e.kind === 'import-status') onStatus?.(e);
+      else if (e.kind === 'course') {
+        // Bold, named header per course, set off by a blank line so each course's
+        // run is easy to find when scanning a long import log.
+        const name = e.title ? `${e.title} (${e.courseId})` : e.courseId;
+        logBreak(`[${e.index + 1}/${e.total}] ${name}`);
+      } else if (e.kind === 'import-status') onStatus?.(e);
     },
-    [addLog, onStatus],
+    [addLog, logBreak, onStatus],
   );
 
   // Live runs need an explicit target confirmation + the guard + a Rise tab.
@@ -173,6 +180,7 @@ export function ImportView({
         running={running}
         setRunning={setRunning}
         onEvent={onEvent}
+        logBreak={logBreak}
         stop={stop}
       />
       <BanksSection
@@ -183,6 +191,7 @@ export function ImportView({
         running={running}
         setRunning={setRunning}
         onEvent={onEvent}
+        logBreak={logBreak}
         stop={stop}
       />
       <CoursesSection
@@ -193,6 +202,7 @@ export function ImportView({
         running={running}
         setRunning={setRunning}
         onEvent={onEvent}
+        logBreak={logBreak}
         stop={stop}
       />
     </section>
@@ -219,6 +229,7 @@ interface SectionProps {
   running: boolean;
   setRunning: (b: boolean) => void;
   onEvent: (e: ProgressEvent) => void;
+  logBreak: (label?: string) => void;
   stop: StopController;
 }
 
@@ -229,7 +240,12 @@ const STEP_STYLE: React.CSSProperties = {
   marginTop: 10,
 };
 
-/** A step card whose body collapses when its heading is clicked. */
+/** A collapsible step card. Built on the native `<details>`/`<summary>` element
+ *  (accessible + keyboard-toggleable for free, no React state to drift); the
+ *  up/down triangle is drawn by `details.step > summary` in style.css, never the
+ *  1px native marker. Open by default (steps run top-to-bottom), foldable once
+ *  done. `defaultOpen` is constant per card, so passing it as `open` leaves the
+ *  element effectively uncontrolled — the user can still toggle it freely. */
 function CollapsibleStep({
   title,
   defaultOpen = true,
@@ -239,30 +255,13 @@ function CollapsibleStep({
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div style={STEP_STYLE}>
-      <h3
-        onClick={() => setOpen((o) => !o)}
-        role="button"
-        aria-expanded={open}
-        style={{
-          marginTop: 0,
-          marginBottom: open ? undefined : 0,
-          cursor: 'pointer',
-          userSelect: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <span style={{ fontSize: '0.7em', opacity: 0.7, width: '0.9em', display: 'inline-block' }}>
-          {open ? '▾' : '▸'}
-        </span>
-        {title}
-      </h3>
-      {open && children}
-    </div>
+    <details className="step" style={STEP_STYLE} open={defaultOpen}>
+      <summary>
+        <h3 style={{ margin: 0, display: 'inline' }}>{title}</h3>
+      </summary>
+      {children}
+    </details>
   );
 }
 
@@ -276,6 +275,7 @@ function AccountSettingsSection({
   running,
   setRunning,
   onEvent,
+  logBreak,
 }: SectionProps) {
   const [info, setInfo] = useState<ArchiveInfo | null>(null);
   const [summary, setSummary] = useState<AccountSettingsSummary | null>(null);
@@ -295,6 +295,7 @@ function AccountSettingsSection({
   const run = useCallback(
     async (dryRun: boolean) => {
       if (!storage) return;
+      logBreak(`Account settings — ${dryRun ? 'dry-run' : 'import'}`);
       setRunning(true);
       setSummary(null);
       try {
@@ -309,7 +310,7 @@ function AccountSettingsSection({
         setRunning(false);
       }
     },
-    [storage, target, override, onEvent, setRunning],
+    [storage, target, override, onEvent, logBreak, setRunning],
   );
 
   return (
@@ -360,6 +361,7 @@ function BanksSection({
   setRunning,
   onEvent,
   stop,
+  logBreak,
 }: SectionProps) {
   const [banks, setBanks] = useState<LocalBank[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -383,6 +385,7 @@ function BanksSection({
   const run = useCallback(
     async (dryRun: boolean) => {
       if (!storage) return;
+      logBreak(`Question banks — ${dryRun ? 'dry-run' : 'import'}`);
       stop.reset();
       setRunning(true);
       setOutcomes([]);
@@ -399,7 +402,7 @@ function BanksSection({
         setRunning(false);
       }
     },
-    [storage, target, override, selected, onEvent, setRunning, stop],
+    [storage, target, override, selected, onEvent, logBreak, setRunning, stop],
   );
 
   return (
@@ -474,6 +477,7 @@ function CoursesSection({
   setRunning,
   onEvent,
   stop,
+  logBreak,
 }: SectionProps) {
   const [courses, setCourses] = useState<ArchiveCourse[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -517,6 +521,7 @@ function CoursesSection({
   const run = useCallback(
     async (dryRun: boolean) => {
       if (!storage) return;
+      logBreak(`Courses — ${dryRun ? 'dry-run' : 'import'}`);
       stop.reset();
       setRunning(true);
       setBlocked(null);
@@ -535,7 +540,7 @@ function CoursesSection({
         setRunning(false);
       }
     },
-    [storage, target, override, selected, onEvent, setRunning, stop],
+    [storage, target, override, selected, onEvent, logBreak, setRunning, stop],
   );
 
   return (

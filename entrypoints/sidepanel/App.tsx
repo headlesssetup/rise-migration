@@ -71,6 +71,8 @@ const PAGE = 16;
 
 /** Classify a log line for colorization (CSS in style.css). */
 function logLineClass(line: string): string {
+  // Operation/course headers are emitted with a leading ▶ marker — render bold.
+  if (/^\s*▶/.test(line)) return 'log-line log-head';
   if (/^\s*(FAILED|BLOCKED|✗)|\berror\b|Unauthorized|HTTP [45]\d\d/i.test(line))
     return 'log-line log-error';
   if (/^\s*(\[\d+\/\d+\]\s*)?WARN|⚠/i.test(line)) return 'log-line log-warn';
@@ -137,6 +139,16 @@ export function App() {
 
   const addLog = useCallback((message: string) => {
     setLog((l) => [...l, message]);
+  }, []);
+
+  // Visually separate each new user-launched operation in the log: drop a blank
+  // line before it (never as the very first line), then an optional bold ▶ header.
+  const logBreak = useCallback((label?: string) => {
+    setLog((l) => {
+      const next = l.length === 0 ? [...l] : [...l, ''];
+      if (label) next.push(`▶ ${label}`);
+      return next;
+    });
   }, []);
 
   const clearLog = useCallback(() => setLog([]), []);
@@ -277,6 +289,7 @@ export function App() {
   }, [addLog]);
 
   const list = useCallback(async () => {
+    logBreak('List courses');
     setPhase('listing');
     setCourses([]);
     const result = await listAllCourses(onEvent, listLimit);
@@ -296,7 +309,7 @@ export function App() {
         `Inventory built (${rows.length} rows) — connect a folder to save it.`,
       );
     }
-  }, [onEvent, addLog, listLimit, storage]);
+  }, [onEvent, addLog, logBreak, listLimit, storage]);
 
   const toggle = useCallback((id: string) => {
     setSelected((s) => {
@@ -321,6 +334,7 @@ export function App() {
 
   const runExport = useCallback(async () => {
     if (!storage) return;
+    logBreak('Fetch courses');
     setPhase('exporting');
     setCensus(null);
     setNovelty(null);
@@ -372,10 +386,11 @@ export function App() {
     addLog(
       `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s).`,
     );
-  }, [storage, selectedCourses, onEvent, addLog, session]);
+  }, [storage, selectedCourses, onEvent, addLog, logBreak, session]);
 
   const runBanks = useCallback(async () => {
     if (!storage) return;
+    logBreak('Fetch question banks');
     setPhase('exporting');
     setBanks(null);
     setProgress(null);
@@ -414,10 +429,11 @@ export function App() {
     if (folders.length) {
       addLog(`Folders updated: ${folders.length} total (incl. bank folders).`);
     }
-  }, [storage, onEvent, addLog]);
+  }, [storage, onEvent, addLog, logBreak]);
 
   const runAssets = useCallback(async () => {
     if (!storage) return;
+    logBreak('Download assets');
     setPhase('exporting');
     setAssets(null);
     setProgress(null);
@@ -452,10 +468,11 @@ export function App() {
       const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
       addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
     }
-  }, [storage, onEvent, addLog, session]);
+  }, [storage, onEvent, addLog, logBreak, session]);
 
   const runAccount = useCallback(async () => {
     if (!storage) return;
+    logBreak('Export account data');
     setPhase('exporting');
     setProgress(null);
     addLog('Exporting account data (folders, block templates, typefaces)…');
@@ -474,7 +491,7 @@ export function App() {
     addLog(
       `Account data: ${folders.length} folder(s), ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
     );
-  }, [storage, onEvent, addLog]);
+  }, [storage, onEvent, addLog, logBreak]);
 
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
@@ -543,6 +560,7 @@ export function App() {
           storage={storage}
           session={session}
           addLog={addLog}
+          logBreak={logBreak}
           onStatus={onImportStatus}
         />
       )}
@@ -751,11 +769,15 @@ export function App() {
           </span>
         </div>
         <div className="log" ref={logRef} onScroll={onLogScroll}>
-          {log.map((line, i) => (
-            <div key={i} className={logLineClass(line)}>
-              {line}
-            </div>
-          ))}
+          {log.map((line, i) =>
+            line === '' ? (
+              <div key={i} className="log-line log-gap" />
+            ) : (
+              <div key={i} className={logLineClass(line)}>
+                {line}
+              </div>
+            ),
+          )}
         </div>
       </section>
     </div>
