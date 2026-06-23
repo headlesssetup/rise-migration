@@ -168,6 +168,23 @@ both `isRoot`); a top-level folder hangs off the matching root via `parentFolder
 - **Content permissions** — `GET`/`PUT /manage/api/content/<courseId>/permissions`
   (owner/collaborator ACL); `GET /manage/api/collaborators` lists members.
 
+**Why a course move can `400` (the run's failure, analyzed 2026-06-23).** The
+envelope is correct, so the cause is the folder *id* we pass, not the request:
+1. **Stale persisted folder map (most likely).** When a prior step-A run persisted
+   `account.idmap.json` (source folderId → target folderId), a later course run uses
+   it directly WITHOUT re-creating/validating folders. If those target folders were
+   since deleted/recreated (or came from a different target account/session), every
+   id is invalid → uniform `400` on all courses (exactly what we saw — the run logged
+   no folder-creation step, so it ran off the persisted map).
+2. **Cross-plane id.** A US (source) folder id used as if it were an EU (target) id.
+3. **Folder soft-deleted** between setup and the move.
+4. **Permission**: moving into a team/shared folder the session user can't write.
+   NOT the "create a duplicate then move" case — our `setupFolders` DEDUPES by
+   parent|name and REUSES an existing folder; and if a create fails it skips the move
+   (no id → no move), so a duplicate-create never produces a move `400`.
+   Mitigation in place: the move + folder-create failures now log the server's
+   response body + the folder id; re-running with fresh folder setup resolves it.
+
 Question-bank folders are a SEPARATE namespace:
 - **Create bank folder** — `POST /manage/api/question-banks/folder` (JSON).
 - **Move bank** — `PUT /manage/api/question-banks/question-bank/<bankId>/move`.

@@ -808,7 +808,11 @@ async function setupFolders(
         createFolder({ name: f.name, parentFolderId: parentTarget, permissions: owner }),
       );
       if (!r.ok) {
-        onEvent({ kind: 'log', message: `${pfx} WARN create "${f.name}" failed (HTTP ${r.status})` });
+        const reason = (r.text || r.error || '').toString().slice(0, 200);
+        onEvent({
+          kind: 'log',
+          message: `${pfx} WARN create "${f.name}" failed (HTTP ${r.status}) under parent ${parentTarget}${reason ? ` — ${reason}` : ''}`,
+        });
         continue;
       }
       newId = String((safeJson(r.text) as { id?: string } | null)?.id ?? '');
