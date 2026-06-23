@@ -173,6 +173,12 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 >    (`GET_YURL`→S3 PUT) and remap keys — Rise already crushed/transcoded at author
 >    time, so re-processing only recompresses + drifts. `CRUSH_IMAGE`/`TRANSCODE_ASSET`/
 >    `CHECK_STATUS`/`RESOLVE_ASSET`/`UPDATE_COURSE{jobs}` are documented but unused.
+>    ✅ **Capture-confirmed** (`rise-mitm-sample-edit-media-theme.md`): the editor DOES
+>    call `CRUSH_IMAGE`/`CROP_IMAGE` for images — we skip them and re-upload the
+>    source `key`+`crushedKey` verbatim (same end state). A **video uses NO
+>    `TRANSCODE_ASSET`** (0× in the capture) — `GET_YURL`→S3 PUT→`CHECK_STATUS`, and its
+>    **poster/thumbnail is an `images[.eu]` transform URL over the uploaded key**, so
+>    re-uploading + remapping the key(s) (incl. inside transform URLs) is sufficient.
 
 ---
 

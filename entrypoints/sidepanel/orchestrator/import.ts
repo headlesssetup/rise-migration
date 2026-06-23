@@ -298,6 +298,23 @@ export async function runImport(
   // last captured, so the very first reads (target fonts) could otherwise 403.
   await refreshToken(onEvent, 'run start');
 
+  // Token heartbeat: Rise's own editor refreshes the session continuously (~30s
+  // lifecycle/refresh) so the bearer is always fresh. We don't need that cadence
+  // (we're paced, and re-auth before each course gives a full ~15min window), but a
+  // single LONG course (hundreds of paced writes) can outlast the token mid-course.
+  // So we proactively refresh during a course if the bearer has been held too long
+  // — woven into the paced gap between writes. `lastAuthMs` is reset by every
+  // refresh (run-start, per-course, heartbeat).
+  let lastAuthMs = Date.now();
+  const HEARTBEAT_MS = 5 * 60_000; // well under the ~15min token, far calmer than Rise's 30s
+  const pacedWithHeartbeat = async (): Promise<void> => {
+    if (!opts.dryRun && Date.now() - lastAuthMs > HEARTBEAT_MS) {
+      await refreshToken(onEvent, 'heartbeat');
+      lastAuthMs = Date.now();
+    }
+    await pacedDelay(pacing);
+  };
+
   // Account-level typeface migration inputs (load once): the source account's
   // typefaces + the font key→archive-file map, so the import can match fonts by
   // name on the target and recreate custom ones.
@@ -355,6 +372,7 @@ export async function runImport(
     // 403s on a token that lapsed during the previous course. Per-course refresh
     // keeps each course starting on a token with the full ~15 min window.
     await refreshToken(onEvent, `[${i + 1}/${courseIds.length}]`);
+    lastAuthMs = Date.now();
 
     const raw = await storage.readCourse(courseId);
     if (!raw) {
@@ -410,7 +428,7 @@ export async function runImport(
       readFontBytes,
       ids,
       dryRun: opts.dryRun,
-      pace: () => pacedDelay(pacing),
+      pace: pacedWithHeartbeat,
       log: (m) => onEvent({ kind: 'log', message: m }),
       onProgress: (done, total) => emitStatus(i, done, total),
     });

@@ -190,12 +190,18 @@ preview, and gated live import.
   host_permissions (no CORS block) on both US and EU planes, and that very large
   files don't OOM the panel.
 
-**TODO (open):**
-- ⏳ **Confirm video thumbnails/posters round-trip.** A multimedia/video block's
-  `poster`/`thumbnail` are `images[.eu].articulate.com` transform URLs wrapping a
-  `rise/courses/{id}/{poster}.jpg` key (protocol §8). Verify the poster image is
-  uploaded + the thumbnail/poster renders on the target after import (the transform
-  URL host/key must resolve on the target plane). Not yet verified on a live run.
+**Capture-confirmed (sample 2 — `docs/rise-mitm-sample-edit-media-theme.md`):**
+- **Create handshake timing.** `POST /content` → `GET_COURSE` returns 200 immediately
+  (the ~13s gap in the capture is OAuth re-auth + page load, not a wait). The importer
+  now paces + retries the post-create GET_COURSE handshake (`courseHandshakeTries`, 3).
+- **Images:** the editor calls `CRUSH_IMAGE`/`CROP_IMAGE`; we intentionally skip them
+  and re-upload the source `key`+`crushedKey` verbatim (same end state).
+- **Video thumbnails — understood, no transcode.** `TRANSCODE_ASSET`/`RESOLVE_ASSET`
+  are never called; a video uses `GET_YURL`→S3 PUT→`CHECK_STATUS`, and the
+  poster/thumbnail is an `images[.eu].articulate.com` **transform URL over the
+  uploaded key**. Re-uploading the key(s) + remapping them (our scan rewrites keys
+  inside transform URLs too) is sufficient. ⏳ Still worth one live round-trip check
+  that the poster renders on the target plane.
 
 **Still TODO in Phase 3:**
 - **Folder recreation** — the folder-create endpoint/payload is **not** in the

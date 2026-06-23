@@ -77,6 +77,10 @@ export interface ExecutorDeps {
   mintId?: () => string;
   /** Poll budget for transcode CHECK_STATUS (default a few tries). */
   maxStatusPolls?: number;
+  /** Retries for the post-create GET_COURSE handshake (default 3), each preceded by
+   *  a paced gap — a few seconds of slack so a just-created course is confirmed
+   *  before any write even under replication lag. */
+  courseHandshakeTries?: number;
   onProgress?: (done: number, total: number) => void;
 }
 
@@ -361,21 +365,36 @@ export async function executePlan(
           ids.set(step.sourceCourseId, newCourseId);
           result.newCourseId = newCourseId;
           // INVARIANT — materialization handshake (mirror the editor): a real
-          // GET_COURSE on the new id BEFORE any write. Rise's editor always reads
-          // the course on open; `POST /content` returns a fully-materialized course
-          // (capture-confirmed), so this must return 200 with a `course`. If it
-          // doesn't, the shell is broken → fail now (rollback) rather than build on
-          // a course that 404s GET_COURSE yet 500s the dashboard.
+          // GET_COURSE on the new id BEFORE any write. Rise's editor always reads the
+          // course on open; `POST /content` returns a fully-materialized course
+          // (capture-confirmed: GET_COURSE 200 immediately). We pace before each
+          // attempt and RETRY a few times — a couple seconds of slack absorbs any
+          // replication lag and matches the editor's own create→open delay. If the
+          // course never confirms, the shell is broken → fail now (rollback) rather
+          // than build on a course that 404s GET_COURSE yet 500s the dashboard.
           if (!dryRun) {
-            const rb = payloadOf(await send(env.getCourse(newCourseId), step.kind));
-            if (!rb.course || typeof rb.course !== 'object') {
+            const tries = Math.max(1, deps.courseHandshakeTries ?? 3);
+            let confirmed = false;
+            for (let attempt = 1; attempt <= tries && !confirmed; attempt++) {
+              await pace(); // ≥ one paced gap after POST before reading back
+              const spec = env.getCourse(newCourseId);
+              result.envelopes.push({ step: step.kind, label: spec.label });
+              const r = await deps.relay(spec);
+              const rb = r.ok ? payloadOf(parseJson(r.text)) : {};
+              if (r.ok && rb.course && typeof rb.course === 'object') {
+                log(`${pfx()} OK   GET_COURSE handshake — course ready (attempt ${attempt}/${tries})`);
+                confirmed = true;
+                materialized = true;
+              } else {
+                log(`${pfx()} …    GET_COURSE not ready yet (attempt ${attempt}/${tries}, HTTP ${r.status})`);
+              }
+            }
+            if (!confirmed) {
               throw new WriteError(
-                'Post-create GET_COURSE did not return a course — shell did not materialize',
+                'Post-create GET_COURSE never confirmed the course materialized',
                 step.kind,
-                JSON.stringify(rb).slice(0, 300),
               );
             }
-            materialized = true;
           }
           break;
         }
