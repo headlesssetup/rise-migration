@@ -196,12 +196,15 @@ preview, and gated live import.
   now paces + retries the post-create GET_COURSE handshake (`courseHandshakeTries`, 3).
 - **Images:** the editor calls `CRUSH_IMAGE`/`CROP_IMAGE`; we intentionally skip them
   and re-upload the source `key`+`crushedKey` verbatim (same end state).
-- **Video thumbnails — understood, no transcode.** `TRANSCODE_ASSET`/`RESOLVE_ASSET`
-  are never called; a video uses `GET_YURL`→S3 PUT→`CHECK_STATUS`, and the
-  poster/thumbnail is an `images[.eu].articulate.com` **transform URL over the
-  uploaded key**. Re-uploading the key(s) + remapping them (our scan rewrites keys
-  inside transform URLs too) is sufficient. ⏳ Still worth one live round-trip check
-  that the poster renders on the target plane.
+- **Video thumbnails — BODY-CONFIRMED, no transcode.** An uploaded video block
+  (`be2ee1ae`) carries `key` (mp4), `poster`+`thumbnail` (`images.eu` transform URLs
+  over a separate uploaded `.png` key), and a `.vtt` caption — all `rise/courses/{id}/…`
+  uploads our generic scan re-uploads + remaps (mp4→media-video, png→media-image,
+  vtt→media-other). The client sends `skipProcess:true` + `isSkipCrush:true` →
+  `TRANSCODE_ASSET`/`RESOLVE_ASSET` never called (matches our no-transcode stance). The
+  upload-time `UPDATE_BLOCK_DEBOUNCE` has transient client fields (`url`/`cancelSource`/
+  `filename`/composite `id`) not present in `GET_COURSE`. ⏳ One live round-trip check
+  on a settled uploaded-video still nice-to-have, but no code action needed.
 
 **Still TODO in Phase 3:**
 - **Folder recreation** — the folder-create endpoint/payload is **not** in the

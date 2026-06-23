@@ -79,12 +79,34 @@ Both `key` and `crushedKey` are `rise/courses/{id}/…` → our scan uploads BOT
 and remaps BOTH (no crush pass). `isSkipCrush`/`useCrushedKey`/`sourcedFrom`/`originalUrl`
 are in the parity VOLATILE set (copied verbatim, not compared).
 
-**Video here was a BUILT-IN** (`Coastline.mp4` from block-defaults), not an upload:
-`src/poster/thumbnail` are `cdn.eu.articulate.com/assets/rise/…` and
-`key:"assets/rise/assets/block-defaults/coastline.mp4"` — kept as references (round-trips
-as-is). ⚠ So this capture still does NOT contain an UPLOADED video's block body; the
-uploaded-video poster/thumbnail shape remains as documented in §8 (transform URL over a
-`rise/courses/{id}/…` key), not freshly body-confirmed.
+**Video (two shapes confirmed).** A BUILT-IN video (`Coastline.mp4` from
+block-defaults) is `src/poster/thumbnail` = `cdn.eu.articulate.com/assets/rise/…`,
+`key:"assets/rise/assets/block-defaults/coastline.mp4"` — kept as references
+(round-trips as-is). An UPLOADED video (re-capture `be2ee1ae`) is now **body-confirmed**:
+```jsonc
+"media": { "video": {
+  "key":       "rise/courses/{id}/69AuKcRIx23PwiOc.mp4",   // uploaded video
+  "type":"video", "isSkipCrush": true, "skipProcess": true, // ← client SKIPS transcode/crush
+  "thumbnail": "https://images.eu.articulate.com/f:jpg,b:fff,w:100,h:100,s:cover/rise/courses/{id}/Zf_PoJD7IS14itUy.png",
+  "poster":    "https://images.eu.articulate.com/f:png,w:1920,s:cover,q:65/rise/courses/{id}/Zf_PoJD7IS14itUy.png",
+  "originalUrl":"7688…<sha256>.mp4",
+  "captions":  [ … ],  // a sidecar .vtt: rise/courses/{id}/FJKSfrNSucfstfWS.vtt
+} }
+```
+So an uploaded video carries THREE+ uploaded `rise/courses/{id}/…` assets — the **mp4
+key**, a **poster/thumbnail** PNG (served via `images.eu` transform URL), and a
+**caption `.vtt`**. All are caught by our generic key-path scan (mp4→media-video,
+poster→media-image, vtt→media-other) and re-uploaded + remapped. **`skipProcess:true`
++ `isSkipCrush:true` confirm Rise itself does NOT transcode/crush on upload** — exactly
+our stance. No special video handling needed. ✅ TODO resolved.
+
+⚠ The upload-time `UPDATE_BLOCK_DEBOUNCE` also carries **transient client-only fields**
+— `url` (presigned S3 PUT), `cancelSource` (axios token), `filename`, and a composite
+`id` (`<lessonId>-items:<blockId>/items:<itemId>`). These are NOT in the persisted
+`GET_COURSE` (what our export reads), so they never reach our import. We never got a
+GET_COURSE of a *settled* uploaded video to 100% confirm the persisted shape; if that
+composite `id` ever persists, our remap rewrites its `items:` segments but not the bare
+leading lessonId — opaque/low-impact, worth one check on a settled read.
 
 **Theme (`UPDATE_COURSE {theme}`):** `themeId:"classic"`, `coverImage:
 "https://cdn.eu.articulate.com/assets/rise/assets/themes/classic/cover-image/2_wfh.jpg"`,
