@@ -202,9 +202,20 @@ preview, and gated live import.
   uploads our generic scan re-uploads + remaps (mp4→media-video, png→media-image,
   vtt→media-other). The client sends `skipProcess:true` + `isSkipCrush:true` →
   `TRANSCODE_ASSET`/`RESOLVE_ASSET` never called (matches our no-transcode stance). The
-  upload-time `UPDATE_BLOCK_DEBOUNCE` has transient client fields (`url`/`cancelSource`/
-  `filename`/composite `id`) not present in `GET_COURSE`. ⏳ One live round-trip check
-  on a settled uploaded-video still nice-to-have, but no code action needed.
+  upload-time `UPDATE_BLOCK_DEBOUNCE` has transient client fields; the SETTLED
+  `GET_COURSE` (view capture `docs/captures/2026-06-23-eu-view-video-course.jsonl`)
+  confirms the persisted shape.
+- ⏳ **FUTURE LIVE TEST — uploaded-video `media.video.id` stale ref.** The persisted
+  video block keeps `media.video.id = "<lessonId>-items:<blockId>/items:<itemId>"` (and
+  AI captions `"ai-caption-<blockId>-<itemId>-<ts>"`). Our `remapIds` rewrites the
+  `items:<id>` segments + media keys but leaves the **leading lessonId / ai-caption
+  embedded ids stale** (a source id surviving in an internal `id` field). Keys migrate
+  fine so playback should be unaffected, and parity ignores `id`. On the first live
+  US→EU import with an uploaded video, CHECK: does the video play on target, and does
+  Rise regenerate `media.video.id` on `CREATE_BLOCKS` (→ no-op) or store our value
+  verbatim (→ decide whether to remap the leading lessonId in `remapRefString`)? Hold
+  any `remapRefString` change until this is answered (a speculative remap could break a
+  format Rise expects). See `docs/rise-mitm-sample-edit-media-theme.md` (Persisted shape).
 
 **Still TODO in Phase 3:**
 - **Folder recreation** — the folder-create endpoint/payload is **not** in the
