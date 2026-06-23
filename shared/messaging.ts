@@ -77,6 +77,10 @@ export type BackgroundResponse =
       advanced: boolean;
       valid: boolean;
       identity: Identity | null;
+      // How the bearer was (re)obtained this call — for honest panel logging and
+      // runtime diagnosis: 'tab-reload' (Rise SPA native refresh on reload),
+      // 'cookie' (already-rotated cookie re-read), or 'none'.
+      via?: 'tab-reload' | 'cookie' | 'none';
     };
 
 /** Raw outcome of a single relayed write (the executor's Relay consumes this). */

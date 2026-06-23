@@ -6,7 +6,7 @@
 //   - Exposes typed fetch RPCs to the side panel (search, get-course).
 //   - Pacing lives in the panel, NOT here.
 
-import { decodeJwt, identityFromToken, type Identity } from '@/core/auth/jwt';
+import { identityFromToken, type Identity } from '@/core/auth/jwt';
 import {
   buildFetchBlockTemplatesRequest,
   buildFetchTypefacesRequest,
@@ -15,7 +15,6 @@ import {
   buildListFoldersRequest,
   buildListQuestionBanksRequest,
   buildSearchRequest,
-  REFRESH_URL,
   type RequestSpec,
 } from '@/core/rise-client';
 import type { WriteSpec } from '@/core/import/envelopes';
@@ -294,125 +293,121 @@ export default defineBackground(() => {
     return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
   }
 
-  // Rotate the bearer the way the editor actually does — MITM-confirmed Okta
-  // silent re-auth (2026-06-23). lifecycle/refresh is only a 204 SSO keep-alive
-  // (it does NOT rotate the bearer); the real renewal is a hidden iframe to the
-  // Okta `/authorize?prompt=none&response_type=id_token+token&response_mode=
-  // okta_post_message` endpoint, which posts `{access_token,…}` back to the rise
-  // origin via postMessage. We replicate it IN the Rise tab (first-party):
-  //   1. keep the SSO session warm (lifecycle/refresh, 204), then
-  //   2. open the silent-auth iframe and capture the posted access_token.
-  // The authorize URL is derived entirely from the CURRENT token's own claims
-  // (iss/cid/scp) — no hardcoded account/plane values.
-  function buildSilentAuthUrl(riseOrigin: string): string | null {
-    if (!token) return null;
-    const c = decodeJwt(token);
-    const iss = typeof c?.iss === 'string' ? c.iss : '';
-    const cid = typeof c?.cid === 'string' ? c.cid : '';
-    const scope = Array.isArray((c as { scp?: unknown })?.scp)
-      ? ((c as { scp: unknown[] }).scp as string[]).join(' ')
-      : 'openid';
-    if (!iss || !cid) return null;
-    const nonce = `${Math.random().toString(36).slice(2)}${Date.now()}`;
-    const p = new URLSearchParams({
-      client_id: cid,
-      nonce,
-      prompt: 'none',
-      redirect_uri: `${riseOrigin}/auth-callback`,
-      response_mode: 'okta_post_message',
-      response_type: 'id_token token',
-      scope,
-      state: nonce,
+  // Token refresh strategy — reload the Rise tab and let the SPA do it.
+  //
+  // We tried replicating Rise's own Okta silent re-auth headlessly (a hidden
+  // `/authorize?prompt=none` iframe + `okta_post_message`, capture-confirmed in
+  // docs §2). It never rotated the bearer at runtime — the injected iframe path
+  // fails silently (third-party SSO cookie / postMessage / CSP) where the SPA's
+  // own first-party flow succeeds. Rather than reverse-engineer that further, we
+  // piggyback on Rise's battle-tested refresh: reload the tab, the SPA boots and
+  // writes a rotated `_articulate_rise_` cookie, and we re-read it.
+  //
+  // TODO(refresh): revisit a silent (no-reload) refresh for a smoother operator
+  // experience — a working in-tab Okta silent re-auth, or driving the SPA's own
+  // token service. A reload is robust but visibly disruptive on a long import.
+
+  // Resolve when a tab finishes loading (or a timeout elapses). Used after a
+  // reload so we don't re-read the cookie before the SPA has booted. status is
+  // readable without the "tabs" permission for a host we hold permission for.
+  function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        try {
+          chrome.tabs.onUpdated.removeListener(listener);
+        } catch {
+          /* ignore */
+        }
+        resolve();
+      };
+      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo): void => {
+        if (id === tabId && info.status === 'complete') finish();
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+      chrome.tabs
+        .get(tabId)
+        .then((t) => {
+          if (t.status === 'complete') finish();
+        })
+        .catch(() => {});
+      setTimeout(finish, timeoutMs);
     });
-    return `${iss}/v1/authorize?${p.toString()}`;
   }
 
-  async function tryRefresh(): Promise<void> {
+  // Fallback refresh: reload the Rise tab so the SPA runs its OWN (native) Okta
+  // silent re-auth on boot and writes a rotated `_articulate_rise_` cookie, then
+  // poll the cookie until its `exp` advances. This piggybacks on Rise's own,
+  // battle-tested refresh instead of replicating the Okta flow ourselves — far
+  // more robust than the injected iframe, at the cost of a visible reload. Safe
+  // mid-import: reauth only runs BETWEEN paced writes (proactive heartbeat) or
+  // AFTER a write already returned 403, so no write is in flight during reload.
+  // IMPORTANT: only a COURSE EDITOR boot rotates the bearer — reloading the
+  // dashboard does NOT (operator-confirmed 2026-06-23). So this reload only helps
+  // when the active Rise tab is a course editor; if it's the dashboard the poll
+  // times out and we report no-advance honestly (the panel then tells the
+  // operator to open a course). We reload the active/last-focused Rise tab (the
+  // one the operator is looking at and that writes already ride).
+  async function reloadRiseTabForToken(): Promise<boolean> {
     const tab = await findRiseTab();
-    const url = tab?.url;
-    if (!tab || typeof tab.id !== 'number' || !url) return;
-    // 1. Keep the Okta SSO session warm so prompt=none succeeds (204 no-op for
-    //    the bearer, but required). First-party, no bearer header.
-    await relayFetch({ url: REFRESH_URL, method: 'POST' }).catch(() => {});
-    // 2. Silent re-auth via the okta_post_message iframe; capture access_token.
-    const riseOrigin = (() => {
-      try {
-        return new URL(url).origin;
-      } catch {
-        return '';
-      }
-    })();
-    const authorizeUrl = riseOrigin ? buildSilentAuthUrl(riseOrigin) : null;
-    if (!authorizeUrl) return;
-    const idOrigin = new URL(authorizeUrl).origin;
+    if (!tab || typeof tab.id !== 'number') return false;
+    const before = identity?.expiresAt ?? 0;
     try {
-      const [inj] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: 'ISOLATED',
-        // Self-contained (serialized): open a hidden iframe to the Okta
-        // prompt=none authorize endpoint and resolve the access_token it posts
-        // back to this (rise-origin) window. Times out so a failed renewal can't
-        // hang the import.
-        func: (authUrl: string, expectOrigin: string): Promise<string | null> =>
-          new Promise((resolve) => {
-            let done = false;
-            let frame: HTMLIFrameElement | undefined;
-            const onMsg = (e: MessageEvent): void => {
-              if (e.origin !== expectOrigin) return;
-              const d = e.data as { access_token?: unknown } | null;
-              if (d && typeof d === 'object' && typeof d.access_token === 'string') {
-                finish(d.access_token);
-              }
-            };
-            const finish = (v: string | null): void => {
-              if (done) return;
-              done = true;
-              try {
-                window.removeEventListener('message', onMsg);
-              } catch {
-                /* ignore */
-              }
-              try {
-                frame?.remove();
-              } catch {
-                /* ignore */
-              }
-              resolve(v);
-            };
-            window.addEventListener('message', onMsg);
-            frame = document.createElement('iframe');
-            frame.style.display = 'none';
-            frame.src = authUrl;
-            (document.body ?? document.documentElement).appendChild(frame);
-            setTimeout(() => finish(null), 12_000);
-          }),
-        args: [authorizeUrl, idOrigin],
-      });
-      const at = inj?.result;
-      if (typeof at === 'string' && at.split('.').length === 3) setToken(at);
+      await chrome.tabs.reload(tab.id);
     } catch {
-      /* tab gone / CSP / timeout — reauth() reports no-advance honestly */
+      return false;
     }
+    await waitForTabComplete(tab.id, 20_000);
+    // The SPA's auth bootstrap is async after load — poll the cookie for advance.
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      await grabTokenFromCookie();
+      if ((identity?.expiresAt ?? 0) > before) return true;
+      await new Promise((r) => setTimeout(r, 750));
+    }
+    return false;
   }
 
-  // Re-establish a fresh bearer mid-import: refresh in-tab, THEN re-read the
-  // rotated `_articulate_rise_` cookie (during an import there's no page traffic
-  // for the webRequest observer to catch, so we must pull it ourselves).
-  // Reports honestly: `advanced` is true ONLY when the token's `exp` actually
-  // moved forward — a "refresh" that doesn't advance `exp` is a no-op, and
-  // retrying a write with it just 403s again. `valid` means we currently hold a
-  // non-expired token (whether or not this call rotated it). Throttled by the
-  // callers so a doomed token can't spam the refresh endpoint.
+  // Re-establish a fresh bearer mid-import.
+  //   1. Re-read the cookie — the editor may have already rotated it (the
+  //      operator opened/refreshed a course, or its own token service fired).
+  //      During an import there's no page traffic for the webRequest observer to
+  //      catch, so we must pull the rotated cookie ourselves.
+  //   2. If that didn't advance AND the token actually needs refreshing
+  //      (expiring/expired), reload the Rise tab so the SPA refreshes natively
+  //      (the only refresh that works in practice — see reloadRiseTabForToken).
+  // Reports honestly:
+  //   - `advanced`: true ONLY when `exp` actually moved forward (a real
+  //     rotation). A "refresh" that doesn't advance `exp` is a no-op, and
+  //     retrying a write with it just 403s again.
+  //   - `valid`: we currently hold a non-expired token (rotated or not).
+  //   - `via`: how the bearer was (re)obtained — for honest logging.
+  // Throttled by the callers so a doomed token can't spam the reload.
   let lastReauthMs = 0;
-  async function reauth(): Promise<{ advanced: boolean; valid: boolean }> {
+  async function reauth(): Promise<{
+    advanced: boolean;
+    valid: boolean;
+    via: 'tab-reload' | 'cookie' | 'none';
+  }> {
     lastReauthMs = Date.now();
     const before = identity?.expiresAt ?? 0;
-    await tryRefresh();
-    await grabTokenFromCookie();
+    const rotatedByCookie = await grabTokenFromCookie();
+    let via: 'tab-reload' | 'cookie' | 'none' =
+      (identity?.expiresAt ?? 0) > before && rotatedByCookie ? 'cookie' : 'none';
+
+    // Cookie re-read didn't rotate. If the token genuinely needs refreshing, let
+    // the Rise SPA do it via a tab reload. When the token is still healthy we
+    // skip the reload — no point disrupting the tab.
+    if ((identity?.expiresAt ?? 0) <= before && tokenExpiringSoon()) {
+      if (await reloadRiseTabForToken()) via = 'tab-reload';
+    }
+
     const after = identity?.expiresAt ?? 0;
     const advanced = after > before;
     const valid = identity?.expiresAt !== undefined && identity.expiresAt > Date.now();
-    return { advanced, valid };
+    return { advanced, valid, via };
   }
 
   // The held bearer is short-lived (~15 min). On a long import it expires
@@ -620,8 +615,8 @@ export default defineBackground(() => {
         // Force a fresh bearer on demand (panel calls this before each course).
         // Report whether the token actually advanced vs is merely still valid so
         // the panel can log honestly instead of claiming a refresh that no-op'd.
-        const { advanced, valid } = await reauth();
-        return { type: 'REAUTH_RESULT', advanced, valid, identity };
+        const { advanced, valid, via } = await reauth();
+        return { type: 'REAUTH_RESULT', advanced, valid, via, identity };
       }
     }
   }

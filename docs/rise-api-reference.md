@@ -38,19 +38,27 @@ A single-author headless script ignores it entirely and just issues the HTTP "du
     Content`, no body, no `Set-Cookie`**. It ONLY keeps the Okta SSO session
     (`sid`/`xids` cookies on `id.articulate.com`) warm. It does **not** rotate the
     bearer. (Same-site from the rise origin; `prefer: return=minimal`.)
-  - The bearer is actually rotated by **Okta silent re-auth**: a hidden iframe to
-    `GET {iss}/v1/authorize?client_id={cid}&prompt=none&response_type=id_token+token
-    &response_mode=okta_post_message&redirect_uri={riseOrigin}/auth-callback
-    &scope={scp}&nonce=…&state=…`. Okta (relying on the warm SSO session) returns an
-    HTML page that does `window.parent.postMessage(data, "{riseOrigin}")` where
-    `data = {id_token, access_token, token_type:"Bearer", expires_in:"900", scope,
-    state}`. `data.access_token` is the new bearer. **No `oauth2/token` call and no
+  - The bearer is actually rotated by **Okta silent re-auth**, which the Rise SPA
+    runs internally: a hidden iframe to `GET {iss}/v1/authorize?client_id={cid}
+    &prompt=none&response_type=id_token+token&response_mode=okta_post_message
+    &redirect_uri={riseOrigin}/auth-callback&scope={scp}&nonce=…&state=…`. Okta
+    (relying on the warm SSO session) returns an HTML page that does
+    `window.parent.postMessage(data, "{riseOrigin}")` where `data = {id_token,
+    access_token, token_type:"Bearer", expires_in:"900", scope, state}`.
+    `data.access_token` is the new bearer. **No `oauth2/token` call and no
     `Set-Cookie`** for the bearer — the SPA writes the (non-httpOnly)
-    `_articulate_rise_` cookie in JS. Build the authorize URL from the *current
-    token's own claims* (`iss`/`cid`/`scp`) — no hardcoded account/plane values.
-  - To renew headlessly: run IN the rise tab (first-party) — POST lifecycle/refresh
-    (keep-warm), then open the prompt=none iframe and capture the posted
-    `access_token`. A renewal counts only when the JWT `exp` advances.
+    `_articulate_rise_` cookie in JS.
+  - **Operator-confirmed (2026-06-23): only a COURSE EDITOR boot rotates the
+    bearer.** Reloading/idling the *dashboard* does NOT (it pings lifecycle/refresh
+    but never silent-re-auths). The rotation fires when a course editor loads.
+  - **We replicated the headless silent-auth iframe and it FAILED at runtime** —
+    the injected `prompt=none` iframe never advanced `exp` (third-party SSO cookie /
+    postMessage / CSP differences from the SPA's own first-party flow). That code
+    was removed. **How we refresh now:** reload the active Rise tab (must be a
+    course editor) so the SPA performs its own native silent re-auth and writes the
+    rotated cookie; then re-read `_articulate_rise_`. A renewal counts only when the
+    JWT `exp` advances. (Revisit a no-reload silent path later — see
+    `entrypoints/background.ts` `TODO(refresh)`.)
 - Tokens are short-lived → on `401`/`403` refresh (as above) and retry.
 - SSO/2FA makes fully-programmatic login painful; easiest is a one-time browser capture
   (or Playwright with a real login) to grab a fresh token, then run the API client.

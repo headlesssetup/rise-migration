@@ -70,14 +70,15 @@ async function refreshToken(
         ? new Date(resp.identity.expiresAt).toLocaleTimeString()
         : 'unknown';
       if (resp.advanced) {
-        onEvent({ kind: 'log', message: `Token refreshed${tag} — valid until ${exp}` });
+        const how = resp.via === 'tab-reload' ? ' (via Rise tab reload)' : '';
+        onEvent({ kind: 'log', message: `Token refreshed${tag}${how} — valid until ${exp}` });
       } else if (resp.valid) {
         // The cookie didn't rotate but the token we hold is still good — no need.
         onEvent({ kind: 'log', message: `Token still valid${tag} — valid until ${exp}` });
       } else {
         onEvent({
           kind: 'log',
-          message: `WARN token refresh failed${tag} — open a Rise course tab to refresh the session, then retry`,
+          message: `WARN token refresh failed${tag} — keep a Rise COURSE (editor) tab open, not just the dashboard; that's what refreshes the session. Then retry.`,
         });
       }
     } else {
