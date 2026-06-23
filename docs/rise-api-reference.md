@@ -158,10 +158,13 @@ is the same `GET_YURL → S3 PUT → CRUSH_IMAGE {courseId, original} → {key:<
    - **cover-page logo** → `media` = `{image:{key, crushedKey, isSkipCrush, sourcedFrom,
      useCrushedKey, originalUrl}}` — note: the `image` sits DIRECTLY under `media` (no inner
      `media` wrapper), unlike coverImage/cardImage.
-   Migration re-uploads the exported `key` + `crushedKey` verbatim and remaps both (no
-   re-crush). Other course image fields (`lessonHeaderImage` with nested `originalImage`,
-   `overlayNavigationImage`, `blockBackgroundImage`, and user-uploaded `theme.*` keys) are
-   NOT yet MITM-captured → still flagged `unsupported-media` (no guessing — see CLAUDE.md).
+   - **lesson header** → `lessonHeaderImage` = `{media:{image:{key, crushedKey, …}}}` (same
+     shape as cover/card; may also nest an uncropped `originalImage` with its OWN
+     key/crushedKey — upload + remap ALL of them so none survives).
+   Migration re-uploads the exported `key` + `crushedKey` (+ nested `originalImage` keys)
+   verbatim and remaps every one (no re-crush). NOT yet captured / still flagged:
+   `overlayNavigationImage` (appears UI-less — inherited from the cover), `blockBackgroundImage`,
+   and user-uploaded `theme.*` keys (no guessing — see CLAUDE.md).
 
 `refs` ties an asset to a block item via the path `items:<itemId>/items:<subItemId>`.
 
@@ -327,7 +330,8 @@ JSON body** (the field shape) AND, where rotation/state matters, the **response*
 `Set-Cookie`. For media: the `GET_YURL → S3 PUT → CRUSH/TRANSCODE` chain plus the `UPDATE_*`
 that sets the key. Record the confirmed envelope here before coding.
 
-**Captured-but-not-yet-wired (need their own capture):** course `lessonHeaderImage` (with
-nested `originalImage`), `overlayNavigationImage`, `blockBackgroundImage`, user-uploaded
-`theme.*` image keys; US-plane silent-auth (only EU confirmed — though the URL is derived from
-token claims so it should port).
+**Captured-but-not-yet-wired (need their own capture):** `overlayNavigationImage` (appears to
+have no upload UI — inherited from the cover), `blockBackgroundImage`, user-uploaded `theme.*`
+image keys; US-plane silent-auth (only EU confirmed — though the URL is derived from token
+claims so it should port). (Wired & confirmed: course `coverImage`/`cardImage`, `media` logo,
+`lessonHeaderImage` incl. nested `originalImage`.)

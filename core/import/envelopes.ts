@@ -127,12 +127,14 @@ export function setCourseImages(args: {
   coverImage?: unknown;
   cardImage?: unknown;
   media?: unknown;
+  lessonHeaderImage?: unknown;
 }): WriteSpec {
   return ducks('courses', 'UPDATE_COURSE', {
     id: args.courseId,
     ...(args.coverImage !== undefined ? { coverImage: args.coverImage } : {}),
     ...(args.cardImage !== undefined ? { cardImage: args.cardImage } : {}),
     ...(args.media !== undefined ? { media: args.media } : {}),
+    ...(args.lessonHeaderImage !== undefined ? { lessonHeaderImage: args.lessonHeaderImage } : {}),
   });
 }
 

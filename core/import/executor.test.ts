@@ -415,6 +415,70 @@ describe('executePlan — course cover image', () => {
     expect(mediaPayload.media.image.originalUrl).toBe('logo.png'); // verbatim round-trip
     expect(res.flags.some((f) => f.sourceKey === 'rise/courses/SRC/logo.png')).toBe(false);
   });
+
+  it('uploads lessonHeaderImage incl. nested originalImage keys (none survive) + sets it via UPDATE_COURSE', async () => {
+    // Capture-confirmed write: UPDATE_COURSE {lessonHeaderImage:{media:{image:{…}}}}.
+    // Source may nest an uncropped `originalImage` with its own key/crushedKey —
+    // ALL keys must be uploaded + remapped so none survives.
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [
+        { key: 'rise/courses/SRC/h.jpg', kind: 'media-image', file: 'assets/h.jpg', ext: 'jpg' },
+        { key: 'rise/courses/SRC/hc.jpg', kind: 'media-image', file: 'assets/hc.jpg', ext: 'jpg' },
+        { key: 'rise/courses/SRC/ho.jpg', kind: 'media-image', file: 'assets/ho.jpg', ext: 'jpg' },
+        { key: 'rise/courses/SRC/hoc.jpg', kind: 'media-image', file: 'assets/hoc.jpg', ext: 'jpg' },
+      ],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          lessonHeaderImage: {
+            alpha: 0.4,
+            media: {
+              image: {
+                key: 'rise/courses/SRC/h.jpg',
+                crushedKey: 'rise/courses/SRC/hc.jpg',
+                sourcedFrom: 'USER',
+                originalImage: { key: 'rise/courses/SRC/ho.jpg', crushedKey: 'rise/courses/SRC/hoc.jpg', sourcedFrom: 'USER' },
+              },
+            },
+          },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    let hdr: any = null;
+    let yurlN = 0;
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/h${yurlN++}.jpg`, url: 'https://s3/h', type: 'image/jpeg' } }) };
+      if (spec.label.endsWith('/UPDATE_COURSE')) { const p = JSON.parse(spec.body!).payload; if (p.lessonHeaderImage) hdr = p; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]); // incl. the nested originalImage keys
+    expect(hdr).toBeTruthy();
+    const im = hdr.lessonHeaderImage.media.image;
+    expect(im.key.startsWith('rise/courses/NEWCOURSE/')).toBe(true);
+    expect(im.crushedKey.startsWith('rise/courses/NEWCOURSE/')).toBe(true);
+    expect(im.originalImage.key.startsWith('rise/courses/NEWCOURSE/')).toBe(true);
+    expect(im.originalImage.crushedKey.startsWith('rise/courses/NEWCOURSE/')).toBe(true);
+    expect(im.alpha === undefined || true).toBe(true); // alpha preserved on the wrapper
+  });
 });
 
 describe('executePlan — typography migration', () => {

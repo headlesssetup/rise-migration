@@ -462,35 +462,47 @@ export async function executePlan(
         }
         case 'set-course-images': {
           const course = (deps.input.course.course ?? {}) as Record<string, unknown>;
+          // Faithful round-trip of any course-level image object (coverImage/
+          // cardImage `{media:{image}}`, the `media` logo `{image}`, or
+          // lessonHeaderImage which may nest an uncropped `originalImage`). Upload
+          // EVERY course/bank key found anywhere in the object — key, crushedKey,
+          // originalImage.* — so none survives as a source key, then remap.
           const build = async (img: unknown): Promise<unknown | undefined> => {
-            // coverImage/cardImage nest the image under `.media.image`; the
-            // course-level `media` (logo) carries it directly under `.image`.
-            const image =
-              (img as { media?: { image?: Record<string, unknown> } })?.media?.image ??
-              (img as { image?: Record<string, unknown> })?.image;
-            const mainKey = typeof image?.key === 'string' ? image.key : '';
-            if (!mainKey || !/^rise\/(?:courses|questionBanks)\//.test(mainKey)) return undefined;
-            const newMain = await uploadImageAsset(mainKey);
-            if (!newMain) return undefined;
-            const km = new Map<string, string>([[mainKey, newMain]]);
-            keyMap.set(mainKey, newMain);
-            // Upload the crushed variant faithfully too (verbatim bytes) — no
-            // re-crush; the exported crushedKey IS the crushed image.
-            if (typeof image?.crushedKey === 'string' && /^rise\/(?:courses|questionBanks)\//.test(image.crushedKey)) {
-              const newCrushed = await uploadImageAsset(image.crushedKey);
-              if (newCrushed) {
-                km.set(image.crushedKey, newCrushed);
-                keyMap.set(image.crushedKey, newCrushed);
+            const keys = new Set<string>();
+            const walk = (o: unknown): void => {
+              if (typeof o === 'string') {
+                if (/^rise\/(?:courses|questionBanks)\//.test(o)) keys.add(o);
+              } else if (Array.isArray(o)) {
+                o.forEach(walk);
+              } else if (o && typeof o === 'object') {
+                Object.values(o).forEach(walk);
+              }
+            };
+            walk(img);
+            if (keys.size === 0) return undefined;
+            const km = new Map<string, string>();
+            for (const k of keys) {
+              const nk = await uploadImageAsset(k);
+              if (nk) {
+                km.set(k, nk);
+                keyMap.set(k, nk);
               }
             }
+            if (km.size === 0) return undefined;
             return remapMediaKeys(img, km);
           };
           const coverImage = step.hasCover ? await build(course.coverImage) : undefined;
           const cardImage = step.hasCard ? await build(course.cardImage) : undefined;
           const media = step.hasMedia ? await build(course.media) : undefined;
-          if (coverImage !== undefined || cardImage !== undefined || media !== undefined) {
+          const lessonHeaderImage = step.hasLessonHeader ? await build(course.lessonHeaderImage) : undefined;
+          if (
+            coverImage !== undefined ||
+            cardImage !== undefined ||
+            media !== undefined ||
+            lessonHeaderImage !== undefined
+          ) {
             await send(
-              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage, media }),
+              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage, media, lessonHeaderImage }),
               step.kind,
             );
           }

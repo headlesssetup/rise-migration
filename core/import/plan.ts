@@ -97,6 +97,8 @@ export type PlanStep =
       hasCard: boolean;
       /** Course-level `media` object — the cover-page logo. */
       hasMedia: boolean;
+      /** Course-level `lessonHeaderImage` object (may nest `originalImage`). */
+      hasLessonHeader: boolean;
       summary: string;
     }
   | {
@@ -582,8 +584,12 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   const coverKey = coverCardImageKey(course.coverImage);
   const cardKey = coverCardImageKey(course.cardImage);
   const mediaKey = courseMediaImageKey(course.media);
-  if (coverKey || cardKey || mediaKey) {
-    for (const img of [course.coverImage, course.cardImage, course.media]) {
+  // lessonHeaderImage uses the same `{media:{image:{key}}}` shape as cover/card
+  // (it may also nest an uncropped `originalImage` with its own key/crushedKey —
+  // all handled keys are marked below so none survives as a source key).
+  const headerKey = coverCardImageKey(course.lessonHeaderImage);
+  if (coverKey || cardKey || mediaKey || headerKey) {
+    for (const img of [course.coverImage, course.cardImage, course.media, course.lessonHeaderImage]) {
       for (const ak of collectAssetKeys(img, sourceCourseId)) handledKeys.add(ak.key);
     }
     steps.push({
@@ -591,7 +597,8 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       hasCover: !!coverKey,
       hasCard: !!cardKey,
       hasMedia: !!mediaKey,
-      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo'].filter(Boolean).join(' + ')} image`,
+      hasLessonHeader: !!headerKey,
+      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo', headerKey && 'lesson-header'].filter(Boolean).join(' + ')} image`,
     });
   }
 
