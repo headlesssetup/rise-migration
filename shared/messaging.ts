@@ -70,7 +70,18 @@ export type BackgroundResponse =
       result: FetchResult<{ raw: string; doc: unknown }>;
     }
   | { type: 'WRITE_RESULT'; result: WriteRelayResult }
-  | { type: 'REAUTH_RESULT'; ok: boolean; identity: Identity | null };
+  | {
+      type: 'REAUTH_RESULT';
+      // `advanced`: the token's `exp` actually moved forward (a real rotation).
+      // `valid`: we currently hold a non-expired token (rotated or not).
+      advanced: boolean;
+      valid: boolean;
+      identity: Identity | null;
+      // How the bearer was (re)obtained this call — for honest panel logging and
+      // runtime diagnosis: 'tab-reload' (Rise SPA native refresh on reload),
+      // 'cookie' (already-rotated cookie re-read), or 'none'.
+      via?: 'tab-reload' | 'cookie' | 'none';
+    };
 
 /** Raw outcome of a single relayed write (the executor's Relay consumes this). */
 export interface WriteRelayResult {

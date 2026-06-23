@@ -37,14 +37,33 @@ function ducks(domain: string, action: string, payload: unknown): WriteSpec {
 
 // --- Course shell + theme (protocol §7) -------------------------------------
 
-/** POST /manage/api/content — create the course shell → {id}. */
-export function createCourseShell(folderId: string | null = 'all'): WriteSpec {
+/** POST /manage/api/content — create the course shell → {id}. Capture-confirmed:
+ *  this single call creates a fully-materialized course (GET_COURSE returns it 200
+ *  immediately, with the classic theme + a random built-in cover). `type` is sent
+ *  for non-standard courses — `"onePage"` for a microlearning (capture); a standard
+ *  course omits it (source `course.type` is null). */
+export function createCourseShell(
+  folderId: string | null = 'all',
+  type?: string | null,
+): WriteSpec {
   return {
     url: '/manage/api/content',
     method: 'POST',
-    body: JSON.stringify({ createBookmark: false, folderId }),
+    body: JSON.stringify({
+      createBookmark: false,
+      folderId,
+      ...(typeof type === 'string' && type ? { type } : {}),
+    }),
     label: 'POST /manage/api/content (create course)',
   };
+}
+
+/** GET_COURSE — read the full course document. Used as the post-create HANDSHAKE
+ *  (mirror the editor, which always GET_COURSEs a new course before any write) to
+ *  confirm the shell materialized, and for read-back parity. A read, but it rides
+ *  the write relay. */
+export function getCourse(courseId: string): WriteSpec {
+  return ducks('courses', 'GET_COURSE', { courseId });
 }
 
 /** UPDATE_COURSE {id, theme} — theme round-trips verbatim. */
@@ -97,17 +116,25 @@ export function updateCourseThemeAndTypefaces(args: {
   });
 }
 
-/** UPDATE_COURSE setting a user-uploaded cover/card image (after upload+crush).
- *  `coverImage`/`cardImage` are `{media:{image:{key,crushedKey,…}}}` or `{}`. */
+/** UPDATE_COURSE setting user-uploaded course images (after upload+crush).
+ *  Capture-confirmed shapes (docs/rise-api-reference.md):
+ *   - `coverImage`/`cardImage`: `{media:{image:{key,crushedKey,…}}}` or `{}`
+ *   - `media`: the cover-page LOGO — `{image:{key,crushedKey,isSkipCrush,
+ *     sourcedFrom,useCrushedKey,originalUrl}}` (note: NO `media` wrapper).
+ *  The editor sends only the changed field(s); we mirror that. */
 export function setCourseImages(args: {
   courseId: string;
   coverImage?: unknown;
   cardImage?: unknown;
+  media?: unknown;
+  lessonHeaderImage?: unknown;
 }): WriteSpec {
   return ducks('courses', 'UPDATE_COURSE', {
     id: args.courseId,
     ...(args.coverImage !== undefined ? { coverImage: args.coverImage } : {}),
     ...(args.cardImage !== undefined ? { cardImage: args.cardImage } : {}),
+    ...(args.media !== undefined ? { media: args.media } : {}),
+    ...(args.lessonHeaderImage !== undefined ? { lessonHeaderImage: args.lessonHeaderImage } : {}),
   });
 }
 
@@ -328,10 +355,28 @@ export function createFolder(args: {
   };
 }
 
-// NOTE: deletion endpoints (course soft-delete/hard-delete, folder delete,
-// DELETE_TYPEFACE) are intentionally NOT implemented here — purge/cleanup is out
-// of scope for this app and will be a separate tool. The endpoints are documented
-// in docs/rise-import-protocol.md §10f for when that's built.
+/** POST /manage/api/content/soft-delete — move course(s) to the bin (protocol
+ *  §10b). Used by the import's TRANSACTIONAL ROLLBACK: a course shell whose
+ *  import fails (or never materializes) would otherwise strand a "never-born"
+ *  phantom in the root folder, which 500s the dashboard's `content/search`. This
+ *  endpoint is `manage/api` (cookie-authed), so it lands even when the failure was
+ *  a stale-bearer 403 on the authoring API; on a never-materialized shell it may
+ *  answer 500 yet still take effect (verified live), so callers treat it as
+ *  best-effort + status-agnostic. */
+export function softDeleteContent(ids: string[]): WriteSpec {
+  return {
+    url: '/manage/api/content/soft-delete',
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+    label: 'POST /manage/api/content/soft-delete (rollback)',
+  };
+}
+
+// NOTE: the remaining deletion endpoints (content hard-delete, folder delete,
+// DELETE_TYPEFACE) are intentionally NOT implemented here — full purge/cleanup is
+// out of scope for this app and will be a separate tool. (Soft-delete above is the
+// one exception: it's the import's own rollback, not a purge.) The endpoints are
+// documented in docs/rise-import-protocol.md §10f for when that's built.
 
 /** PATCH /manage/api/content/{courseId}/move — move a course into a folder. The
  *  body is the folder id as a BARE text/plain string (confirmed in capture). */

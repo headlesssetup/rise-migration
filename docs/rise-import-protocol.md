@@ -132,13 +132,23 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 ```
 
 > **Ordering rules that matter (from the capture):**
-> 0. ⚠ **Title before theme — the shell is a DRAFT until its first content write.**
->    `POST /content` returns a course id, but the course doesn't fully MATERIALIZE
->    until a content write lands. Confirmed: a run that died at the theme/font step
->    (a font-upload 403) *before* any `UPDATE_COURSE` left a **"never-born"** course
->    — `GET_COURSE` 404s on it, yet it still **500s `content/search`** and can't be
->    soft-deleted (500). So write the **title first** (a cheap `UPDATE_COURSE_FIELD`)
->    so a later failure leaves a real, deletable course, never a phantom.
+> 0. ⚠ **Create is ATOMIC — then `GET_COURSE` to confirm (mirror the editor).**
+>    ✅ **Capture-confirmed** (`docs/rise-mitm-sample-new-course.md`, EU New-Course
+>    recording): a **single** `POST /manage/api/content {createBookmark:false,
+>    folderId:"all"[,type]}` creates a **fully-materialized** course — the editor opens
+>    and `GET_COURSE` returns it **200 immediately** (classic theme, a random built-in
+>    `cdn…/themes/classic/cover-image/*.jpg` cover, `title:""`, `lessons:[]`). **A bare
+>    titleless/lessonless shell is a VALID, dashboard-safe course** — there is **no**
+>    separate "materializing write". So: right after the POST, **`GET_COURSE` the new
+>    id before any write** (the editor always does); if it doesn't return a `course`,
+>    abort + `soft-delete` (the shell is broken). Title/description (`UPDATE_COURSE_FIELD_THROTTLE`)
+>    are just the editor's debounced typing; theme comes after a lesson (rule 0b).
+>    The earlier "never-born phantom" theory was **wrong about the mechanism**: a
+>    `GET_COURSE`-404 / `content/search`-500 row is a **partial delete** artifact
+>    (a soft/hard-delete that 500'd mid-op), NOT an incomplete create. We keep the
+>    post-create handshake + a `soft-delete` rollback of an *unconfirmed* shell as a
+>    cheap backstop; we do **not** build phantom-repair. See `core/import/executor.ts`
+>    (create-course handshake, `rollbackShell`).
 > 0b. ⚠ **Theme AFTER a lesson exists.** Rise rejects theming a lesson-less course
 >    ("add a lesson to your course before theming"). The original capture themed an
 >    *existing* (already-populated) course, so it shows theme-before-lessons — but
@@ -163,6 +173,12 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 >    (`GET_YURL`→S3 PUT) and remap keys — Rise already crushed/transcoded at author
 >    time, so re-processing only recompresses + drifts. `CRUSH_IMAGE`/`TRANSCODE_ASSET`/
 >    `CHECK_STATUS`/`RESOLVE_ASSET`/`UPDATE_COURSE{jobs}` are documented but unused.
+>    ✅ **Capture-confirmed** (`rise-mitm-sample-edit-media-theme.md`): the editor DOES
+>    call `CRUSH_IMAGE`/`CROP_IMAGE` for images — we skip them and re-upload the
+>    source `key`+`crushedKey` verbatim (same end state). A **video uses NO
+>    `TRANSCODE_ASSET`** (0× in the capture) — `GET_YURL`→S3 PUT→`CHECK_STATUS`, and its
+>    **poster/thumbnail is an `images[.eu]` transform URL over the uploaded key**, so
+>    re-uploading + remapping the key(s) (incl. inside transform URLs) is sufficient.
 
 ---
 
@@ -199,6 +215,15 @@ one. (For a future cleanup tool — not part of import.)
 Carry the source lesson's `type`, `icon`, `headerImage`, `description`, `settings`,
 `media` verbatim (copy-faithful) — only ids/positions are remapped. `bulkUpdateBlocks`
 is sent empty here (blocks are created separately via `CREATE_BLOCKS`).
+
+⚠ **Lesson header / lesson media (uploaded keys).** A `headerImage`/`media` that
+carries an **uploaded** key (`rise/courses/<srcId>/…`) is now re-uploaded like block
+media: the importer runs `GET_YURL → S3 PUT` for the header bytes **before**
+`UPDATE_LESSON` (an `upload-lesson-media` step), then sends the lesson with the key
+**remapped** to the new target key (any un-uploaded/oversize/orphan lesson media is
+blanked so no dead source key survives). Built-in `cdn.…`/`assets/rise/…` header
+images stay as references. The `GET_YURL→S3 PUT` upload is capture-confirmed; the
+`UPDATE_LESSON {headerImage:<new key>}` write shape still wants a live confirmation.
 
 **Lesson edit lock** (collab guard; captured, low-risk to include):
 - `POST …/ducks/rise/locks/PUT_LOCK` `{id:<lessonId>, courseId}` → `{author, session,

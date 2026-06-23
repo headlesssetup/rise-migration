@@ -9,7 +9,10 @@ export const MAX_PAGES = 200;
 export type ProgressEvent =
   | { kind: 'log'; message: string }
   | { kind: 'page'; page: number; total: number }
-  | { kind: 'course'; index: number; total: number; courseId: string };
+  | { kind: 'course'; index: number; total: number; courseId: string; title?: string }
+  // Live import status for the log-header countdown. `etaSeconds` is null until
+  // there's enough signal to estimate; `done` marks the run finished.
+  | { kind: 'import-status'; label: string; etaSeconds: number | null; done: boolean };
 
 /** Unwrap a saved raw body — accept either the ducks envelope (`{payload}`) or
  *  the bare payload — into the course document we scan. */

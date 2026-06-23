@@ -283,8 +283,17 @@ export function verifyParity(
   };
 }
 
-export function parityReportToMarkdown(r: ParityReport): string {
+export function parityReportToMarkdown(
+  r: ParityReport,
+  meta?: { title?: string; sourceCourseId?: string; newCourseId?: string },
+): string {
   const lines: string[] = [];
+  if (meta?.title || meta?.sourceCourseId) {
+    lines.push(`# Parity — ${meta.title ?? meta.sourceCourseId}`);
+    if (meta.sourceCourseId) lines.push(`- Source course: \`${meta.sourceCourseId}\``);
+    if (meta.newCourseId) lines.push(`- Target course: \`${meta.newCourseId}\``);
+    lines.push('');
+  }
   lines.push(`## Read-back parity${r.ok ? ' — OK' : ' — DIVERGENCES'}`);
   lines.push(
     `- Lessons: ${r.lessons.source} source / ${r.lessons.target} target · ` +

@@ -39,6 +39,31 @@ h3 {
   padding: 10px;
 }
 
+/* Collapsible <details> step cards: hide the native disclosure marker and draw
+   an explicit triangle so the card always reads as collapsible — pointing down
+   (▼) when collapsed, up (▲) when open. */
+details.step > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 20px;
+}
+details.step > summary::-webkit-details-marker {
+  display: none;
+}
+details.step > summary::after {
+  content: '▼';
+  position: absolute;
+  right: 2px;
+  top: 0.15em;
+  font-size: 0.7em;
+  opacity: 0.6;
+}
+details.step[open] > summary::after {
+  content: '▲';
+}
+
 button {
   font: inherit;
   padding: 6px 10px;
@@ -96,6 +121,14 @@ button:disabled {
 
 .log-line {
   padding: 0 2px;
+}
+/* Bold header marking the start of an operation / a course import. */
+.log-head {
+  font-weight: 700;
+}
+/* Blank separator line between operations — a small vertical gap. */
+.log-gap {
+  height: 6px;
 }
 .log-error {
   color: #ff6b6b;

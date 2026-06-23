@@ -11,6 +11,8 @@ export interface FidelityReport {
   dryRun: boolean;
   ok: boolean;
   sourceCourseId?: string;
+  /** Human-readable course title — so a report file names the course, not just ids. */
+  title?: string;
   newCourseId?: string;
   /** Planned vs executed counts. */
   planned: ReturnType<typeof planStats>;
@@ -20,6 +22,10 @@ export interface FidelityReport {
   survivingSourceKeys: string[];
   /** Size of the old→new id map (resumable job log). */
   idMappings: number;
+  /** The run was halted by the Stop button mid-course (partial — resumable). */
+  stopped?: boolean;
+  /** A created-but-unconfirmed course shell left on the target (no auto-delete). */
+  orphanedCourseId?: string;
   error?: string;
 }
 
@@ -27,6 +33,7 @@ export function buildFidelityReport(
   steps: PlanStep[],
   result: ExecResult,
   sourceCourseId?: string,
+  title?: string,
   generatedAt: string = new Date().toISOString(),
 ): FidelityReport {
   return {
@@ -34,13 +41,28 @@ export function buildFidelityReport(
     dryRun: result.dryRun,
     ok: result.ok,
     sourceCourseId,
+    title,
     newCourseId: result.newCourseId,
     planned: planStats(steps),
     flags: result.flags,
     survivingSourceKeys: result.survivingKeys,
     idMappings: Object.keys(result.idMap).length,
+    stopped: result.stopped,
+    orphanedCourseId: result.orphanedCourseId,
     error: result.error,
   };
+}
+
+/** The report's human-facing status, distinguishing partial/stopped (both
+ *  resumable, course kept) from a hard failure (orphan shell left in place). */
+export function fidelityStatus(
+  r: FidelityReport,
+): 'DRY RUN' | 'OK' | 'PARTIAL' | 'STOPPED' | 'FAILED' {
+  if (r.dryRun) return 'DRY RUN';
+  if (r.ok) return 'OK';
+  if (r.stopped) return 'STOPPED';
+  if (r.newCourseId && !r.orphanedCourseId) return 'PARTIAL';
+  return 'FAILED';
 }
 
 export function fidelityReportToJson(r: FidelityReport): string {
@@ -50,11 +72,17 @@ export function fidelityReportToJson(r: FidelityReport): string {
 /** A short human-readable summary for the panel + the migration log. */
 export function fidelityReportToMarkdown(r: FidelityReport): string {
   const lines: string[] = [];
-  lines.push(`# Import fidelity report${r.dryRun ? ' (DRY RUN)' : ''}`);
+  lines.push(`# Import fidelity report${r.title ? ` — ${r.title}` : ''}${r.dryRun ? ' (DRY RUN)' : ''}`);
   lines.push('');
-  lines.push(`- Status: **${r.ok ? 'OK' : 'FAILED'}**${r.error ? ` — ${r.error}` : ''}`);
+  if (r.title) lines.push(`- Course: **${r.title}**`);
+  const status = fidelityStatus(r);
+  const resumable = status === 'PARTIAL' || status === 'STOPPED';
+  lines.push(`- Status: **${status}**${resumable ? ' — resumable, re-run to continue' : ''}${r.error ? ` — ${r.error}` : ''}`);
   if (r.sourceCourseId) lines.push(`- Source course: \`${r.sourceCourseId}\``);
   if (r.newCourseId) lines.push(`- Target course: \`${r.newCourseId}\``);
+  if (r.orphanedCourseId) {
+    lines.push(`- Orphaned shell left in place (delete manually if needed): \`${r.orphanedCourseId}\``);
+  }
   lines.push(`- Lessons: ${r.planned.lessons} · Blocks: ${r.planned.blocks} · ` +
     `Banks: ${r.planned.banks} · Uploads: ${r.planned.uploads} · ` +
     `Draw-from-bank: ${r.planned.drawFromBank}`);

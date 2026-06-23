@@ -168,6 +168,55 @@ manifest now records `sourceAccount` for the guard; `ImportView` provides the
 write-mode banner, target gate, Source≠Target guard (+ override), dry-run
 preview, and gated live import.
 
+**Recently added (completeness branch):**
+- **Lesson header / lesson media upload** — header images are now uploaded
+  (GET_YURL → S3 PUT) and remapped into `UPDATE_LESSON {headerImage}` instead of
+  being blanked + flagged. Same dedup / no-surviving-key guarantees as block media.
+  ⚠ Capture-verify the `UPDATE_LESSON {headerImage}` write shape on a live run.
+- **Dry-run oversize prediction** — the 64MB relay-cap overflow is now PREDICTED in
+  the plan from the asset manifest `size`, so a dry-run flags oversized media (it no
+  longer surfaced only at live time). The executor keeps a runtime backstop.
+- **Per-flag log lines** — storyline / draw-from-bank / orphan / unsupported-media
+  flags now each log a `[i/N] ⚠ FLAG …` line, so the step counter is contiguous
+  (no more silent gaps).
+
+**Large assets — 64MB cap lifted (large-assets branch):**
+- The S3 upload PUT now goes **direct from the side panel** (raw bytes), instead of
+  base64 riding two `chrome.runtime` message hops (panel→background→tab) that capped
+  at ~64MB. The S3 buckets are in `host_permissions` (`*.amazonaws.com`), which
+  exempts the panel fetch from CORS. The ceiling is now memory (`MAX_UPLOAD_BASE64`,
+  ~262MB raw) rather than messaging — so the 184MB GIFs that previously flagged now
+  migrate. ⚠ **Needs live verification:** confirm the panel→S3 PUT succeeds with
+  host_permissions (no CORS block) on both US and EU planes, and that very large
+  files don't OOM the panel.
+
+**Capture-confirmed (sample 2 — `docs/rise-mitm-sample-edit-media-theme.md`):**
+- **Create handshake timing.** `POST /content` → `GET_COURSE` returns 200 immediately
+  (the ~13s gap in the capture is OAuth re-auth + page load, not a wait). The importer
+  now paces + retries the post-create GET_COURSE handshake (`courseHandshakeTries`, 3).
+- **Images:** the editor calls `CRUSH_IMAGE`/`CROP_IMAGE`; we intentionally skip them
+  and re-upload the source `key`+`crushedKey` verbatim (same end state).
+- **Video thumbnails — BODY-CONFIRMED, no transcode.** An uploaded video block
+  (`be2ee1ae`) carries `key` (mp4), `poster`+`thumbnail` (`images.eu` transform URLs
+  over a separate uploaded `.png` key), and a `.vtt` caption — all `rise/courses/{id}/…`
+  uploads our generic scan re-uploads + remaps (mp4→media-video, png→media-image,
+  vtt→media-other). The client sends `skipProcess:true` + `isSkipCrush:true` →
+  `TRANSCODE_ASSET`/`RESOLVE_ASSET` never called (matches our no-transcode stance). The
+  upload-time `UPDATE_BLOCK_DEBOUNCE` has transient client fields; the SETTLED
+  `GET_COURSE` (view capture `docs/captures/2026-06-23-eu-view-video-course.jsonl`)
+  confirms the persisted shape.
+- ⏳ **FUTURE LIVE TEST — uploaded-video `media.video.id` stale ref.** The persisted
+  video block keeps `media.video.id = "<lessonId>-items:<blockId>/items:<itemId>"` (and
+  AI captions `"ai-caption-<blockId>-<itemId>-<ts>"`). Our `remapIds` rewrites the
+  `items:<id>` segments + media keys but leaves the **leading lessonId / ai-caption
+  embedded ids stale** (a source id surviving in an internal `id` field). Keys migrate
+  fine so playback should be unaffected, and parity ignores `id`. On the first live
+  US→EU import with an uploaded video, CHECK: does the video play on target, and does
+  Rise regenerate `media.video.id` on `CREATE_BLOCKS` (→ no-op) or store our value
+  verbatim (→ decide whether to remap the leading lessonId in `remapRefString`)? Hold
+  any `remapRefString` change until this is answered (a speculative remap could break a
+  format Rise expects). See `docs/rise-mitm-sample-edit-media-theme.md` (Persisted shape).
+
 **Still TODO in Phase 3:**
 - **Folder recreation** — the folder-create endpoint/payload is **not** in the
   capture; the importer currently places content at the account root and flags

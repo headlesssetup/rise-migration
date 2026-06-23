@@ -53,6 +53,6 @@ yarn-error.log*
 .prettiercache
 
 # Optional package manager locks (uncomment one if you standardize on a single manager)
-# package-lock.json
+package-lock.json
 # pnpm-lock.yaml
 # yarn.lock

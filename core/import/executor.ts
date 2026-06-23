@@ -10,10 +10,16 @@
 
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 import { IdMap, newId } from './ids';
-import { remapIds, blankUploadedMediaKeys, remapMediaKeys, findForeignMediaKeys } from './remap';
+import {
+  remapIds,
+  blankUploadedMediaKeys,
+  blankForeignMediaKeys,
+  remapMediaKeys,
+  findForeignMediaKeys,
+} from './remap';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
-import { findBankRef, type PlanStep, type PlanInput, type SourceBank } from './plan';
+import { findBankRef, MAX_UPLOAD_BASE64, type PlanStep, type PlanInput, type SourceBank } from './plan';
 import {
   targetByName,
   usedTypefaceIds,
@@ -37,10 +43,10 @@ export interface AssetBytes {
   contentType: string;
 }
 
-/** chrome.runtime messages are capped at 64MiB; the asset's base64 body rides one
- *  (plus envelope overhead), so guard a bit under the limit. Larger assets are
- *  flagged for manual upload rather than crashing the course. */
-const MAX_RELAY_BASE64 = 60 * 1024 * 1024;
+// MAX_UPLOAD_BASE64 (the upload size ceiling) is defined in ./plan and shared: the
+// planner predicts overflow from the manifest size; this executor backstops it on
+// the actual base64 length (unknown-size assets). The S3 PUT goes direct from the
+// panel (no 64MB message hop), so the ceiling is memory, not messaging.
 
 export interface ExecutorDeps {
   input: PlanInput;
@@ -71,7 +77,16 @@ export interface ExecutorDeps {
   mintId?: () => string;
   /** Poll budget for transcode CHECK_STATUS (default a few tries). */
   maxStatusPolls?: number;
+  /** Retries for the post-create GET_COURSE handshake (default 3), each preceded by
+   *  a paced gap — a few seconds of slack so a just-created course is confirmed
+   *  before any write even under replication lag. */
+  courseHandshakeTries?: number;
   onProgress?: (done: number, total: number) => void;
+  /** Cooperative cancel: checked at the top of each step (after the in-flight
+   *  write fully finished — never mid-write). When it returns true the executor
+   *  stops issuing further steps and returns cleanly with `stopped: true` and the
+   *  partial id-map, so the course stays resumable (no rollback). */
+  shouldStop?: () => boolean;
 }
 
 export interface ManualFlag {
@@ -81,6 +96,7 @@ export interface ManualFlag {
     | 'orphan-media'
     | 'unsupported-media'
     | 'missing-bank-ref'
+    | 'orphan-bank'
     | 'title'
     | 'typeface';
   sourceBlockId?: string;
@@ -109,6 +125,17 @@ export interface ExecResult {
   idMap: Record<string, string>;
   /** New course id once the shell is created. */
   newCourseId?: string;
+  /** Always false now — automatic deletion is disabled (operator decision: no
+   *  delete actions fire automatically until deletion is better researched).
+   *  Retained for back-compat with readers that inspect it. */
+  rolledBack?: boolean;
+  /** A created course shell that was left in place (NOT deleted) because the
+   *  import failed before the GET_COURSE handshake confirmed it. Reported so the
+   *  operator can delete it manually if they choose. */
+  orphanedCourseId?: string;
+  /** Set when the run was cooperatively stopped (Stop button) mid-course. The
+   *  partial course is kept and is resumable via the persisted job log. */
+  stopped?: boolean;
   /** Surviving source media keys (must be empty on success). */
   survivingKeys: string[];
   error?: string;
@@ -184,6 +211,12 @@ export async function executePlan(
 
   // Per-run runtime state.
   let newCourseId = '';
+  // Confirmed real by the post-create GET_COURSE handshake (mirror the editor).
+  // Capture shows POST /content already returns a fully-materialized course, so the
+  // handshake 200 — not any later write — is what proves the shell is real. If it
+  // never gets set (handshake failed / skipped), the rollback treats the shell as
+  // suspect rather than reporting a hollow success.
+  let materialized = false;
   // sourceBlockId → {newId, globalBlockId} (from CREATE_BLOCKS metadata).
   const blockMeta = new Map<string, { newId: string; globalBlockId?: string }>();
   // sourceKey → new target key (after upload) for media patches.
@@ -200,8 +233,14 @@ export async function executePlan(
   // synthetic empty body (callers synthesize ids separately).
   async function send(spec: WriteSpec, step: PlanStep['kind']): Promise<Record<string, unknown>> {
     result.envelopes.push({ step, label: spec.label });
+    // REST envelopes already embed the method in their label ("POST /manage/api/…");
+    // ducks labels are bare ("rise/lessons/CREATE_LESSON"). Only prepend the method
+    // when it isn't already there, so we don't log "POST POST /manage/api/…".
+    const where = spec.label.startsWith(`${spec.method} `)
+      ? spec.label
+      : `${spec.method} ${spec.label}`;
     if (dryRun) {
-      log(`${pfx()} DRY  ${spec.method} ${spec.label}`);
+      log(`${pfx()} DRY  ${where}`);
       return {};
     }
     await pace();
@@ -213,13 +252,84 @@ export async function executePlan(
         r.text,
       );
     }
-    log(`${pfx()} OK   ${spec.method} ${spec.label}`);
+    log(`${pfx()} OK   ${where}`);
     return parseJson(r.text);
+  }
+
+  // Report (do NOT delete) a created shell whose import failed before the
+  // GET_COURSE handshake confirmed it. Automatic deletion is intentionally
+  // disabled (operator decision: no delete actions fire automatically until
+  // deletion is better researched) — the orphaned shell is left in place and
+  // surfaced so the operator can remove it manually if they choose. Never throws.
+  function reportOrphanShell(why: string): void {
+    if (dryRun || !newCourseId) return;
+    result.orphanedCourseId = newCourseId;
+    result.rolledBack = false;
+    log(`Orphaned course ${newCourseId} left in place (no auto-delete — ${why}); delete manually if needed`);
+  }
+
+  // Upload one source asset (block OR lesson media) via the faithful chain:
+  // dedup → size-guard → GET_YURL → S3 PUT → record source→new key in keyMap. A
+  // reused key uploads once; an oversize asset (over the 64MB relay cap that the
+  // planner couldn't predict, e.g. no manifest size) is flagged + blanked
+  // (keyMap → '') so no dead source key survives.
+  async function uploadOne(
+    sourceKey: string,
+    filename: string,
+    stepKind: PlanStep['kind'],
+  ): Promise<void> {
+    if (keyMap.has(sourceKey)) {
+      log(`${pfx()} reuse ${sourceKey} (already uploaded)`);
+      return;
+    }
+    let bytes: AssetBytes | null = null;
+    if (!dryRun) {
+      bytes = await deps.readAsset(sourceKey);
+      if (!bytes) throw new WriteError(`Missing archived bytes for ${sourceKey}`, stepKind);
+      if (bytes.base64.length > MAX_UPLOAD_BASE64) {
+        const mb = Math.round((bytes.base64.length * 0.75) / (1024 * 1024));
+        log(`${pfx()} WARN ${sourceKey} too large to upload via the extension (~${mb}MB) — flagged, attach manually`);
+        result.flags.push({
+          kind: 'unsupported-media',
+          sourceKey,
+          detail: `Asset ~${mb}MB is too large to upload via the extension — upload it manually in Rise`,
+        });
+        keyMap.set(sourceKey, ''); // blank → no dead source key survives
+        return;
+      }
+    }
+    // Faithful upload (no CRUSH/transcode — the exported bytes are the source of
+    // truth). Every distinct source key is its own upload, so the per-key map
+    // covers them all and the patch/lesson remap swaps each.
+    const yurl = payloadOf(await send(env.getYurl({ courseId: newCourseId, filename }), stepKind));
+    const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}` : String(yurl.key ?? '');
+    const url = String(yurl.url ?? '');
+    const ctype = String(yurl.type ?? 'application/octet-stream');
+    if (!dryRun && (!newKey || !url)) {
+      throw new WriteError('GET_YURL returned no key/url', stepKind, JSON.stringify(yurl));
+    }
+    if (!dryRun && bytes) {
+      const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }));
+      result.envelopes.push({ step: stepKind, label: 'S3 PUT (upload bytes)' });
+      if (!put.ok) throw new WriteError(`S3 PUT failed (HTTP ${put.status})`, stepKind, put.text);
+    } else {
+      result.envelopes.push({ step: stepKind, label: 'S3 PUT (upload bytes)' });
+    }
+    keyMap.set(sourceKey, newKey);
   }
 
   try {
     let done = 0;
     for (const step of steps) {
+      // Cooperative stop checkpoint: only BETWEEN steps (the previous write has
+      // fully finished), so we never abandon a half-sent write. The partial
+      // course is kept + resumable via the job log — no rollback.
+      if (deps.shouldStop?.()) {
+        result.stopped = true;
+        result.idMap = ids.toJSON();
+        log(`Stopped before step ${stepIdx + 1}/${total} — partial course kept (resumable on re-run)`);
+        return result;
+      }
       stepIdx++;
       switch (step.kind) {
         case 'create-bank': {
@@ -247,29 +357,77 @@ export async function executePlan(
           const newBankId = ids.get(step.sourceBankId);
           if (!newBankId) throw new WriteError('put-bank before create-bank', step.kind);
           const questions = remapIds(bank?.questions ?? [], ids);
-          const resp = await send(
-            env.putBank({
-              bankId: newBankId,
-              questions: questions as unknown[],
-              session: mint(),
-              lockData: authorProfile(author),
-            }),
-            step.kind,
-          );
+          let resp: Record<string, unknown>;
+          try {
+            resp = await send(
+              env.putBank({
+                bankId: newBankId,
+                questions: questions as unknown[],
+                session: mint(),
+                lockData: authorProfile(author),
+              }),
+              step.kind,
+            );
+          } catch (e) {
+            // The bank shell was created (create-bank) but the questions write
+            // failed → an empty bank is left on the target. Record it (no delete)
+            // so the report lists it for manual cleanup, then fail the course.
+            result.flags.push({
+              kind: 'orphan-bank',
+              detail: `Empty question bank ${newBankId} left on target (question write failed) — delete manually if needed`,
+            });
+            throw e;
+          }
           if (!dryRun && resp.version === undefined && resp.questions === undefined) {
+            result.flags.push({
+              kind: 'orphan-bank',
+              detail: `Question bank ${newBankId} may be incomplete (PUT did not echo a saved bank) — verify/delete manually`,
+            });
             throw new WriteError('Bank PUT did not echo a saved bank', step.kind, JSON.stringify(resp));
           }
           break;
         }
         case 'create-course': {
           const resp = await send(
-            env.createCourseShell(deps.input.targetFolderId ?? 'all'),
+            env.createCourseShell(deps.input.targetFolderId ?? 'all', step.courseType),
             step.kind,
           );
           newCourseId = dryRun ? ids.remap(step.sourceCourseId) : String(resp.id ?? '');
           if (!newCourseId) throw new WriteError('Course create returned no id', step.kind, JSON.stringify(resp));
           ids.set(step.sourceCourseId, newCourseId);
           result.newCourseId = newCourseId;
+          // INVARIANT — materialization handshake (mirror the editor): a real
+          // GET_COURSE on the new id BEFORE any write. Rise's editor always reads the
+          // course on open; `POST /content` returns a fully-materialized course
+          // (capture-confirmed: GET_COURSE 200 immediately). We pace before each
+          // attempt and RETRY a few times — a couple seconds of slack absorbs any
+          // replication lag and matches the editor's own create→open delay. If the
+          // course never confirms, the shell is broken → fail now (rollback) rather
+          // than build on a course that 404s GET_COURSE yet 500s the dashboard.
+          if (!dryRun) {
+            const tries = Math.max(1, deps.courseHandshakeTries ?? 3);
+            let confirmed = false;
+            for (let attempt = 1; attempt <= tries && !confirmed; attempt++) {
+              await pace(); // ≥ one paced gap after POST before reading back
+              const spec = env.getCourse(newCourseId);
+              result.envelopes.push({ step: step.kind, label: spec.label });
+              const r = await deps.relay(spec);
+              const rb = r.ok ? payloadOf(parseJson(r.text)) : {};
+              if (r.ok && rb.course && typeof rb.course === 'object') {
+                log(`${pfx()} OK   GET_COURSE handshake — course ready (attempt ${attempt}/${tries})`);
+                confirmed = true;
+                materialized = true;
+              } else {
+                log(`${pfx()} …    GET_COURSE not ready yet (attempt ${attempt}/${tries}, HTTP ${r.status})`);
+              }
+            }
+            if (!confirmed) {
+              throw new WriteError(
+                'Post-create GET_COURSE never confirmed the course materialized',
+                step.kind,
+              );
+            }
+          }
           break;
         }
         case 'set-theme': {
@@ -304,30 +462,47 @@ export async function executePlan(
         }
         case 'set-course-images': {
           const course = (deps.input.course.course ?? {}) as Record<string, unknown>;
+          // Faithful round-trip of any course-level image object (coverImage/
+          // cardImage `{media:{image}}`, the `media` logo `{image}`, or
+          // lessonHeaderImage which may nest an uncropped `originalImage`). Upload
+          // EVERY course/bank key found anywhere in the object — key, crushedKey,
+          // originalImage.* — so none survives as a source key, then remap.
           const build = async (img: unknown): Promise<unknown | undefined> => {
-            const image = (img as { media?: { image?: Record<string, unknown> } })?.media?.image;
-            const mainKey = typeof image?.key === 'string' ? image.key : '';
-            if (!mainKey || !/^rise\/(?:courses|questionBanks)\//.test(mainKey)) return undefined;
-            const newMain = await uploadImageAsset(mainKey);
-            if (!newMain) return undefined;
-            const km = new Map<string, string>([[mainKey, newMain]]);
-            keyMap.set(mainKey, newMain);
-            // Upload the crushed variant faithfully too (verbatim bytes) — no
-            // re-crush; the exported crushedKey IS the crushed image.
-            if (typeof image?.crushedKey === 'string' && /^rise\/(?:courses|questionBanks)\//.test(image.crushedKey)) {
-              const newCrushed = await uploadImageAsset(image.crushedKey);
-              if (newCrushed) {
-                km.set(image.crushedKey, newCrushed);
-                keyMap.set(image.crushedKey, newCrushed);
+            const keys = new Set<string>();
+            const walk = (o: unknown): void => {
+              if (typeof o === 'string') {
+                if (/^rise\/(?:courses|questionBanks)\//.test(o)) keys.add(o);
+              } else if (Array.isArray(o)) {
+                o.forEach(walk);
+              } else if (o && typeof o === 'object') {
+                Object.values(o).forEach(walk);
+              }
+            };
+            walk(img);
+            if (keys.size === 0) return undefined;
+            const km = new Map<string, string>();
+            for (const k of keys) {
+              const nk = await uploadImageAsset(k);
+              if (nk) {
+                km.set(k, nk);
+                keyMap.set(k, nk);
               }
             }
+            if (km.size === 0) return undefined;
             return remapMediaKeys(img, km);
           };
           const coverImage = step.hasCover ? await build(course.coverImage) : undefined;
           const cardImage = step.hasCard ? await build(course.cardImage) : undefined;
-          if (coverImage !== undefined || cardImage !== undefined) {
+          const media = step.hasMedia ? await build(course.media) : undefined;
+          const lessonHeaderImage = step.hasLessonHeader ? await build(course.lessonHeaderImage) : undefined;
+          if (
+            coverImage !== undefined ||
+            cardImage !== undefined ||
+            media !== undefined ||
+            lessonHeaderImage !== undefined
+          ) {
             await send(
-              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage }),
+              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage, media, lessonHeaderImage }),
               step.kind,
             );
           }
@@ -380,10 +555,14 @@ export async function executePlan(
           for (const k of ['headerImage', 'description', 'settings', 'media', 'piles']) {
             if (src && k in src) extra[k] = (src as Record<string, unknown>)[k];
           }
-          // Lesson-level uploaded media (headerImage/media) isn't re-uploaded by
-          // the captured write path — blank those keys (flagged unsupported) so a
-          // dead source key is never written to the target lesson.
-          const safeExtra = blankUploadedMediaKeys(extra) as Record<string, unknown>;
+          // Lesson media (header image / media) uploaded by the preceding
+          // `upload-lesson-media` steps is in keyMap → remap it to the new target
+          // key; anything NOT uploaded (oversize/orphan/none) is blanked so a dead
+          // source key is never written to the target lesson.
+          const safeExtra = blankForeignMediaKeys(
+            remapMediaKeys(extra, keyMap),
+            new Set(newCourseId ? [newCourseId] : []),
+          ) as Record<string, unknown>;
           await send(
             env.updateLesson({
               id: newLessonId,
@@ -506,61 +685,16 @@ export async function executePlan(
           break;
         }
         case 'upload-asset': {
-          // Dedup: a source asset reused across blocks (e.g. a logo) uploads ONCE.
-          // The plan emits an upload step per (block, key), so the SAME source key
-          // can recur — if it's already uploaded, reuse the new key instead of
-          // creating a duplicate copy in the target. (CLAUDE.md: upload once, reuse
-          // the key for all references.)
-          if (keyMap.has(step.sourceKey)) {
-            log(`${pfx()} reuse ${step.sourceKey} (already uploaded)`);
-            break;
-          }
-          // Read bytes FIRST, so we can size-guard before issuing any write. The
-          // bytes ride a chrome.runtime message (base64) which is capped at 64MiB
-          // — a bigger asset can't be relayed, so flag it (don't crash the whole
-          // course) and blank the key so no dead source key survives.
-          let bytes: AssetBytes | null = null;
-          if (!dryRun) {
-            bytes = await deps.readAsset(step.sourceKey);
-            if (!bytes) throw new WriteError(`Missing archived bytes for ${step.sourceKey}`, step.kind);
-            if (bytes.base64.length > MAX_RELAY_BASE64) {
-              const mb = Math.round(bytes.base64.length / (1024 * 1024));
-              log(`${pfx()} WARN ${step.sourceKey} too large to upload via the extension (~${mb}MB > 64MB message limit) — flagged, attach manually`);
-              result.flags.push({
-                kind: 'unsupported-media',
-                sourceKey: step.sourceKey,
-                detail: `Asset ~${mb}MB exceeds the 64MB extension message limit — upload it manually in Rise`,
-              });
-              keyMap.set(step.sourceKey, ''); // blank → no dead source key survives
-              break;
-            }
-          }
-          // Faithful upload: GET_YURL → S3 PUT of the EXACT exported bytes → map
-          // the source key. We do NOT crush images or transcode a/v — the source
-          // asset is the source of truth (Rise already crushed/transcoded it at
-          // author time; re-processing would recompress and drift). Every distinct
-          // source key (original, crushedKey, poster, caption .vtt) is its own
-          // upload step, so the per-key map covers them all and the patch step
-          // swaps each — guaranteeing no source key survives.
-          const yurl = payloadOf(
-            await send(env.getYurl({ courseId: newCourseId, filename: step.filename }), step.kind),
-          );
-          const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}` : String(yurl.key ?? '');
-          const url = String(yurl.url ?? '');
-          const ctype = String(yurl.type ?? 'application/octet-stream');
-          if (!dryRun && (!newKey || !url)) {
-            throw new WriteError('GET_YURL returned no key/url', step.kind, JSON.stringify(yurl));
-          }
-          if (!dryRun && bytes) {
-            const put = await deps.relay(
-              env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }),
-            );
-            result.envelopes.push({ step: step.kind, label: 'S3 PUT (upload bytes)' });
-            if (!put.ok) throw new WriteError(`S3 PUT failed (HTTP ${put.status})`, step.kind, put.text);
-          } else {
-            result.envelopes.push({ step: step.kind, label: 'S3 PUT (upload bytes)' });
-          }
-          keyMap.set(step.sourceKey, newKey);
+          // Dedup + size-guard + faithful upload (shared with lesson media). The
+          // plan emits an upload step per (block, key), so the SAME source key can
+          // recur — uploadOne reuses an already-uploaded key (upload once).
+          await uploadOne(step.sourceKey, step.filename, step.kind);
+          break;
+        }
+        case 'upload-lesson-media': {
+          // Lesson header / media — uploaded BEFORE this lesson's UPDATE_LESSON so
+          // the lesson payload (built in update-lesson) carries the remapped key.
+          await uploadOne(step.sourceKey, step.filename, step.kind);
           break;
         }
         case 'patch-block-media': {
@@ -587,6 +721,7 @@ export async function executePlan(
             sourceBlockId: step.sourceBlockId,
             detail: 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
           });
+          log(`${pfx()} ⚠ FLAG storyline — block ${step.sourceBlockId} needs manual Review 360 attach`);
           break;
         }
         case 'flag-draw-from-bank': {
@@ -596,6 +731,7 @@ export async function executePlan(
             detail:
               'Draw-from-bank block created as an unbound placeholder — attach a question bank manually (bank recreation is off)',
           });
+          log(`${pfx()} ⚠ FLAG draw-from-bank — block ${step.sourceBlockId} (attach a bank manually)`);
           break;
         }
         case 'flag-orphan-media': {
@@ -605,6 +741,7 @@ export async function executePlan(
             sourceKey: step.sourceKey,
             detail: 'Media is 403/deleted at source — block shipped without it',
           });
+          log(`${pfx()} ⚠ FLAG orphan-media — ${step.sourceKey} (deleted at source)`);
           break;
         }
         case 'flag-unsupported-media': {
@@ -613,11 +750,28 @@ export async function executePlan(
             sourceKey: step.sourceKey,
             detail: `Media at ${step.location} has no captured write path — attach manually (not written as a source key)`,
           });
+          // Blank the key so any later remap (block patch / lesson payload / final
+          // rebuild) writes empty media, never a dead source key.
+          keyMap.set(step.sourceKey, '');
+          log(`${pfx()} ⚠ FLAG unsupported-media — ${step.sourceKey} (${step.location})`);
           break;
         }
       }
       result.idMap = ids.toJSON();
       deps.onProgress?.(++done, steps.length);
+    }
+
+    // Materialization guard (belt-and-suspenders): the create-course handshake
+    // already confirmed the shell with a 200 GET_COURSE, so this normally never
+    // fires. If somehow a course id exists without that confirmation, treat the
+    // shell as suspect and roll it back rather than report a hollow success.
+    if (!dryRun && newCourseId && !materialized) {
+      reportOrphanShell('course never confirmed by the GET_COURSE handshake');
+      result.ok = false;
+      result.error =
+        'Course shell was not confirmed by the post-create GET_COURSE handshake — left in place (delete manually if needed)';
+      result.idMap = ids.toJSON();
+      return result;
     }
 
     // Final invariant (protocol §8/§12): every uploaded media key in the rebuilt
@@ -647,6 +801,12 @@ export async function executePlan(
   } catch (e) {
     result.ok = false;
     result.idMap = ids.toJSON();
+    // Report (do NOT delete) ONLY a shell the GET_COURSE handshake never
+    // confirmed. Once confirmed, the course is real, queryable and resumable (a
+    // bare titleless/lessonless shell is a VALID Rise course — capture-confirmed),
+    // so a later failure leaves a real, resumable course we keep. An unconfirmed
+    // shell is the suspect state → report it (left in place; no auto-delete).
+    if (!materialized) reportOrphanShell('import failed before the course was confirmed');
     if (e instanceof WriteError) {
       // Surface a snippet of the server's response body — a 4xx/5xx body usually
       // says exactly what it rejected (the live diagnostic).

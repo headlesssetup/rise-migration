@@ -15,8 +15,32 @@ export interface AssetEntry {
   /** Archive path `assets/<hash>.<ext>` — absent for orphaned keys. */
   file?: string;
   ext?: string;
+  /** Raw byte size (from the asset manifest) — used to PREDICT the relay-cap
+   *  overflow in the plan (so a dry-run preview flags oversized media too). */
+  size?: number;
   /** 403/404 at source (assets-summary `orphaned`): no bytes to upload. */
   orphaned?: boolean;
+}
+
+/** Upload size ceiling (as base64 length). The S3 PUT now goes DIRECT from the
+ *  side panel (host_permissions exempt it from CORS), so the bytes no longer cross
+ *  a 64MiB chrome.runtime message — the ceiling is memory (the base64 round-trip),
+ *  not messaging. Set generously so large media (e.g. animated GIFs) migrate, while
+ *  still flagging pathologically huge assets to avoid an out-of-memory crash.
+ *  Shared by the PLANNER (predict overflow from the manifest size → dry-run flag)
+ *  and the EXECUTOR (runtime backstop on the actual base64 length). */
+export const MAX_UPLOAD_BASE64 = 350 * 1024 * 1024; // ≈ 262MB of raw bytes
+
+/** Predict whether raw bytes of `size` exceed the upload ceiling once base64-encoded
+ *  (base64 inflates ~4/3). Unknown/zero size → not predicted (executor backstops). */
+export function exceedsUploadLimit(size: number | undefined): boolean {
+  if (typeof size !== 'number' || size <= 0) return false;
+  return Math.ceil(size / 3) * 4 > MAX_UPLOAD_BASE64;
+}
+
+/** ~MB for an oversize flag message. */
+function approxMb(size: number): number {
+  return Math.round(size / (1024 * 1024));
 }
 
 /** A referenced reusable question bank (from `question-banks/<id>.json`). */
@@ -53,15 +77,28 @@ export interface PlanInput {
 export type PlanStep =
   | { kind: 'create-bank'; sourceBankId: string; title: string; summary: string }
   | { kind: 'put-bank'; sourceBankId: string; questionCount: number; summary: string }
-  | { kind: 'create-course'; sourceCourseId: string; title: string; summary: string }
+  | {
+      kind: 'create-course';
+      sourceCourseId: string;
+      title: string;
+      /** Source course `type` (e.g. `"onePage"` for a microlearning) — passed to
+       *  POST /content so the target course is the same kind. null/absent → standard. */
+      courseType: string | null;
+      summary: string;
+    }
   | { kind: 'set-theme'; sourceCourseId: string; summary: string }
   | { kind: 'set-title'; sourceCourseId: string; title: string; summary: string }
   | {
-      // Upload + set the course's user-uploaded cover / card image (course-level
-      // media, not on a block) via UPDATE_COURSE coverImage/cardImage.
+      // Upload + set the course's user-uploaded cover / card / logo image
+      // (course-level media, not on a block) via UPDATE_COURSE
+      // coverImage/cardImage/media (logo).
       kind: 'set-course-images';
       hasCover: boolean;
       hasCard: boolean;
+      /** Course-level `media` object — the cover-page logo. */
+      hasMedia: boolean;
+      /** Course-level `lessonHeaderImage` object (may nest `originalImage`). */
+      hasLessonHeader: boolean;
       summary: string;
     }
   | {
@@ -104,6 +141,16 @@ export type PlanStep =
       sourceBlockId: string;
       sourceKey: string;
       mediaKind: string;
+      filename: string;
+      summary: string;
+    }
+  | {
+      // Lesson-level uploaded media (header image + any lesson `media`) — uploaded
+      // BEFORE the lesson's UPDATE_LESSON so the payload carries the remapped key
+      // instead of blanking it. Same upload chain as block media.
+      kind: 'upload-lesson-media';
+      sourceLessonId: string;
+      sourceKey: string;
       filename: string;
       summary: string;
     }
@@ -196,6 +243,14 @@ function fileBasename(key: string): string {
  *  (`{media:{image:{key}}}`), or null if absent / not a course-bank upload. */
 export function coverCardImageKey(img: unknown): string | null {
   const k = (img as { media?: { image?: { key?: unknown } } })?.media?.image?.key;
+  return typeof k === 'string' && /^rise\/(?:courses|questionBanks)\//.test(k) ? k : null;
+}
+
+/** The uploaded media key of the course-level `media` object — the cover-page
+ *  LOGO. Capture-confirmed shape is `{image:{key}}` (NO `media` wrapper, unlike
+ *  coverImage/cardImage). Null if absent / not a course-bank upload. */
+export function courseMediaImageKey(img: unknown): string | null {
+  const k = (img as { image?: { key?: unknown } })?.image?.key;
   return typeof k === 'string' && /^rise\/(?:courses|questionBanks)\//.test(k) ? k : null;
 }
 
@@ -297,25 +352,23 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     }
   }
 
-  // 2. Course shell → theme → title.
+  // 2. Course shell. The bare POST /content shell is only a CATALOG row; it
+  // becomes a real course when the FIRST CREATE_LESSON materializes its runtime
+  // document. So we emit the first lesson as the very next write after the shell —
+  // nothing failable in between — to shrink the "never-born phantom" window to a
+  // single hop (the executor rolls back an un-materialized shell if even that
+  // fails). Title is best-effort and NOT the materializer, so it no longer comes
+  // first; it (and the theme) are applied AFTER the lessons exist — Rise also
+  // rejects theming a lesson-less course ("add a lesson before theming").
   steps.push({
     kind: 'create-course',
     sourceCourseId,
     title,
+    courseType: typeof (course as Record<string, unknown>).type === 'string'
+      ? ((course as Record<string, unknown>).type as string)
+      : null,
     summary: `Create course "${title}"`,
   });
-  // Set the title FIRST — the bare POST /content shell is a draft that only
-  // MATERIALIZES on its first content write; doing it before the heavier steps
-  // (which can fail) means a failed import leaves a real, deletable course rather
-  // than a "never-born" phantom that 404s on GET_COURSE yet 500s the dashboard.
-  steps.push({
-    kind: 'set-title',
-    sourceCourseId,
-    title,
-    summary: `Set course title "${title}"`,
-  });
-  // NOTE: the theme is applied AFTER the lessons (below) — Rise rejects theming a
-  // course that has no lesson yet ("add a lesson before theming").
 
   // 3. Lessons in DISPLAY ORDER (already applied above via `course.lessons`,
   // the authoritative ordered id list — §2). CREATE_LESSON honors `position`, so
@@ -340,6 +393,46 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       lessonType: lType === 'section' ? 'section' : null, // type set on update
       summary: `Create lesson "${lTitle}" (${lType})`,
     });
+
+    // Lesson-level media (header image + any lesson `media`) — uploaded BEFORE
+    // UPDATE_LESSON so the lesson payload carries the remapped key instead of a
+    // blank. Same orphan/oversize handling as block media; oversize is PREDICTED
+    // from the manifest size so dry-run previews the manual flag too.
+    const lessonMedia = {
+      headerImage: (lesson as Record<string, unknown>).headerImage,
+      media: (lesson as Record<string, unknown>).media,
+    };
+    for (const ak of collectAssetKeys(lessonMedia, sourceCourseId)) {
+      const entry = assetByKey.get(ak.key);
+      handledKeys.add(ak.key);
+      if (entry?.orphaned || (entry && !entry.file)) {
+        steps.push({
+          kind: 'flag-orphan-media',
+          sourceLessonId,
+          sourceBlockId: '',
+          sourceKey: ak.key,
+          summary: `⚠ Orphaned lesson media (deleted at source): ${ak.key}`,
+        });
+        continue;
+      }
+      if (exceedsUploadLimit(entry?.size)) {
+        steps.push({
+          kind: 'flag-unsupported-media',
+          sourceKey: ak.key,
+          location: `lesson "${lTitle}" header/media`,
+          summary: `⚠ Lesson media ~${approxMb(entry!.size!)}MB too large to upload via the extension — attach manually: ${ak.key}`,
+        });
+        continue;
+      }
+      steps.push({
+        kind: 'upload-lesson-media',
+        sourceLessonId,
+        sourceKey: ak.key,
+        filename: fileBasename(ak.key),
+        summary: `Upload lesson media ${fileBasename(ak.key)}`,
+      });
+    }
+
     steps.push({
       kind: 'update-lesson',
       sourceLessonId,
@@ -430,6 +523,18 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           continue;
         }
         handledKeys.add(ak.key);
+        // Predict the 64MB relay-cap overflow from the manifest size — so a dry-run
+        // flags it too. Oversize keys aren't uploaded; the executor blanks them
+        // (keyMap → '') so no dead source key survives on the block.
+        if (exceedsUploadLimit(entry?.size)) {
+          steps.push({
+            kind: 'flag-unsupported-media',
+            sourceKey: ak.key,
+            location: `block ${sourceBlockId}`,
+            summary: `⚠ Media ~${approxMb(entry!.size!)}MB too large to upload via the extension — attach manually: ${ak.key}`,
+          });
+          continue;
+        }
         steps.push({
           kind: 'upload-asset',
           sourceLessonId,
@@ -454,6 +559,15 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     // (no unlock — we never locked)
   });
 
+  // Title now — best-effort, AFTER the course has been materialized by its first
+  // lesson (the shell on its own is a catalog row, not a real course).
+  steps.push({
+    kind: 'set-title',
+    sourceCourseId,
+    title,
+    summary: `Set course title "${title}"`,
+  });
+
   // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
   // ("add a lesson to your course before theming"). Applied once, course-level.
   if (course.theme && typeof course.theme === 'object') {
@@ -464,26 +578,34 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   }
 
-  // Course cover / card images (user-uploaded) — upload + set via UPDATE_COURSE.
-  // Mark their keys handled so the flagger below skips them.
+  // Course cover / card / logo images (user-uploaded) — upload + set via
+  // UPDATE_COURSE. Mark their keys handled so the flagger below skips them.
+  // `media` is the cover-page logo (capture-confirmed; `{image:{key,…}}`).
   const coverKey = coverCardImageKey(course.coverImage);
   const cardKey = coverCardImageKey(course.cardImage);
-  if (coverKey || cardKey) {
-    for (const img of [course.coverImage, course.cardImage]) {
+  const mediaKey = courseMediaImageKey(course.media);
+  // lessonHeaderImage uses the same `{media:{image:{key}}}` shape as cover/card
+  // (it may also nest an uncropped `originalImage` with its own key/crushedKey —
+  // all handled keys are marked below so none survives as a source key).
+  const headerKey = coverCardImageKey(course.lessonHeaderImage);
+  if (coverKey || cardKey || mediaKey || headerKey) {
+    for (const img of [course.coverImage, course.cardImage, course.media, course.lessonHeaderImage]) {
       for (const ak of collectAssetKeys(img, sourceCourseId)) handledKeys.add(ak.key);
     }
     steps.push({
       kind: 'set-course-images',
       hasCover: !!coverKey,
       hasCard: !!cardKey,
-      summary: `Set course ${[coverKey && 'cover', cardKey && 'card'].filter(Boolean).join(' + ')} image`,
+      hasMedia: !!mediaKey,
+      hasLessonHeader: !!headerKey,
+      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo', headerKey && 'lesson-header'].filter(Boolean).join(' + ')} image`,
     });
   }
 
-  // Media that isn't on a recreatable block — theme images, lesson header
-  // images, and bank question media. The captured write path doesn't cover
-  // writing these, so flag them (manual) rather than silently shipping a source
-  // key or failing the whole course.
+  // Media that isn't on a recreatable block OR an uploaded lesson header — theme
+  // images and bank question media (lesson headers are handled per-lesson above).
+  // The captured write path doesn't cover these, so flag them (manual) rather than
+  // silently shipping a source key or failing the whole course.
   const flagUnsupported = (doc: unknown, ownerId: string, where: string): void => {
     for (const ak of collectAssetKeys(doc, ownerId)) {
       if (handledKeys.has(ak.key)) continue;
@@ -533,7 +655,7 @@ export function planStats(steps: PlanStep[]): PlanStats {
     banks: count('create-bank'),
     lessons: count('create-lesson'),
     blocks,
-    uploads: count('upload-asset'),
+    uploads: count('upload-asset') + count('upload-lesson-media'),
     storylineFlags: count('flag-storyline'),
     orphanFlags: count('flag-orphan-media'),
     drawFromBank: count('bind-draw-from-bank'),

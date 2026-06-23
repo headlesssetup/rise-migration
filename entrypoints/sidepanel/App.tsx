@@ -71,12 +71,23 @@ const PAGE = 16;
 
 /** Classify a log line for colorization (CSS in style.css). */
 function logLineClass(line: string): string {
+  // Operation/course headers are emitted with a leading ▶ marker — render bold.
+  if (/^\s*▶/.test(line)) return 'log-line log-head';
   if (/^\s*(FAILED|BLOCKED|✗)|\berror\b|Unauthorized|HTTP [45]\d\d/i.test(line))
     return 'log-line log-error';
   if (/^\s*(\[\d+\/\d+\]\s*)?WARN|⚠/i.test(line)) return 'log-line log-warn';
   if (/\bOK\b|✓|Imported|Planned|done\b/i.test(line)) return 'log-line log-ok';
   if (/^\s*(\[\d+\/\d+\]\s*)?DRY\b/i.test(line)) return 'log-line log-dry';
   return 'log-line';
+}
+
+/** Format a remaining-duration (ms) as HH:MM:SS for the log-header countdown. */
+function fmtRemaining(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return [h, m, sec].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
 export function App() {
@@ -93,6 +104,11 @@ export function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  // Live import status for the log-header countdown (set via ImportView).
+  const [importStatus, setImportStatus] = useState<
+    { label: string; finishAt: number | null } | null
+  >(null);
+  const [, forceTick] = useState(0);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
@@ -124,6 +140,40 @@ export function App() {
   const addLog = useCallback((message: string) => {
     setLog((l) => [...l, message]);
   }, []);
+
+  // Visually separate each new user-launched operation in the log: drop a blank
+  // line before it (never as the very first line), then an optional bold ▶ header.
+  const logBreak = useCallback((label?: string) => {
+    setLog((l) => {
+      const next = l.length === 0 ? [...l] : [...l, ''];
+      if (label) next.push(`▶ ${label}`);
+      return next;
+    });
+  }, []);
+
+  const clearLog = useCallback(() => setLog([]), []);
+
+  const onImportStatus = useCallback(
+    (e: Extract<ProgressEvent, { kind: 'import-status' }>) => {
+      setImportStatus(
+        e.done
+          ? { label: e.label, finishAt: null }
+          : {
+              label: e.label,
+              finishAt: e.etaSeconds != null ? Date.now() + e.etaSeconds * 1000 : null,
+            },
+      );
+    },
+    [],
+  );
+
+  // Tick once a second while a countdown is live, so the remaining time updates
+  // between the (slower) status events.
+  useEffect(() => {
+    if (!importStatus || importStatus.finishAt == null) return;
+    const id = setInterval(() => forceTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [importStatus]);
 
   // Poll session state (identity + token + Rise tab presence + account name).
   useEffect(() => {
@@ -239,6 +289,7 @@ export function App() {
   }, [addLog]);
 
   const list = useCallback(async () => {
+    logBreak('List courses');
     setPhase('listing');
     setCourses([]);
     const result = await listAllCourses(onEvent, listLimit);
@@ -258,7 +309,7 @@ export function App() {
         `Inventory built (${rows.length} rows) — connect a folder to save it.`,
       );
     }
-  }, [onEvent, addLog, listLimit, storage]);
+  }, [onEvent, addLog, logBreak, listLimit, storage]);
 
   const toggle = useCallback((id: string) => {
     setSelected((s) => {
@@ -283,6 +334,7 @@ export function App() {
 
   const runExport = useCallback(async () => {
     if (!storage) return;
+    logBreak('Fetch courses');
     setPhase('exporting');
     setCensus(null);
     setNovelty(null);
@@ -334,10 +386,11 @@ export function App() {
     addLog(
       `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s).`,
     );
-  }, [storage, selectedCourses, onEvent, addLog, session]);
+  }, [storage, selectedCourses, onEvent, addLog, logBreak, session]);
 
   const runBanks = useCallback(async () => {
     if (!storage) return;
+    logBreak('Fetch question banks');
     setPhase('exporting');
     setBanks(null);
     setProgress(null);
@@ -376,10 +429,11 @@ export function App() {
     if (folders.length) {
       addLog(`Folders updated: ${folders.length} total (incl. bank folders).`);
     }
-  }, [storage, onEvent, addLog]);
+  }, [storage, onEvent, addLog, logBreak]);
 
   const runAssets = useCallback(async () => {
     if (!storage) return;
+    logBreak('Download assets');
     setPhase('exporting');
     setAssets(null);
     setProgress(null);
@@ -414,10 +468,11 @@ export function App() {
       const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
       addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
     }
-  }, [storage, onEvent, addLog, session]);
+  }, [storage, onEvent, addLog, logBreak, session]);
 
   const runAccount = useCallback(async () => {
     if (!storage) return;
+    logBreak('Export account data');
     setPhase('exporting');
     setProgress(null);
     addLog('Exporting account data (folders, block templates, typefaces)…');
@@ -436,7 +491,7 @@ export function App() {
     addLog(
       `Account data: ${folders.length} folder(s), ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
     );
-  }, [storage, onEvent, addLog]);
+  }, [storage, onEvent, addLog, logBreak]);
 
   const busy = phase === 'listing' || phase === 'exporting';
   const atAll = totalCount !== null && listLimit >= totalCount;
@@ -501,7 +556,13 @@ export function App() {
       </section>
 
       {ready && mode === 'import' && (
-        <ImportView storage={storage} session={session} addLog={addLog} />
+        <ImportView
+          storage={storage}
+          session={session}
+          addLog={addLog}
+          logBreak={logBreak}
+          onStatus={onImportStatus}
+        />
       )}
 
       {ready && mode === 'export' && (
@@ -657,41 +718,66 @@ export function App() {
 
       <section className="card log-card">
         <div className="log-header">
-          <h2>Log</h2>
-          <button
-            className="copy-btn"
-            onClick={copyLog}
-            disabled={log.length === 0}
-            title="Copy log to clipboard"
-            aria-label="Copy log to clipboard"
-          >
-            {copied ? (
-              '✓ Copied'
-            ) : (
-              <>
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  aria-hidden="true"
-                >
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>{' '}
-                Copy
-              </>
+          <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
+            <h2>Log</h2>
+            {importStatus && (
+              <span className="hint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                {importStatus.label}
+                {importStatus.finishAt != null
+                  ? ` · ${fmtRemaining(importStatus.finishAt - Date.now())} remaining`
+                  : ''}
+              </span>
             )}
-          </button>
+          </span>
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button
+              className="copy-btn"
+              onClick={copyLog}
+              disabled={log.length === 0}
+              title="Copy log to clipboard"
+              aria-label="Copy log to clipboard"
+            >
+              {copied ? (
+                '✓ Copied'
+              ) : (
+                <>
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    aria-hidden="true"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>{' '}
+                  Copy
+                </>
+              )}
+            </button>
+            <button
+              className="copy-btn"
+              onClick={clearLog}
+              disabled={log.length === 0}
+              title="Clear log"
+              aria-label="Clear log"
+            >
+              Clear
+            </button>
+          </span>
         </div>
         <div className="log" ref={logRef} onScroll={onLogScroll}>
-          {log.map((line, i) => (
-            <div key={i} className={logLineClass(line)}>
-              {line}
-            </div>
-          ))}
+          {log.map((line, i) =>
+            line === '' ? (
+              <div key={i} className="log-line log-gap" />
+            ) : (
+              <div key={i} className={logLineClass(line)}>
+                {line}
+              </div>
+            ),
+          )}
         </div>
       </section>
     </div>

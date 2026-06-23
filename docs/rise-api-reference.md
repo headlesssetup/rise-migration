@@ -30,10 +30,44 @@ A single-author headless script ignores it entirely and just issues the HTTP "du
 
 ## 2. Auth
 
-- Capture the bearer JWT from a logged-in session (Okta `oauth2/default/v1/token`,
-  refreshed via `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh`).
-- Send `Authorization: Bearer <jwt>` on every `manage/api` and `ducks` call.
-- Tokens are short-lived → handle `401` by refreshing and retrying.
+- The bearer is the `_articulate_rise_` cookie value: an Okta access JWT (`aud:
+  api://default`, `~15 min` lifetime, claims include `iss`, `cid`, `scp`). Send it
+  as `Authorization: Bearer <jwt>` on every `manage/api` and `ducks` call.
+- **Token refresh — MITM-confirmed (2026-06-23), do NOT confuse the two calls:**
+  - `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh` → **`204 No
+    Content`, no body, no `Set-Cookie`**. It ONLY keeps the Okta SSO session
+    (`sid`/`xids` cookies on `id.articulate.com`) warm. It does **not** rotate the
+    bearer. (Same-site from the rise origin; `prefer: return=minimal`.)
+  - The bearer is actually rotated by **Okta silent re-auth**, which the Rise SPA
+    runs internally: a hidden iframe to `GET {iss}/v1/authorize?client_id={cid}
+    &prompt=none&response_type=id_token+token&response_mode=okta_post_message
+    &redirect_uri={riseOrigin}/auth-callback&scope={scp}&nonce=…&state=…`. Okta
+    (relying on the warm SSO session) returns an HTML page that does
+    `window.parent.postMessage(data, "{riseOrigin}")` where `data = {id_token,
+    access_token, token_type:"Bearer", expires_in:"900", scope, state}`.
+    `data.access_token` is the new bearer. **No `oauth2/token` call and no
+    `Set-Cookie`** for the bearer — the SPA writes the (non-httpOnly)
+    `_articulate_rise_` cookie in JS.
+  - **Operator-confirmed (2026-06-23): only a COURSE EDITOR boot rotates the
+    bearer.** Reloading/idling the *dashboard* does NOT (it pings lifecycle/refresh
+    but never silent-re-auths). The rotation fires when a course editor loads.
+  - **We replicated the headless silent-auth iframe and it FAILED at runtime** —
+    the injected `prompt=none` iframe never advanced `exp` (third-party SSO cookie /
+    postMessage / CSP differences from the SPA's own first-party flow). That code
+    was removed. **How we refresh now:** reload the active Rise tab (must be a
+    course editor) so the SPA performs its own native silent re-auth and writes the
+    rotated cookie; then re-read `_articulate_rise_`. A renewal counts only when the
+    JWT `exp` advances. (Revisit a no-reload silent path later — see
+    `entrypoints/background.ts` `TODO(refresh)`.)
+  - **Idle does NOT keep the bearer fresh (capture-confirmed 2026-06-23).** In a
+    ~35-min idle capture with a course open, the bearer rotated exactly ONCE — at
+    SPA boot (a `prompt=none` authorize at +0:00), `exp` jumping ~5 min forward —
+    then EXPIRED ~15 min later with NO further rotation; only `lifecycle/refresh`
+    keep-warm pings (204) kept firing. So the rotation is triggered by the SPA
+    booting/opening a course, not by a pure idle timer. This is exactly why
+    reloading the course tab works (it re-triggers the boot-time authorize) and why
+    "open a course and walk away" is not sufficient past ~15 min of inactivity.
+- Tokens are short-lived → on `401`/`403` refresh (as above) and retry.
 - SSO/2FA makes fully-programmatic login painful; easiest is a one-time browser capture
   (or Playwright with a real login) to grab a fresh token, then run the API client.
 
@@ -114,6 +148,50 @@ body `{type, payload}`, bearer auth.
 
 ---
 
+## 4b. Folders & content placement (REST, capture-confirmed 2026-06-23)
+
+Folder ids are **UUIDs**. Two roots exist per account (`folderType: shared` / `private`,
+both `isRoot`); a top-level folder hangs off the matching root via `parentFolderId`.
+
+- **Create folder** — `POST /manage/api/folders` (JSON)
+  `{"name":"new-a","parentFolderId":"<uuid>"}` → `200` the new folder
+  (`{id, name, parentFolderId, folderType, ownerPrincipalId, roleId:3, …}`).
+- **Rename folder** — `PATCH /manage/api/folder/<id>/rename` (JSON, note SINGULAR `folder`)
+  `{"name":"courses-renamed"}` → `200` the folder.
+- **Move folder** — `PATCH /manage/api/folders/<id>/move` (JSON, PLURAL `folders`)
+  `{"parentId":"<uuid>"}` → `200` (note: key is `parentId`, not `parentFolderId`).
+- **Move a COURSE into a folder** — `PATCH /manage/api/content/<courseId>/move`
+  body is the **bare folder id as `text/plain;charset=UTF-8`** (NOT JSON), e.g.
+  `163aa790-e4c5-4036-bc36-5bfca9397615` → `200` (empty body). ⚠ Asymmetry: course move
+  = bare text id; folder move = JSON `{parentId}`. Our `moveCourseToFolder` matches this
+  exactly — a `400` here means a **stale/invalid target folder id**, not a wrong shape.
+- **Content permissions** — `GET`/`PUT /manage/api/content/<courseId>/permissions`
+  (owner/collaborator ACL); `GET /manage/api/collaborators` lists members.
+
+**Why a course move can `400` (the run's failure, analyzed 2026-06-23).** The
+envelope is correct, so the cause is the folder *id* we pass, not the request:
+1. **Stale persisted folder map (most likely).** When a prior step-A run persisted
+   `account.idmap.json` (source folderId → target folderId), a later course run uses
+   it directly WITHOUT re-creating/validating folders. If those target folders were
+   since deleted/recreated (or came from a different target account/session), every
+   id is invalid → uniform `400` on all courses (exactly what we saw — the run logged
+   no folder-creation step, so it ran off the persisted map).
+2. **Cross-plane id.** A US (source) folder id used as if it were an EU (target) id.
+3. **Folder soft-deleted** between setup and the move.
+4. **Permission**: moving into a team/shared folder the session user can't write.
+   NOT the "create a duplicate then move" case — our `setupFolders` DEDUPES by
+   parent|name and REUSES an existing folder; and if a create fails it skips the move
+   (no id → no move), so a duplicate-create never produces a move `400`.
+   Mitigation in place: the move + folder-create failures now log the server's
+   response body + the folder id; re-running with fresh folder setup resolves it.
+
+Question-bank folders are a SEPARATE namespace:
+- **Create bank folder** — `POST /manage/api/question-banks/folder` (JSON).
+- **Move bank** — `PUT /manage/api/question-banks/question-bank/<bankId>/move`.
+- **Delete bank folder** — `DELETE /manage/api/question-banks/folder/<folderId>`.
+
+---
+
 ## 5. Asset upload flow
 
 1. `rise/uploads/GET_YURL` payload `{assetPath:"courses/<newCourseId>", courseId, filename}`
@@ -130,6 +208,29 @@ body `{type, payload}`, bearer auth.
      `rise/uploads/CHECK_STATUS {jobs:[…], courseId}` until done.
 4. **Rewrite the block's media `key`** to the new key.
    Embeds (YouTube/Vimeo) are plain URLs — no upload needed.
+
+**Course-level images (cover / card / logo).** MITM-confirmed (2026-06-23). Upload chain
+is the same `GET_YURL → S3 PUT → CRUSH_IMAGE {courseId, original} → {key:<crushedKey>}`
+(SVG returns a crushedKey but with `isSkipCrush:true`). The SET is a partial
+`rise/courses/UPDATE_COURSE {id, <field>}` sending only the changed field(s):
+   - **cover / card** → `coverImage` / `cardImage` = `{media:{image:{key, crushedKey,
+     isSkipCrush, sourcedFrom:"USER", dimensions, useCrushedKey, originalUrl}}}` (or `{}`).
+   - **cover-page logo** → `media` = `{image:{key, crushedKey, isSkipCrush, sourcedFrom,
+     useCrushedKey, originalUrl}}` — note: the `image` sits DIRECTLY under `media` (no inner
+     `media` wrapper), unlike coverImage/cardImage.
+   - **lesson header** → `lessonHeaderImage` = `{media:{image:{key, crushedKey, …}}}` (same
+     shape as cover/card; may also nest an uncropped `originalImage` with its OWN
+     key/crushedKey — upload + remap ALL of them so none survives).
+   Migration re-uploads the exported `key` + `crushedKey` (+ nested `originalImage` keys)
+   verbatim and remaps every one (no re-crush).
+   - **block background** → NOT a course field: it's block-level
+     `item.background.media.image.{key,crushedKey}`, set via `UPDATE_BLOCK_DEBOUNCE`
+     (MITM-confirmed). Already handled by the copy-faithful per-block media path
+     (`collectAssetKeys(block)` → upload + `patch-block-media`); needs no special code.
+   - **overlayNavigationImage** → no upload UI; Rise reuses the cover overlay image
+     (inherited). Nothing to migrate unless a course carries a distinct key (then it
+     stays flagged).
+   - user-uploaded **`theme.*`** image keys → deferred (not yet wired).
 
 `refs` ties an asset to a block item via the path `items:<itemId>/items:<subItemId>`.
 
@@ -269,3 +370,35 @@ actually vary: **media keys** (download + re-upload + remap) and **cross-refs**
 `family/variant` and media-ref shapes actually occur in your library, and which carry assets.
 Build the copy-faithful path first; only the media-bearing and cross-ref blocks need
 per-type handling.
+
+---
+
+## 12. Capturing the protocol (MITM) — method + format
+
+Everything above is reverse-engineered from man-in-the-middle captures of the live editor.
+**Immutable: never wire an API shape that isn't confirmed from a capture** (see CLAUDE.md).
+
+**How to capture.** Run mitmproxy/mitmweb (or Charles/Proxyman) with its CA trusted, drive the
+Rise editor in the browser, exercise the action of interest (e.g. set a theme image; or leave
+an authoring course idle ~15–20 min to catch the token renewal), then export the flows. Two
+useful export formats:
+- **Plain text dump** (mitmproxy `: export` / "Save as cURL/raw") — human-readable
+  request+response lines (used for most sections here).
+- **`.mitm` flow file** — mitmproxy's native binary. It is a sequence of **tnetstring**-encoded
+  flow dicts (`<len>:<payload><type>`; types: `,`=bytes, `;`=unicode str, `#`=int, `^`=float,
+  `!`=bool, `~`=null, `}`=dict, `]`=list). Response bodies are under `response.content` and may
+  be `gzip`-encoded (check the `content-encoding` header). Parse with a tiny tnetstring reader
+  (no mitmproxy install needed) and `gzip.decompress` the body — this is how the §2 silent-auth
+  HTML (`buildMessageData()` / `postMessage`) was recovered.
+
+**What to capture for a clean wire-up.** For any write: the full request **URL + method +
+JSON body** (the field shape) AND, where rotation/state matters, the **response** incl.
+`Set-Cookie`. For media: the `GET_YURL → S3 PUT → CRUSH/TRANSCODE` chain plus the `UPDATE_*`
+that sets the key. Record the confirmed envelope here before coding.
+
+**Wired & confirmed:** course `coverImage`/`cardImage`, `media` (logo), `lessonHeaderImage`
+(incl. nested `originalImage`); block backgrounds (`item.background…`, via the generic block
+media path). **Deferred / not wired:** user-uploaded `theme.*` image keys (skip for now);
+`overlayNavigationImage` (no upload UI — inherited from cover). **Unconfirmed:** US-plane
+silent-auth (only EU captured — but the authorize URL is derived from token claims, so it
+should port).
