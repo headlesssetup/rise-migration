@@ -37,14 +37,33 @@ function ducks(domain: string, action: string, payload: unknown): WriteSpec {
 
 // --- Course shell + theme (protocol §7) -------------------------------------
 
-/** POST /manage/api/content — create the course shell → {id}. */
-export function createCourseShell(folderId: string | null = 'all'): WriteSpec {
+/** POST /manage/api/content — create the course shell → {id}. Capture-confirmed:
+ *  this single call creates a fully-materialized course (GET_COURSE returns it 200
+ *  immediately, with the classic theme + a random built-in cover). `type` is sent
+ *  for non-standard courses — `"onePage"` for a microlearning (capture); a standard
+ *  course omits it (source `course.type` is null). */
+export function createCourseShell(
+  folderId: string | null = 'all',
+  type?: string | null,
+): WriteSpec {
   return {
     url: '/manage/api/content',
     method: 'POST',
-    body: JSON.stringify({ createBookmark: false, folderId }),
+    body: JSON.stringify({
+      createBookmark: false,
+      folderId,
+      ...(typeof type === 'string' && type ? { type } : {}),
+    }),
     label: 'POST /manage/api/content (create course)',
   };
+}
+
+/** GET_COURSE — read the full course document. Used as the post-create HANDSHAKE
+ *  (mirror the editor, which always GET_COURSEs a new course before any write) to
+ *  confirm the shell materialized, and for read-back parity. A read, but it rides
+ *  the write relay. */
+export function getCourse(courseId: string): WriteSpec {
+  return ducks('courses', 'GET_COURSE', { courseId });
 }
 
 /** UPDATE_COURSE {id, theme} — theme round-trips verbatim. */

@@ -1,44 +1,64 @@
 #!/usr/bin/env python3
-"""Convert + PRUNE a mitmproxy .mitm capture into a tiny JSONL of just the
-Articulate authoring traffic — the shape the analysis expects:
+"""Convert a mitmproxy .mitm capture → JSONL, keeping the FULL picture.
 
-    {"method","url","status","req","resp","reqh"}   one flow per line
+    {"t","method","url","status","req_ct","resp_ct","origin","req","resp"}   one flow/line
 
-Why: a raw .mitm haul is mostly binary upload bytes (fonts/images) + analytics
-noise (datadog/google/launchdarkly/braze/osano/gtm). This keeps only
-*.articulate.com + the S3 upload host, drops `track/TRACK` / socket.io / growth
-telemetry, decodes JSON/text bodies in full (theme/blocks payloads matter), and
-replaces binary bodies with `<N bytes ctype>`. 38 MB → tens of KB.
+Philosophy: keep EVERYTHING by default (all Articulate hosts, S3, usercontent, and
+anything not on the denylist) so nothing potentially-relevant is silently stripped.
+Only explicit **analytics / telemetry / third-party** noise is dropped — and the
+converter PRINTS every dropped URL so the pruning is transparent. Binary bodies are
+replaced with a `<N bytes ctype>` placeholder; text/JSON bodies are kept in full.
+Request timestamps are included so ordering + gaps are visible.
 
-Zero dependencies (no mitmproxy needed). Runs on the operator's machine:
+    python3 scripts/mitm-to-jsonl.py capture.mitm                 # → capture.jsonl
+    python3 scripts/mitm-to-jsonl.py capture.mitm out.jsonl
 
-    python3 scripts/mitm-to-jsonl.py haul.mitm            # → haul.pruned.jsonl
-    python3 scripts/mitm-to-jsonl.py haul.mitm out.jsonl
-
-Implements mitmproxy's tnetstring flow format (note its `;` unicode-string type).
+Zero dependencies (implements mitmproxy's tnetstring flow format).
 """
 
 import json
 import sys
 from urllib.parse import urlparse
 
-# Hosts to KEEP (substring match). Everything else (datadog, google, launchdarkly,
-# braze, osano, googletagmanager, analytics) is dropped.
-KEEP_HOSTS = ("articulate.com", "articulateusercontent.eu", "amazonaws.com")
-# Noise paths dropped even on kept hosts.
-DROP_PATHS = ("/track/TRACK", "/socket.io", "/growth/", "/analytics", "/engagement")
-# Bodies with these content-types are binary → replaced with a size placeholder.
-TEXTUAL = ("application/json", "text/", "application/xml", "+json", "application/x-www-form")
-MAX_REQ = 400_000  # keep WRITE request payloads in full (theme/blocks JSON)
-MAX_RESP = 16_000  # responses just confirm — cap so huge GET_COURSE reads don't bloat
+# --- Denylist: analytics / telemetry / third-party only --------------------------
+# Hosts dropped entirely (substring match). These carry no Rise API/content data.
+NOISE_HOSTS = (
+    "datadoghq.com",            # browser-intake-datadoghq.com (RUM)
+    "launchdarkly.com",         # app./events./clientstream. (feature flags)
+    "braze.articulate.com",     # Braze (marketing/analytics)
+    "google.com",               # www.google.com / analytics.google.com / accounts.
+    "googleapis.com",           # content-autofill / safebrowsing / optimizationguide
+    "googletagmanager.com",
+    "google-analytics.com",
+    "doubleclick.net",
+    "fastly-edge.com",          # google safebrowsing relay
+    "gstatic.com",
+    "usabilla.com",             # survey widget
+    "ada.support",              # chat widget
+    "privacywall.org",
+    "osano.com",                # cookie consent
+)
+# Paths dropped EVEN on kept (Articulate) hosts — pure analytics/telemetry endpoints.
+NOISE_PATHS = (
+    "/growth/",                 # api.articulate growth/onboarding/engagement analytics
+    "/track/TRACK",
+    "/analytics",
+    "/api/rise-runtime/analytics",
+)
+# NOTE: conveyor /socket.io (realtime collab presence) is KEPT — it's part of the
+# picture even if noisy; drop it manually if you don't need it.
+
+TEXTUAL = ("application/json", "text/", "application/xml", "+json", "application/x-www-form", "javascript")
+MAX_REQ = 1_000_000   # keep write payloads (theme/blocks JSON) in full
+MAX_RESP = 200_000    # keep GET_COURSE etc. — large but bounded
 
 
 def parse(data, off):
     colon = data.index(b":", off)
     length = int(data[off:colon])
     start = colon + 1
-    payload = data[start : start + length]
-    t = data[start + length : start + length + 1]
+    payload = data[start:start + length]
+    t = data[start + length:start + length + 1]
     nxt = start + length + 1
     if t == b",":
         return payload, nxt
@@ -68,15 +88,19 @@ def parse(data, off):
     raise ValueError(f"bad tnetstring type {t!r} at {start + length}")
 
 
-def headers_map(h):
+def hmap(h):
     out = {}
     if isinstance(h, list):
-        for pair in h:
-            if isinstance(pair, list) and len(pair) == 2:
-                k = pair[0].decode() if isinstance(pair[0], bytes) else str(pair[0])
-                v = pair[1].decode() if isinstance(pair[1], bytes) else str(pair[1])
+        for p in h:
+            if isinstance(p, list) and len(p) == 2:
+                k = p[0].decode() if isinstance(p[0], bytes) else str(p[0])
+                v = p[1].decode() if isinstance(p[1], bytes) else str(p[1])
                 out[k.lower()] = v
     return out
+
+
+def dec(v):
+    return v.decode() if isinstance(v, bytes) else v
 
 
 def body(content, ctype, cap):
@@ -85,8 +109,7 @@ def body(content, ctype, cap):
     if isinstance(content, str):
         return content[:cap]
     if isinstance(content, bytes):
-        is_text = any(t in (ctype or "").lower() for t in TEXTUAL)
-        if is_text:
+        if any(t in (ctype or "").lower() for t in TEXTUAL):
             try:
                 return content.decode("utf-8")[:cap]
             except Exception:
@@ -95,8 +118,12 @@ def body(content, ctype, cap):
     return content
 
 
-def dec(v):
-    return v.decode() if isinstance(v, bytes) else v
+def is_noise(host, path):
+    if any(h in host for h in NOISE_HOSTS):
+        return True
+    if any(p in path for p in NOISE_PATHS):
+        return True
+    return False
 
 
 def main():
@@ -104,14 +131,12 @@ def main():
         print(__doc__)
         sys.exit(1)
     src = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else (
-        src.rsplit(".", 1)[0] + ".pruned.jsonl"
-    )
+    out = sys.argv[2] if len(sys.argv) > 2 else src.rsplit(".", 1)[0] + ".jsonl"
 
     data = open(src, "rb").read()
     flows, off = [], 0
     while off < len(data):
-        if data[off : off + 1] in (b"\n", b"\r", b" "):
+        if data[off:off + 1] in (b"\n", b"\r", b" "):
             off += 1
             continue
         try:
@@ -120,48 +145,50 @@ def main():
             break
         flows.append(f)
 
-    kept, dropped = 0, 0
-    hosts = {}
+    rows, dropped = [], {}
+    for f in flows:
+        if not isinstance(f, dict):
+            continue
+        req = f.get("request")
+        if not isinstance(req, dict):
+            continue
+        rh = hmap(req.get("headers"))
+        method = dec(req.get("method"))
+        path = dec(req.get("path")) or ""
+        host = rh.get("host") or dec(req.get("host")) or ""
+        if is_noise(host, path.split("?")[0]):
+            key = f"{method} {host}{path.split('?')[0]}"
+            dropped[key] = dropped.get(key, 0) + 1
+            continue
+        resp = f.get("response")
+        rsh = hmap(resp.get("headers")) if isinstance(resp, dict) else {}
+        rows.append({
+            "t": req.get("timestamp_start"),
+            "method": method,
+            "url": f"{dec(req.get('scheme'))}://{host}{path}",
+            "status": resp.get("status_code") if isinstance(resp, dict) else None,
+            "req_ct": rh.get("content-type"),
+            "resp_ct": rsh.get("content-type"),
+            "origin": rh.get("origin"),
+            "req": body(req.get("content"), rh.get("content-type"), MAX_REQ),
+            "resp": body(resp.get("content"), rsh.get("content-type"), MAX_RESP) if isinstance(resp, dict) else None,
+        })
+    rows.sort(key=lambda r: r["t"] or 0)
     with open(out, "w") as fh:
-        for f in flows:
-            if not isinstance(f, dict):
-                continue
-            req = f.get("request")
-            if not isinstance(req, dict):
-                continue
-            rh = headers_map(req.get("headers"))
-            scheme = dec(req.get("scheme"))
-            method = dec(req.get("method"))
-            path = dec(req.get("path")) or ""
-            host = rh.get("host") or dec(req.get("host")) or ""
-            if not any(k in host for k in KEEP_HOSTS) or any(p in path for p in DROP_PATHS):
-                dropped += 1
-                continue
-            resp = f.get("response")
-            status = resp.get("status_code") if isinstance(resp, dict) else None
-            resp_ct = headers_map(resp.get("headers")).get("content-type") if isinstance(resp, dict) else None
-            row = {
-                "method": method,
-                "url": f"{scheme}://{host}{path}",
-                "status": status,
-                "req": body(req.get("content"), rh.get("content-type"), MAX_REQ),
-                "resp": body(resp.get("content"), resp_ct, MAX_RESP) if isinstance(resp, dict) else None,
-                # Minimal headers: content-type + presence of the S3 ACL header
-                # (the EU SigV4 question). Authorization is intentionally omitted.
-                "reqh": {
-                    k: v
-                    for k, v in rh.items()
-                    if k in ("content-type", "x-amz-acl") or k.startswith("x-amz-")
-                },
-            }
-            fh.write(json.dumps(row) + "\n")
-            kept += 1
-            hosts[urlparse(row["url"]).netloc] = hosts.get(urlparse(row["url"]).netloc, 0) + 1
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
 
-    print(f"flows: {len(flows)}  kept: {kept}  dropped(noise/binary host): {dropped}")
-    print(f"wrote: {out}")
-    for h, c in sorted(hosts.items(), key=lambda x: -x[1]):
-        print(f"  {c:4d} {h}")
+    kept_hosts = {}
+    for r in rows:
+        h = urlparse(r["url"]).netloc
+        kept_hosts[h] = kept_hosts.get(h, 0) + 1
+    print(f"flows={len(flows)}  kept={len(rows)}  dropped={sum(dropped.values())}  → {out}")
+    print("KEPT hosts:")
+    for h, c in sorted(kept_hosts.items(), key=lambda x: -x[1]):
+        print(f"  {c:5d} {h}")
+    print("DROPPED (analytics/telemetry) — every distinct URL:")
+    for k, c in sorted(dropped.items(), key=lambda x: -x[1]):
+        print(f"  {c:5d} {k}")
 
 
 if __name__ == "__main__":

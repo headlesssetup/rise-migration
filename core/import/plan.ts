@@ -77,7 +77,15 @@ export interface PlanInput {
 export type PlanStep =
   | { kind: 'create-bank'; sourceBankId: string; title: string; summary: string }
   | { kind: 'put-bank'; sourceBankId: string; questionCount: number; summary: string }
-  | { kind: 'create-course'; sourceCourseId: string; title: string; summary: string }
+  | {
+      kind: 'create-course';
+      sourceCourseId: string;
+      title: string;
+      /** Source course `type` (e.g. `"onePage"` for a microlearning) — passed to
+       *  POST /content so the target course is the same kind. null/absent → standard. */
+      courseType: string | null;
+      summary: string;
+    }
   | { kind: 'set-theme'; sourceCourseId: string; summary: string }
   | { kind: 'set-title'; sourceCourseId: string; title: string; summary: string }
   | {
@@ -343,6 +351,9 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     kind: 'create-course',
     sourceCourseId,
     title,
+    courseType: typeof (course as Record<string, unknown>).type === 'string'
+      ? ((course as Record<string, unknown>).type as string)
+      : null,
     summary: `Create course "${title}"`,
   });
 

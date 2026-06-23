@@ -194,9 +194,11 @@ export async function executePlan(
 
   // Per-run runtime state.
   let newCourseId = '';
-  // A successful CREATE_LESSON is the write that materializes the runtime course
-  // document (POST /content only mints a catalog row). If a run ends without one,
-  // the shell never became a real course → a phantom that 500s content/search.
+  // Confirmed real by the post-create GET_COURSE handshake (mirror the editor).
+  // Capture shows POST /content already returns a fully-materialized course, so the
+  // handshake 200 — not any later write — is what proves the shell is real. If it
+  // never gets set (handshake failed / skipped), the rollback treats the shell as
+  // suspect rather than reporting a hollow success.
   let materialized = false;
   // sourceBlockId → {newId, globalBlockId} (from CREATE_BLOCKS metadata).
   const blockMeta = new Map<string, { newId: string; globalBlockId?: string }>();
@@ -351,13 +353,30 @@ export async function executePlan(
         }
         case 'create-course': {
           const resp = await send(
-            env.createCourseShell(deps.input.targetFolderId ?? 'all'),
+            env.createCourseShell(deps.input.targetFolderId ?? 'all', step.courseType),
             step.kind,
           );
           newCourseId = dryRun ? ids.remap(step.sourceCourseId) : String(resp.id ?? '');
           if (!newCourseId) throw new WriteError('Course create returned no id', step.kind, JSON.stringify(resp));
           ids.set(step.sourceCourseId, newCourseId);
           result.newCourseId = newCourseId;
+          // INVARIANT — materialization handshake (mirror the editor): a real
+          // GET_COURSE on the new id BEFORE any write. Rise's editor always reads
+          // the course on open; `POST /content` returns a fully-materialized course
+          // (capture-confirmed), so this must return 200 with a `course`. If it
+          // doesn't, the shell is broken → fail now (rollback) rather than build on
+          // a course that 404s GET_COURSE yet 500s the dashboard.
+          if (!dryRun) {
+            const rb = payloadOf(await send(env.getCourse(newCourseId), step.kind));
+            if (!rb.course || typeof rb.course !== 'object') {
+              throw new WriteError(
+                'Post-create GET_COURSE did not return a course — shell did not materialize',
+                step.kind,
+                JSON.stringify(rb).slice(0, 300),
+              );
+            }
+            materialized = true;
+          }
           break;
         }
         case 'set-theme': {
@@ -459,8 +478,6 @@ export async function executePlan(
             : String(lesson?.id ?? '');
           if (!newLessonId) throw new WriteError('CREATE_LESSON returned no lesson id', step.kind, JSON.stringify(resp));
           ids.set(step.sourceLessonId, newLessonId);
-          // A successful lesson create materializes the runtime course document.
-          if (!dryRun) materialized = true;
           break;
         }
         case 'update-lesson': {
@@ -676,16 +693,15 @@ export async function executePlan(
       deps.onProgress?.(++done, steps.length);
     }
 
-    // Materialization guard: a run can finish without throwing yet never create
-    // any content (e.g. a lesson-less course, or one whose only lesson is a blockless
-    // section that still creates — but a truly content-less course makes no
-    // CREATE_LESSON). An un-materialized shell 404s GET_COURSE but 500s
-    // content/search — a phantom. Roll it back rather than report a hollow success.
+    // Materialization guard (belt-and-suspenders): the create-course handshake
+    // already confirmed the shell with a 200 GET_COURSE, so this normally never
+    // fires. If somehow a course id exists without that confirmation, treat the
+    // shell as suspect and roll it back rather than report a hollow success.
     if (!dryRun && newCourseId && !materialized) {
-      await rollbackShell('no content write materialized the course');
+      await rollbackShell('course never confirmed by the GET_COURSE handshake');
       result.ok = false;
       result.error =
-        'Course shell never materialized (no lesson created) — rolled back to avoid a phantom in the root folder';
+        'Course shell was not confirmed by the post-create GET_COURSE handshake — rolled back';
       result.idMap = ids.toJSON();
       return result;
     }
@@ -717,11 +733,12 @@ export async function executePlan(
   } catch (e) {
     result.ok = false;
     result.idMap = ids.toJSON();
-    // Roll back ONLY an un-materialized shell. Once the first CREATE_LESSON has
-    // landed, the course is a real, queryable, deletable course — a partial import,
-    // not a catalog-poisoning phantom — so we keep it (resumable via the job log)
-    // rather than discard the work. A never-materialized shell is a ghost → delete.
-    if (!materialized) await rollbackShell('import failed before the course materialized');
+    // Roll back ONLY a shell the GET_COURSE handshake never confirmed. Once
+    // confirmed, the course is real, queryable and deletable (a bare titleless/
+    // lessonless shell is a VALID Rise course — capture-confirmed), so a later
+    // failure leaves a real, resumable course we keep rather than discard. An
+    // unconfirmed shell is the suspect state → soft-delete it.
+    if (!materialized) await rollbackShell('import failed before the course was confirmed');
     if (e instanceof WriteError) {
       // Surface a snippet of the server's response body — a 4xx/5xx body usually
       // says exactly what it rejected (the live diagnostic).

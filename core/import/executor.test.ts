@@ -71,6 +71,8 @@ function imageCourse(): PlanInput {
 
 const happyHandlers = {
   '/manage/api/content': () => ({ id: 'NEWCOURSE' }),
+  // Post-create materialization handshake — return a real course.
+  'GET_COURSE': () => ({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }),
   'CREATE_LESSON': () => ({ payload: { lesson: { id: 'NEWLESSON', createdAt: 't' } } }),
   'CREATE_BLOCKS': (body: unknown) => {
     const blocks = ((body as { payload: { blocks: { id: string }[] } }).payload).blocks;
@@ -292,6 +294,7 @@ describe('executePlan — block ordering (batched create)', () => {
     const createBlocksCalls: unknown[][] = [];
     const relay: Relay = async (spec) => {
       if (spec.label.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('CREATE_BLOCKS')) {
         const blocks = JSON.parse(spec.body!).payload.blocks as { id: string }[];
@@ -337,6 +340,7 @@ describe('executePlan — course cover image', () => {
     let yurlN = 0;
     const relay: Relay = async (spec) => {
       if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       // Both the cover `key` AND `crushedKey` are uploaded faithfully (verbatim
       // bytes) — no CRUSH. Distinct GET_YURL keys per upload.
       if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.jpg`, url: 'https://s3/c', type: 'image/jpeg' } }) };
@@ -394,6 +398,7 @@ describe('executePlan — typography migration', () => {
     const relay: Relay = async (spec) => {
       seen.push(spec.label);
       if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.includes('GET_YURL'))
         return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/fonts/NEW.woff', url: 'https://s3/f', type: 'font/woff', filename: 'NEW.woff' } }) };
       if (spec.label.includes('CREATE_TYPEFACE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { id: 'NEWTF' } }) };
@@ -454,6 +459,7 @@ describe('executePlan — typography migration', () => {
     const relay: Relay = async (spec) => {
       seen.push(spec.label);
       if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.endsWith('/UPDATE_COURSE')) { coverBody = JSON.parse(spec.body!).payload; return { ok: true, status: 200, text: '{}' }; }
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('CREATE_BLOCKS')) {
@@ -503,6 +509,9 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
       if (spec.url.includes('/manage/api/content')) {
         return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
       }
+      if (spec.label.includes('GET_COURSE')) {
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      }
       if (spec.label.includes('CREATE_LESSON')) {
         return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON', createdAt: 't' } } }) };
       }
@@ -518,10 +527,12 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
     return { relay, deleted };
   }
 
-  it('soft-deletes the created shell when a later write fails (G1)', async () => {
+  it('rolls back when the post-create GET_COURSE handshake fails (unconfirmed shell)', async () => {
+    // POST /content returns an id, but the handshake GET_COURSE returns no course →
+    // the shell didn't materialize → soft-delete it (the only true rollback case).
     const input = imageCourse();
     const { relay, deleted } = rollbackRelay((label) =>
-      label.includes('CREATE_LESSON') ? { ok: false, status: 403, text: 'Forbidden' } : null,
+      label.includes('GET_COURSE') ? { ok: true, status: 200, text: '{}' } : null,
     );
     const res = await executePlan(buildPlan(input), {
       input,
@@ -553,7 +564,9 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
     expect(deleted).toEqual([]);
   });
 
-  it('rolls back a content-less shell that never materialized (G2)', async () => {
+  it('KEEPS a content-less shell (a bare titleless/lessonless course is valid)', async () => {
+    // Capture-confirmed: POST /content alone is a real course. With the handshake
+    // confirming it, a lesson-less import is a success, not a rollback.
     const input: PlanInput = {
       author: 'auth0|t',
       targetFolderId: 'all',
@@ -569,10 +582,9 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
       ids: new IdMap(counterMint()),
       mintId: counterMint(),
     });
-    expect(res.ok).toBe(false);
-    expect(res.rolledBack).toBe(true);
-    expect(res.error).toMatch(/never materialized/i);
-    expect(deleted).toEqual([['NEWCOURSE']]);
+    expect(res.ok).toBe(true);
+    expect(res.rolledBack).toBeUndefined();
+    expect(deleted).toEqual([]);
   });
 
   it('does NOT roll back a materialized course (lesson created)', async () => {
@@ -638,6 +650,7 @@ describe('executePlan — lesson header image', () => {
     let yurlN = 0;
     const relay: Relay = async (spec) => {
       if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.png`, url: 'https://s3/h', type: 'image/png' } }) };
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('UPDATE_LESSON')) { lessonPayload = JSON.parse(spec.body!).payload; return { ok: true, status: 200, text: '{}' }; }
@@ -709,10 +722,11 @@ describe('executePlan — loud fail', () => {
   it('aborts on a non-ok HTTP response', async () => {
     const input = imageCourse();
     const steps = buildPlan(input);
-    const relay: Relay = async (spec) =>
-      spec.label.includes('CREATE_LESSON')
-        ? { ok: false, status: 500, text: 'boom' }
-        : { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+    const relay: Relay = async (spec) => {
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      if (spec.label.includes('CREATE_LESSON')) return { ok: false, status: 500, text: 'boom' };
+      return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+    };
     const res = await executePlan(steps, {
       input,
       relay,
@@ -762,6 +776,7 @@ describe('executePlan — draw-from-bank', () => {
       if (spec.url.includes('/manage/api/question-banks')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWBANK' }) };
       if (spec.label.includes('question_banks/')) return { ok: true, status: 200, text: JSON.stringify({ version: 1, questions: [] }) };
       if (spec.label.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('CREATE_BLOCKS')) {
         const id = JSON.parse(spec.body!).payload.blocks[0].id;
@@ -819,6 +834,7 @@ describe('executePlan — draw-from-bank', () => {
     const relay: Relay = async (spec) => {
       seen.push(spec.label);
       if (spec.label.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('CREATE_BLOCKS')) {
         const id = JSON.parse(spec.body!).payload.blocks[0].id;
@@ -882,6 +898,7 @@ describe('executePlan — draw-from-bank', () => {
       }
       if (spec.label.includes('question_banks/')) return { ok: true, status: 200, text: JSON.stringify({ version: 1 }) };
       if (spec.label.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
       if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
       if (spec.label.includes('CREATE_BLOCKS')) {
         const id = JSON.parse(spec.body!).payload.blocks[0].id;

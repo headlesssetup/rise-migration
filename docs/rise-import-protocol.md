@@ -132,23 +132,23 @@ UPDATE_COURSE {id:newCourseId, theme, …typefaceIds}   # theme LAST — needs a
 ```
 
 > **Ordering rules that matter (from the capture):**
-> 0. ⚠ **First LESSON immediately after the shell — the shell alone is a phantom.**
->    `POST /content` returns a course id, but that's only a CATALOG row; the course
->    doesn't MATERIALIZE (gain a runtime document) until the first **`CREATE_LESSON`**
->    lands. A shell that never gets one is a **"never-born"** course — `GET_COURSE`
->    404s on it, yet it **500s `content/search`** for the listing that includes it
->    (it poisoned the root folder) and can't be soft-deleted cleanly (500).
->    ⚠ **Live-confirmed (cleanup session):** the title write does NOT materialize a
->    shell — `UPDATE_COURSE` / `UPDATE_COURSE_FIELD_THROTTLE` both **404** on an
->    un-materialized course (no runtime doc to update), and `CREATE_LESSON` 404s too.
->    Only a *successful* `CREATE_LESSON` on a fresh shell creates the doc. So: emit
->    the **first lesson as the very next write after the shell**, nothing failable in
->    between; apply **title + theme AFTER** the lessons (title is best-effort and not
->    the materializer; theme needs a lesson — rule 0b). The executor makes this
->    transactional: if a run fails (or finishes) with the shell **un-materialized**,
->    it `soft-delete`s the orphan so no phantom strands in root; once materialized, a
->    failed run leaves a real, resumable, deletable course (kept, not rolled back).
->    See `core/import/executor.ts` (`rollbackShell`, `materialized`).
+> 0. ⚠ **Create is ATOMIC — then `GET_COURSE` to confirm (mirror the editor).**
+>    ✅ **Capture-confirmed** (`docs/rise-mitm-sample-new-course.md`, EU New-Course
+>    recording): a **single** `POST /manage/api/content {createBookmark:false,
+>    folderId:"all"[,type]}` creates a **fully-materialized** course — the editor opens
+>    and `GET_COURSE` returns it **200 immediately** (classic theme, a random built-in
+>    `cdn…/themes/classic/cover-image/*.jpg` cover, `title:""`, `lessons:[]`). **A bare
+>    titleless/lessonless shell is a VALID, dashboard-safe course** — there is **no**
+>    separate "materializing write". So: right after the POST, **`GET_COURSE` the new
+>    id before any write** (the editor always does); if it doesn't return a `course`,
+>    abort + `soft-delete` (the shell is broken). Title/description (`UPDATE_COURSE_FIELD_THROTTLE`)
+>    are just the editor's debounced typing; theme comes after a lesson (rule 0b).
+>    The earlier "never-born phantom" theory was **wrong about the mechanism**: a
+>    `GET_COURSE`-404 / `content/search`-500 row is a **partial delete** artifact
+>    (a soft/hard-delete that 500'd mid-op), NOT an incomplete create. We keep the
+>    post-create handshake + a `soft-delete` rollback of an *unconfirmed* shell as a
+>    cheap backstop; we do **not** build phantom-repair. See `core/import/executor.ts`
+>    (create-course handshake, `rollbackShell`).
 > 0b. ⚠ **Theme AFTER a lesson exists.** Rise rejects theming a lesson-less course
 >    ("add a lesson to your course before theming"). The original capture themed an
 >    *existing* (already-populated) course, so it shows theme-before-lessons — but
