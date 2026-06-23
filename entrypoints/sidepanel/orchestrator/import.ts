@@ -65,11 +65,21 @@ async function refreshToken(
   const tag = label ? ` (${label})` : '';
   try {
     const resp = await rpc({ type: 'REAUTH' });
-    if (resp.type === 'REAUTH_RESULT' && resp.ok) {
+    if (resp.type === 'REAUTH_RESULT') {
       const exp = resp.identity?.expiresAt
         ? new Date(resp.identity.expiresAt).toLocaleTimeString()
         : 'unknown';
-      onEvent({ kind: 'log', message: `Token refreshed${tag} — valid until ${exp}` });
+      if (resp.advanced) {
+        onEvent({ kind: 'log', message: `Token refreshed${tag} — valid until ${exp}` });
+      } else if (resp.valid) {
+        // The cookie didn't rotate but the token we hold is still good — no need.
+        onEvent({ kind: 'log', message: `Token still valid${tag} — valid until ${exp}` });
+      } else {
+        onEvent({
+          kind: 'log',
+          message: `WARN token refresh failed${tag} — open a Rise course tab to refresh the session, then retry`,
+        });
+      }
     } else {
       onEvent({ kind: 'log', message: `WARN token refresh failed${tag} — using current session cookie` });
     }
@@ -251,12 +261,26 @@ export interface ImportOptions {
   /** Recreate the source folder tree on the target + place courses into it.
    *  Default ON; deduped by name so re-runs don't spawn duplicate folders. */
   recreateFolders?: boolean;
+  /** Cooperative cancel for the Stop button. Polled between courses and (via the
+   *  executor) between paced write steps — never mid-write. */
+  shouldStop?: () => boolean;
 }
+
+/** Per-course outcome status for the run summary / outcome table. */
+export type CourseStatus =
+  | 'planned' // dry-run
+  | 'imported' // live, fully imported + (where applicable) parity-checked
+  | 'partial' // live, confirmed course but failed mid-build — resumable on re-run
+  | 'stopped' // live, halted by Stop mid-course — resumable on re-run
+  | 'failed'; // live, failed before/at confirmation (orphan shell left in place)
 
 export interface CourseImportOutcome {
   courseId: string;
   title?: string;
+  status: CourseStatus;
   report: FidelityReport;
+  /** A created-but-unconfirmed course shell left on the target (no auto-delete). */
+  orphanedCourseId?: string;
   /** Read-back parity (live runs only): GET_COURSE the new course + diff vs source. */
   parity?: ParityReport;
 }
@@ -265,6 +289,10 @@ export interface ImportRunResult {
   /** Set when the run was blocked before any write (guard failure). */
   blocked?: string;
   outcomes: CourseImportOutcome[];
+  /** True when the run was halted early by the Stop button. */
+  stopped?: boolean;
+  /** Course ids that were queued but never started (Stop pressed before them). */
+  notStarted?: string[];
 }
 
 /**
@@ -363,7 +391,15 @@ export async function runImport(
     onEvent({ kind: 'import-status', label: `Importing ${i + 1}/${numCourses}`, etaSeconds, done: false });
   };
 
+  let stopped = false;
   for (const [i, courseId] of courseIds.entries()) {
+    // Graceful Stop: honor a cancel BETWEEN courses (the cleanest break point —
+    // nothing of this course has been touched yet).
+    if (opts.shouldStop?.()) {
+      stopped = true;
+      onEvent({ kind: 'log', message: 'Stop requested — halting before the next course.' });
+      break;
+    }
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId });
     emitStatus(i, 0, 1);
 
@@ -431,6 +467,7 @@ export async function runImport(
       pace: pacedWithHeartbeat,
       log: (m) => onEvent({ kind: 'log', message: m }),
       onProgress: (done, total) => emitStatus(i, done, total),
+      shouldStop: opts.shouldStop,
     });
 
     // Place the new course into its mapped folder (the course was created at
@@ -498,31 +535,127 @@ export async function runImport(
       }
     }
 
+    const status: CourseStatus = opts.dryRun
+      ? 'planned'
+      : res.stopped
+        ? 'stopped'
+        : res.ok
+          ? 'imported'
+          : // A confirmed course that failed mid-build is kept + resumable (partial);
+            // an unconfirmed shell (orphanedCourseId set) or a pre-confirm failure is a hard failure.
+            res.newCourseId && !res.orphanedCourseId
+            ? 'partial'
+            : 'failed';
+
     outcomes.push({
       courseId,
       title: courseTitle,
+      status,
       report,
+      orphanedCourseId: res.orphanedCourseId,
       parity,
     });
-    onEvent({
-      kind: 'log',
-      message: res.ok
-        ? `${opts.dryRun ? 'Planned' : 'Imported'} "${course.course?.title ?? courseId}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`
-        : `FAILED "${course.course?.title ?? courseId}": ${res.error}${res.rolledBack ? ' (orphaned shell rolled back — nothing stranded in root)' : ''}`,
-    });
+
+    const titleStr = course.course?.title ?? courseId;
+    let msg: string;
+    if (res.stopped) {
+      msg = `STOPPED "${titleStr}" mid-course — partial, resumable on re-run (course ${res.newCourseId ?? '—'})`;
+    } else if (res.ok) {
+      msg = `${opts.dryRun ? 'Planned' : 'Imported'} "${titleStr}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`;
+    } else if (status === 'partial') {
+      msg = `PARTIAL "${titleStr}": ${res.error} — course ${res.newCourseId} kept (resumable on re-run)`;
+    } else {
+      const orphan = res.orphanedCourseId
+        ? ` (orphaned shell ${res.orphanedCourseId} left in place — delete manually if needed)`
+        : '';
+      msg = `FAILED "${titleStr}": ${res.error}${orphan}`;
+    }
+    onEvent({ kind: 'log', message: msg });
     // Break flags down by kind so the operator knows WHAT needs manual handling
     // (storyline vs orphan vs cover/header media …) without opening the report.
     if (res.flags.length) {
       onEvent({ kind: 'log', message: `  flags: ${summarizeFlags(res.flags)}` });
     }
 
+    // The executor halted this course mid-build → stop the whole run here.
+    if (res.stopped) {
+      stopped = true;
+      break;
+    }
+
     if (i < courseIds.length - 1) await pacedDelay(pacing);
   }
 
+  // Courses that were queued but never reached (Stop pressed before them).
+  const attempted = new Set(outcomes.map((o) => o.courseId));
+  const notStarted = courseIds.filter((id) => !attempted.has(id));
+
+  emitRunSummary(onEvent, outcomes, notStarted, stopped, opts.dryRun);
+
   if (!opts.dryRun) {
-    onEvent({ kind: 'import-status', label: 'Import complete', etaSeconds: null, done: true });
+    onEvent({
+      kind: 'import-status',
+      label: stopped ? 'Import stopped' : 'Import complete',
+      etaSeconds: null,
+      done: true,
+    });
   }
-  return { outcomes };
+  return {
+    outcomes,
+    stopped: stopped || undefined,
+    notStarted: notStarted.length ? notStarted : undefined,
+  };
+}
+
+/** Emit a run-level summary: counts by status + the ids needing attention or
+ *  manual cleanup (resumable partials, orphaned shells, orphaned banks, not-started). */
+function emitRunSummary(
+  onEvent: (e: ProgressEvent) => void,
+  outcomes: CourseImportOutcome[],
+  notStarted: string[],
+  stopped: boolean,
+  dryRun: boolean,
+): void {
+  const by = (s: CourseStatus): CourseImportOutcome[] => outcomes.filter((o) => o.status === s);
+  const imported = by('imported');
+  const planned = by('planned');
+  const partial = by('partial');
+  const stoppedC = by('stopped');
+  const failed = by('failed');
+
+  onEvent({ kind: 'log', message: `— Run summary${stopped ? ' (STOPPED)' : ''} —` });
+  const parts: string[] = [];
+  parts.push(dryRun ? `${planned.length} planned` : `${imported.length} imported`);
+  if (partial.length) parts.push(`${partial.length} partial`);
+  if (stoppedC.length) parts.push(`${stoppedC.length} stopped`);
+  if (failed.length) parts.push(`${failed.length} failed`);
+  if (notStarted.length) parts.push(`${notStarted.length} not started`);
+  onEvent({ kind: 'log', message: `  ${parts.join(', ')}` });
+
+  const resumable = [...partial, ...stoppedC];
+  if (resumable.length) {
+    onEvent({
+      kind: 'log',
+      message: `  resumable (re-run to continue): ${resumable.map((o) => `"${o.title ?? o.courseId}"`).join(', ')}`,
+    });
+  }
+  const orphanCourses = outcomes.filter((o) => o.orphanedCourseId);
+  if (orphanCourses.length) {
+    onEvent({
+      kind: 'log',
+      message: `  orphaned course shells left in place (delete manually if needed): ${orphanCourses.map((o) => o.orphanedCourseId).join(', ')}`,
+    });
+  }
+  const orphanBanks = outcomes.flatMap((o) =>
+    o.report.flags.filter((f) => f.kind === 'orphan-bank').map((f) => f.detail),
+  );
+  if (orphanBanks.length) {
+    onEvent({ kind: 'log', message: `  orphaned/incomplete banks left in place (delete manually if needed):` });
+    for (const d of orphanBanks) onEvent({ kind: 'log', message: `    - ${d}` });
+  }
+  if (notStarted.length) {
+    onEvent({ kind: 'log', message: `  not started: ${notStarted.length} course(s) — re-run to import` });
+  }
 }
 
 function safeJson(raw: string): unknown {
@@ -1071,12 +1204,16 @@ export interface BankImportOutcome {
   questionCount: number;
   ok: boolean;
   error?: string;
+  /** Empty bank shell left on the target (question write failed; no auto-delete). */
+  orphanedBankId?: string;
 }
 
 export interface BankImportOptions {
   dryRun: boolean;
   override?: boolean;
   pacing?: PacingConfig;
+  /** Cooperative cancel for the Stop button (polled between banks). */
+  shouldStop?: () => boolean;
 }
 
 /**
@@ -1111,7 +1248,13 @@ export async function importBanks(
   // Account-local owner (see runImport) — author of the bank lock_data.
   const author = target?.userId ?? target?.sub ?? 'unknown';
 
+  let stopped = false;
   for (const [i, bankId] of bankIds.entries()) {
+    if (opts.shouldStop?.()) {
+      stopped = true;
+      onEvent({ kind: 'log', message: 'Stop requested — halting before the next bank.' });
+      break;
+    }
     const raw = await storage.readQuestionBank(bankId);
     if (!raw) {
       onEvent({ kind: 'log', message: `Skipped bank (not in archive): ${bankId}` });
@@ -1133,6 +1276,9 @@ export async function importBanks(
     const questions = remapIds(bank.questions ?? [], ids) as Array<{ id?: string }>;
     const questionIds = questions.map((q) => String(q.id ?? '')).filter(Boolean);
 
+    // Hoisted so the catch can report a shell that was created before the
+    // question write failed (empty bank left on target — no auto-delete).
+    let createdBankId: string | undefined;
     try {
       let newBankId: string;
       if (opts.dryRun) {
@@ -1143,6 +1289,7 @@ export async function importBanks(
         if (!cresp.ok) throw new Error(`create failed (HTTP ${cresp.status})`);
         newBankId = String((safeJson(cresp.text) as { id?: string } | null)?.id ?? '');
         if (!newBankId) throw new Error('create returned no id');
+        createdBankId = newBankId; // the shell now exists on the target
 
         await pacedDelay(pacing);
         const presp = await relayThroughTab(
@@ -1159,13 +1306,40 @@ export async function importBanks(
       outcomes.push({ sourceBankId: bankId, title, newBankId, questionCount: qCount, ok: true });
       onEvent({ kind: 'log', message: `  ${opts.dryRun ? 'planned' : 'OK'} → bank ${newBankId}` });
     } catch (e) {
-      outcomes.push({ sourceBankId: bankId, title, questionCount: qCount, ok: false, error: (e as Error).message });
-      onEvent({ kind: 'log', message: `  FAILED: ${(e as Error).message}` });
+      const orphanNote = createdBankId
+        ? ` — empty bank ${createdBankId} left on target (delete manually if needed)`
+        : '';
+      outcomes.push({
+        sourceBankId: bankId,
+        title,
+        questionCount: qCount,
+        ok: false,
+        error: (e as Error).message,
+        orphanedBankId: createdBankId,
+      });
+      onEvent({ kind: 'log', message: `  FAILED: ${(e as Error).message}${orphanNote}` });
     }
     if (i < bankIds.length - 1) await pacedDelay(pacing);
   }
 
   // Persist the merged map (skip in dry-run so a preview never alters state).
   if (!opts.dryRun) await writeBankIdMap(storage, bound);
+
+  // Banks summary: ok/failed counts + ids needing manual cleanup / re-run.
+  const attempted = new Set(outcomes.map((o) => o.sourceBankId));
+  const notStarted = bankIds.filter((id) => !attempted.has(id));
+  const orphaned = outcomes.map((o) => o.orphanedBankId).filter((x): x is string => !!x);
+  const okN = outcomes.filter((o) => o.ok).length;
+  const failN = outcomes.filter((o) => !o.ok).length;
+  onEvent({
+    kind: 'log',
+    message: `— Banks summary${stopped ? ' (STOPPED)' : ''} — ${okN} ${opts.dryRun ? 'planned' : 'ok'}, ${failN} failed${notStarted.length ? `, ${notStarted.length} not started` : ''}`,
+  });
+  if (orphaned.length) {
+    onEvent({
+      kind: 'log',
+      message: `  empty banks left in place (delete manually if needed): ${orphaned.join(', ')}`,
+    });
+  }
   return { outcomes };
 }

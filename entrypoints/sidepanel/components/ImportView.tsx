@@ -7,7 +7,7 @@
 //   C) courses (selectable, filterable)
 // The archive stays read-only; outputs land under _import/.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   checkSourceNotTarget,
   describeTarget,
@@ -52,6 +52,27 @@ export function ImportView({
   const [confirmTarget, setConfirmTarget] = useState(false);
   const [override, setOverride] = useState(false);
   const [running, setRunning] = useState(false);
+
+  // Graceful Stop: a ref (read synchronously by the orchestrator's shouldStop)
+  // plus a state mirror so the Stop button can show "Stopping…". `reset()` is
+  // called by each run() at start; `request()` flips it when Stop is pressed.
+  const stopFlag = useRef(false);
+  const [stopRequested, setStopRequested] = useState(false);
+  const stop: StopController = useMemo(
+    () => ({
+      shouldStop: () => stopFlag.current,
+      request: () => {
+        stopFlag.current = true;
+        setStopRequested(true);
+      },
+      reset: () => {
+        stopFlag.current = false;
+        setStopRequested(false);
+      },
+      requested: stopRequested,
+    }),
+    [stopRequested],
+  );
 
   const target: AccountIdentity | undefined = useMemo(
     () =>
@@ -152,6 +173,7 @@ export function ImportView({
         running={running}
         setRunning={setRunning}
         onEvent={onEvent}
+        stop={stop}
       />
       <BanksSection
         storage={storage}
@@ -161,6 +183,7 @@ export function ImportView({
         running={running}
         setRunning={setRunning}
         onEvent={onEvent}
+        stop={stop}
       />
       <CoursesSection
         storage={storage}
@@ -170,9 +193,22 @@ export function ImportView({
         running={running}
         setRunning={setRunning}
         onEvent={onEvent}
+        stop={stop}
       />
     </section>
   );
+}
+
+/** Cooperative-cancel controller for the Stop button, shared by the sections. */
+interface StopController {
+  /** Read synchronously by the orchestrator between courses/banks/steps. */
+  shouldStop: () => boolean;
+  /** Flip the flag (Stop pressed) — the run halts at the next safe checkpoint. */
+  request: () => void;
+  /** Clear the flag at the start of a fresh run. */
+  reset: () => void;
+  /** True once Stop has been pressed for the current run (for the button label). */
+  requested: boolean;
 }
 
 interface SectionProps {
@@ -183,6 +219,7 @@ interface SectionProps {
   running: boolean;
   setRunning: (b: boolean) => void;
   onEvent: (e: ProgressEvent) => void;
+  stop: StopController;
 }
 
 const STEP_STYLE: React.CSSProperties = {
@@ -322,6 +359,7 @@ function BanksSection({
   running,
   setRunning,
   onEvent,
+  stop,
 }: SectionProps) {
   const [banks, setBanks] = useState<LocalBank[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -345,16 +383,23 @@ function BanksSection({
   const run = useCallback(
     async (dryRun: boolean) => {
       if (!storage) return;
+      stop.reset();
       setRunning(true);
       setOutcomes([]);
       try {
-        const res = await importBanks(storage, target, [...selected], { dryRun, override }, onEvent);
+        const res = await importBanks(
+          storage,
+          target,
+          [...selected],
+          { dryRun, override, shouldStop: stop.shouldStop },
+          onEvent,
+        );
         setOutcomes(res.outcomes);
       } finally {
         setRunning(false);
       }
     },
-    [storage, target, override, selected, onEvent, setRunning],
+    [storage, target, override, selected, onEvent, setRunning, stop],
   );
 
   return (
@@ -401,6 +446,11 @@ function BanksSection({
             >
               Import banks →
             </button>
+            {running && (
+              <button onClick={stop.request} disabled={stop.requested}>
+                {stop.requested ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
           </div>
           {outcomes.length > 0 && (
             <p className="hint">
@@ -423,6 +473,7 @@ function CoursesSection({
   running,
   setRunning,
   onEvent,
+  stop,
 }: SectionProps) {
   const [courses, setCourses] = useState<ArchiveCourse[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -466,6 +517,7 @@ function CoursesSection({
   const run = useCallback(
     async (dryRun: boolean) => {
       if (!storage) return;
+      stop.reset();
       setRunning(true);
       setBlocked(null);
       setOutcomes([]);
@@ -474,7 +526,7 @@ function CoursesSection({
           storage,
           [...selected],
           target,
-          { dryRun, override },
+          { dryRun, override, shouldStop: stop.shouldStop },
           onEvent,
         );
         if (res.blocked) setBlocked(res.blocked);
@@ -483,7 +535,7 @@ function CoursesSection({
         setRunning(false);
       }
     },
-    [storage, target, override, selected, onEvent, setRunning],
+    [storage, target, override, selected, onEvent, setRunning, stop],
   );
 
   return (
@@ -527,6 +579,11 @@ function CoursesSection({
             >
               Import courses →
             </button>
+            {running && (
+              <button onClick={stop.request} disabled={stop.requested}>
+                {stop.requested ? 'Stopping…' : 'Stop'}
+              </button>
+            )}
           </div>
         </>
       )}
@@ -629,11 +686,22 @@ function OutcomeTable({ outcomes }: { outcomes: CourseImportOutcome[] }) {
         </tr>
       </thead>
       <tbody>
-        {outcomes.map((o) => (
+        {outcomes.map((o) => {
+          // imported/planned neutral; partial+stopped are resumable (amber); failed red.
+          const color =
+            o.status === 'failed'
+              ? '#b00'
+              : o.status === 'partial' || o.status === 'stopped'
+                ? '#b67400'
+                : undefined;
+          const orphanNote = o.orphanedCourseId
+            ? `orphaned shell left in place: ${o.orphanedCourseId}`
+            : undefined;
+          return (
           <tr key={o.courseId}>
             <td>{o.title ?? o.courseId}</td>
-            <td style={{ color: o.report.ok ? undefined : '#b00', fontWeight: 600 }}>
-              {o.report.dryRun ? 'planned' : o.report.ok ? 'imported' : 'FAILED'}
+            <td style={{ color, fontWeight: 600 }} title={orphanNote}>
+              {o.status}
             </td>
             <td>{o.report.planned.lessons}</td>
             <td>{o.report.planned.blocks}</td>
@@ -652,7 +720,8 @@ function OutcomeTable({ outcomes }: { outcomes: CourseImportOutcome[] }) {
               {o.parity ? (o.parity.ok ? '✓' : `${o.parity.issues.length} diff`) : '—'}
             </td>
           </tr>
-        ))}
+          );
+        })}
       </tbody>
     </table>
   );

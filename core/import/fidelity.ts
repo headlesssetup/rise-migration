@@ -22,6 +22,10 @@ export interface FidelityReport {
   survivingSourceKeys: string[];
   /** Size of the old→new id map (resumable job log). */
   idMappings: number;
+  /** The run was halted by the Stop button mid-course (partial — resumable). */
+  stopped?: boolean;
+  /** A created-but-unconfirmed course shell left on the target (no auto-delete). */
+  orphanedCourseId?: string;
   error?: string;
 }
 
@@ -43,8 +47,22 @@ export function buildFidelityReport(
     flags: result.flags,
     survivingSourceKeys: result.survivingKeys,
     idMappings: Object.keys(result.idMap).length,
+    stopped: result.stopped,
+    orphanedCourseId: result.orphanedCourseId,
     error: result.error,
   };
+}
+
+/** The report's human-facing status, distinguishing partial/stopped (both
+ *  resumable, course kept) from a hard failure (orphan shell left in place). */
+export function fidelityStatus(
+  r: FidelityReport,
+): 'DRY RUN' | 'OK' | 'PARTIAL' | 'STOPPED' | 'FAILED' {
+  if (r.dryRun) return 'DRY RUN';
+  if (r.ok) return 'OK';
+  if (r.stopped) return 'STOPPED';
+  if (r.newCourseId && !r.orphanedCourseId) return 'PARTIAL';
+  return 'FAILED';
 }
 
 export function fidelityReportToJson(r: FidelityReport): string {
@@ -57,9 +75,14 @@ export function fidelityReportToMarkdown(r: FidelityReport): string {
   lines.push(`# Import fidelity report${r.title ? ` — ${r.title}` : ''}${r.dryRun ? ' (DRY RUN)' : ''}`);
   lines.push('');
   if (r.title) lines.push(`- Course: **${r.title}**`);
-  lines.push(`- Status: **${r.ok ? 'OK' : 'FAILED'}**${r.error ? ` — ${r.error}` : ''}`);
+  const status = fidelityStatus(r);
+  const resumable = status === 'PARTIAL' || status === 'STOPPED';
+  lines.push(`- Status: **${status}**${resumable ? ' — resumable, re-run to continue' : ''}${r.error ? ` — ${r.error}` : ''}`);
   if (r.sourceCourseId) lines.push(`- Source course: \`${r.sourceCourseId}\``);
   if (r.newCourseId) lines.push(`- Target course: \`${r.newCourseId}\``);
+  if (r.orphanedCourseId) {
+    lines.push(`- Orphaned shell left in place (delete manually if needed): \`${r.orphanedCourseId}\``);
+  }
   lines.push(`- Lessons: ${r.planned.lessons} · Blocks: ${r.planned.blocks} · ` +
     `Banks: ${r.planned.banks} · Uploads: ${r.planned.uploads} · ` +
     `Draw-from-bank: ${r.planned.drawFromBank}`);

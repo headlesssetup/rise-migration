@@ -527,9 +527,10 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
     return { relay, deleted };
   }
 
-  it('rolls back when the post-create GET_COURSE handshake fails (unconfirmed shell)', async () => {
+  it('REPORTS (does not delete) an unconfirmed shell — no auto-delete', async () => {
     // POST /content returns an id, but the handshake GET_COURSE returns no course →
-    // the shell didn't materialize → soft-delete it (the only true rollback case).
+    // the shell didn't materialize. Automatic deletion is disabled (operator
+    // decision): leave it in place and report orphanedCourseId for manual cleanup.
     const input = imageCourse();
     const { relay, deleted } = rollbackRelay((label) =>
       label.includes('GET_COURSE') ? { ok: true, status: 200, text: '{}' } : null,
@@ -542,8 +543,9 @@ describe('executePlan — transactional rollback (no phantom in root)', () => {
       mintId: counterMint(),
     });
     expect(res.ok).toBe(false);
-    expect(res.rolledBack).toBe(true);
-    expect(deleted).toEqual([['NEWCOURSE']]);
+    expect(res.rolledBack).toBe(false);
+    expect(res.orphanedCourseId).toBe('NEWCOURSE');
+    expect(deleted).toEqual([]); // nothing is auto-deleted
   });
 
   it('does NOT roll back once the course has materialized (partial import kept)', async () => {
@@ -921,5 +923,95 @@ describe('executePlan — draw-from-bank', () => {
     const res = await executePlan(steps, { input, relay, readAsset: async () => null, ids: new IdMap(counterMint()), mintId: counterMint() });
     expect(res.ok).toBe(false);
     expect(res.error).toContain('folder not found'); // body snippet surfaced
+  });
+
+  it('flags an orphan-bank when the question PUT fails — and never auto-deletes', async () => {
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      recreateBanks: true,
+      assets: [],
+      banksById: new Map([
+        ['bank1', { id: 'bank1', title: 'Bank', questions: [{ id: 'q1aaaaaaaaaaaaaaaaaaaaaaa', answers: [] }] }],
+      ]),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: [
+              {
+                id: 'cb1aaaaaaaaaaaaaaaaaaaaaa',
+                family: 'knowledgeCheck',
+                variant: 'draw from question bank',
+                items: [{ id: 'ci1aaaaaaaaaaaaaaaaaaaaaa', type: 'DRAW_FROM_QUESTION_BANK', questionBankId: 'bank1', drawCount: 2 }],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const urls: string[] = [];
+    const relay: Relay = async (spec) => {
+      urls.push(spec.url);
+      // Bank shell creates fine, but the question PUT fails (e.g. stale token).
+      if (spec.url.includes('/manage/api/question-banks')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWBANK' }) };
+      if (spec.label.includes('question_banks/')) return { ok: false, status: 401, text: 'Unauthorized' };
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.flags.some((f) => f.kind === 'orphan-bank')).toBe(true);
+    // The empty bank is left in place — nothing is auto-deleted.
+    expect(urls.some((u) => u.includes('/content/soft-delete'))).toBe(false);
+    expect(urls.some((u) => u.includes('question-banks') && u.includes('DELETE'))).toBe(false);
+  });
+});
+
+describe('executePlan — graceful stop', () => {
+  it('stops cleanly between steps, keeps the partial course (no rollback) + returns the resume map', async () => {
+    const input = imageCourse();
+    const { relay, calls } = mockRelay(happyHandlers);
+    let checks = 0;
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+      // Let the course shell (step 1) get created, then stop at the 4th step.
+      shouldStop: () => ++checks > 3,
+    });
+    expect(res.stopped).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.newCourseId).toBe('NEWCOURSE'); // shell created before the stop
+    expect(Object.keys(res.idMap).length).toBeGreaterThan(0); // resumable job log
+    expect(res.orphanedCourseId).toBeUndefined(); // kept (resumable), not orphaned
+    expect(calls.some((c) => c.url.includes('/content/soft-delete'))).toBe(false);
+  });
+
+  it('stops before the first step without creating anything', async () => {
+    const input = imageCourse();
+    const { relay, calls } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+      shouldStop: () => true,
+    });
+    expect(res.stopped).toBe(true);
+    expect(res.newCourseId).toBeUndefined();
+    expect(calls.length).toBe(0); // nothing was sent
   });
 });

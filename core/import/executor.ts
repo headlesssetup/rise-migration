@@ -82,6 +82,11 @@ export interface ExecutorDeps {
    *  before any write even under replication lag. */
   courseHandshakeTries?: number;
   onProgress?: (done: number, total: number) => void;
+  /** Cooperative cancel: checked at the top of each step (after the in-flight
+   *  write fully finished — never mid-write). When it returns true the executor
+   *  stops issuing further steps and returns cleanly with `stopped: true` and the
+   *  partial id-map, so the course stays resumable (no rollback). */
+  shouldStop?: () => boolean;
 }
 
 export interface ManualFlag {
@@ -91,6 +96,7 @@ export interface ManualFlag {
     | 'orphan-media'
     | 'unsupported-media'
     | 'missing-bank-ref'
+    | 'orphan-bank'
     | 'title'
     | 'typeface';
   sourceBlockId?: string;
@@ -119,10 +125,17 @@ export interface ExecResult {
   idMap: Record<string, string>;
   /** New course id once the shell is created. */
   newCourseId?: string;
-  /** Set when a created shell was soft-deleted (transactional rollback) because
-   *  the import failed or the course never materialized — so a never-born phantom
-   *  never strands in the root folder. */
+  /** Always false now — automatic deletion is disabled (operator decision: no
+   *  delete actions fire automatically until deletion is better researched).
+   *  Retained for back-compat with readers that inspect it. */
   rolledBack?: boolean;
+  /** A created course shell that was left in place (NOT deleted) because the
+   *  import failed before the GET_COURSE handshake confirmed it. Reported so the
+   *  operator can delete it manually if they choose. */
+  orphanedCourseId?: string;
+  /** Set when the run was cooperatively stopped (Stop button) mid-course. The
+   *  partial course is kept and is resumable via the persisted job log. */
+  stopped?: boolean;
   /** Surviving source media keys (must be empty on success). */
   survivingKeys: string[];
   error?: string;
@@ -243,22 +256,16 @@ export async function executePlan(
     return parseJson(r.text);
   }
 
-  // Transactional cleanup: soft-delete a created shell whose import failed or
-  // never materialized, so a never-born phantom never strands in the root folder
-  // (it 500s the dashboard's content/search). Best-effort + status-agnostic — the
-  // manage/api soft-delete is cookie-authed (lands even when the failure was a
-  // stale-bearer 403) and takes effect even when it answers 500 on a shell with no
-  // runtime doc. Never throws (rollback must not mask the original failure).
-  async function rollbackShell(why: string): Promise<void> {
+  // Report (do NOT delete) a created shell whose import failed before the
+  // GET_COURSE handshake confirmed it. Automatic deletion is intentionally
+  // disabled (operator decision: no delete actions fire automatically until
+  // deletion is better researched) — the orphaned shell is left in place and
+  // surfaced so the operator can remove it manually if they choose. Never throws.
+  function reportOrphanShell(why: string): void {
     if (dryRun || !newCourseId) return;
-    try {
-      await pace();
-      await deps.relay(env.softDeleteContent([newCourseId]));
-      result.rolledBack = true;
-      log(`Rolled back orphaned course ${newCourseId} (${why})`);
-    } catch (re) {
-      log(`WARN rollback soft-delete failed for ${newCourseId}: ${(re as Error).message}`);
-    }
+    result.orphanedCourseId = newCourseId;
+    result.rolledBack = false;
+    log(`Orphaned course ${newCourseId} left in place (no auto-delete — ${why}); delete manually if needed`);
   }
 
   // Upload one source asset (block OR lesson media) via the faithful chain:
@@ -314,6 +321,15 @@ export async function executePlan(
   try {
     let done = 0;
     for (const step of steps) {
+      // Cooperative stop checkpoint: only BETWEEN steps (the previous write has
+      // fully finished), so we never abandon a half-sent write. The partial
+      // course is kept + resumable via the job log — no rollback.
+      if (deps.shouldStop?.()) {
+        result.stopped = true;
+        result.idMap = ids.toJSON();
+        log(`Stopped before step ${stepIdx + 1}/${total} — partial course kept (resumable on re-run)`);
+        return result;
+      }
       stepIdx++;
       switch (step.kind) {
         case 'create-bank': {
@@ -341,16 +357,32 @@ export async function executePlan(
           const newBankId = ids.get(step.sourceBankId);
           if (!newBankId) throw new WriteError('put-bank before create-bank', step.kind);
           const questions = remapIds(bank?.questions ?? [], ids);
-          const resp = await send(
-            env.putBank({
-              bankId: newBankId,
-              questions: questions as unknown[],
-              session: mint(),
-              lockData: authorProfile(author),
-            }),
-            step.kind,
-          );
+          let resp: Record<string, unknown>;
+          try {
+            resp = await send(
+              env.putBank({
+                bankId: newBankId,
+                questions: questions as unknown[],
+                session: mint(),
+                lockData: authorProfile(author),
+              }),
+              step.kind,
+            );
+          } catch (e) {
+            // The bank shell was created (create-bank) but the questions write
+            // failed → an empty bank is left on the target. Record it (no delete)
+            // so the report lists it for manual cleanup, then fail the course.
+            result.flags.push({
+              kind: 'orphan-bank',
+              detail: `Empty question bank ${newBankId} left on target (question write failed) — delete manually if needed`,
+            });
+            throw e;
+          }
           if (!dryRun && resp.version === undefined && resp.questions === undefined) {
+            result.flags.push({
+              kind: 'orphan-bank',
+              detail: `Question bank ${newBankId} may be incomplete (PUT did not echo a saved bank) — verify/delete manually`,
+            });
             throw new WriteError('Bank PUT did not echo a saved bank', step.kind, JSON.stringify(resp));
           }
           break;
@@ -717,10 +749,10 @@ export async function executePlan(
     // fires. If somehow a course id exists without that confirmation, treat the
     // shell as suspect and roll it back rather than report a hollow success.
     if (!dryRun && newCourseId && !materialized) {
-      await rollbackShell('course never confirmed by the GET_COURSE handshake');
+      reportOrphanShell('course never confirmed by the GET_COURSE handshake');
       result.ok = false;
       result.error =
-        'Course shell was not confirmed by the post-create GET_COURSE handshake — rolled back';
+        'Course shell was not confirmed by the post-create GET_COURSE handshake — left in place (delete manually if needed)';
       result.idMap = ids.toJSON();
       return result;
     }
@@ -752,12 +784,12 @@ export async function executePlan(
   } catch (e) {
     result.ok = false;
     result.idMap = ids.toJSON();
-    // Roll back ONLY a shell the GET_COURSE handshake never confirmed. Once
-    // confirmed, the course is real, queryable and deletable (a bare titleless/
-    // lessonless shell is a VALID Rise course — capture-confirmed), so a later
-    // failure leaves a real, resumable course we keep rather than discard. An
-    // unconfirmed shell is the suspect state → soft-delete it.
-    if (!materialized) await rollbackShell('import failed before the course was confirmed');
+    // Report (do NOT delete) ONLY a shell the GET_COURSE handshake never
+    // confirmed. Once confirmed, the course is real, queryable and resumable (a
+    // bare titleless/lessonless shell is a VALID Rise course — capture-confirmed),
+    // so a later failure leaves a real, resumable course we keep. An unconfirmed
+    // shell is the suspect state → report it (left in place; no auto-delete).
+    if (!materialized) reportOrphanShell('import failed before the course was confirmed');
     if (e instanceof WriteError) {
       // Surface a snippet of the server's response body — a 4xx/5xx body usually
       // says exactly what it rejected (the live diagnostic).

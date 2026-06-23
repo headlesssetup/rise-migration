@@ -70,7 +70,14 @@ export type BackgroundResponse =
       result: FetchResult<{ raw: string; doc: unknown }>;
     }
   | { type: 'WRITE_RESULT'; result: WriteRelayResult }
-  | { type: 'REAUTH_RESULT'; ok: boolean; identity: Identity | null };
+  | {
+      type: 'REAUTH_RESULT';
+      // `advanced`: the token's `exp` actually moved forward (a real rotation).
+      // `valid`: we currently hold a non-expired token (rotated or not).
+      advanced: boolean;
+      valid: boolean;
+      identity: Identity | null;
+    };
 
 /** Raw outcome of a single relayed write (the executor's Relay consumes this). */
 export interface WriteRelayResult {

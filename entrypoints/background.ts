@@ -166,7 +166,8 @@ export default defineBackground(() => {
   // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
   // the access token Rise sends as `Authorization: Bearer`. This needs no course
   // navigation and no page reload: the Cookies API reads it (even httpOnly) for
-  // the live tab's plane. Returns true if a JWT-shaped value was captured.
+  // the live tab's plane. Returns true ONLY if a NEW (rotated) JWT was captured —
+  // re-reading the same stale cookie is not a refresh and must not read as one.
   async function grabTokenFromCookie(): Promise<boolean> {
     const tab = await findRiseTab();
     const url = tab?.url;
@@ -176,8 +177,9 @@ export default defineBackground(() => {
       const value = c?.value?.trim();
       // A JWT has three dot-separated segments; guard against a stray cookie.
       if (value && value.split('.').length === 3) {
+        const changed = value !== token;
         setToken(value);
-        return true;
+        return changed;
       }
     } catch {
       /* cookies permission/host missing — fall back to the reload path */
@@ -253,8 +255,9 @@ export default defineBackground(() => {
     const r = await relayFetch(spec);
 
     // An expired bearer reads back as 401 OR 403 (the authoring endpoints answer
-    // 403 "Forbidden") — re-auth (refresh + re-grab the cookie) and retry once.
-    if ((r.status === 401 || r.status === 403) && attempt === 0 && (await reauth())) {
+    // 403 "Forbidden") — re-auth and retry once, but ONLY if the token actually
+    // advanced; retrying with the same stale token just 403s again.
+    if ((r.status === 401 || r.status === 403) && attempt === 0 && (await reauth()).advanced) {
       return rawFetch(spec, 1);
     }
     if (r.status === 401 || r.status === 403) {
@@ -283,38 +286,65 @@ export default defineBackground(() => {
     if (tokenExpiringSoon() && Date.now() - lastReauthMs > 30_000) await reauth();
     let r = await relayFetch(spec);
     // Reactive: Rise returns 401 OR 403 on an expired/invalid bearer — re-auth
-    // (refresh + re-grab the rotated cookie) and retry once.
-    if ((r.status === 401 || r.status === 403) && (await reauth())) {
+    // and retry once, but ONLY if the token actually advanced (a non-rotating
+    // refresh would just 403 again on the retry).
+    if ((r.status === 401 || r.status === 403) && (await reauth()).advanced) {
       r = await relayFetch(spec);
     }
     return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
   }
 
-  // Best-effort refresh (rides the id.articulate.com session cookie). The fresh
-  // bearer is re-captured by the webRequest observer from subsequent page
-  // traffic; this just nudges the session. Mechanics confirmed at runtime.
+  // Nudge a real token rotation the way the editor does: run the refresh POST
+  // INSIDE the Rise tab (first-party context), with the live session cookies and
+  // NO bearer header — exactly as Rise's own editor does. The rotated
+  // `_articulate_rise_` then lands in the page's cookie jar for grabTokenFromCookie
+  // to pick up. Two details matter:
+  //   - credentials:'include' so the id.articulate.com session cookie rides along
+  //     (run from the service-worker origin it is withheld cross-site — the bug);
+  //   - NO Authorization header — a bearer would force a CORS preflight to
+  //     id.articulate.com that the editor never triggers (relayFetch couples a
+  //     bearer with cookies and `noAuth` drops cookies, so we can't use it here).
   async function tryRefresh(): Promise<boolean> {
+    const tab = await findRiseTab();
+    if (!tab || typeof tab.id !== 'number') return false;
     try {
-      const res = await fetch(REFRESH_URL, {
-        method: 'POST',
-        credentials: 'include',
+      const [inj] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'ISOLATED',
+        func: async (url: string): Promise<boolean> => {
+          try {
+            const res = await fetch(url, { method: 'POST', credentials: 'include' });
+            return res.ok;
+          } catch {
+            return false;
+          }
+        },
+        args: [REFRESH_URL],
       });
-      return res.ok;
+      return Boolean(inj?.result);
     } catch {
       return false;
     }
   }
 
-  // Re-establish a fresh bearer mid-import: nudge the id.articulate.com session,
-  // THEN re-read the rotated `_articulate_rise_` cookie (during an import there's
-  // no page traffic for the webRequest observer to catch, so we must pull it
-  // ourselves). Throttled so a doomed token can't spam the refresh endpoint.
+  // Re-establish a fresh bearer mid-import: refresh in-tab, THEN re-read the
+  // rotated `_articulate_rise_` cookie (during an import there's no page traffic
+  // for the webRequest observer to catch, so we must pull it ourselves).
+  // Reports honestly: `advanced` is true ONLY when the token's `exp` actually
+  // moved forward — a "refresh" that doesn't advance `exp` is a no-op, and
+  // retrying a write with it just 403s again. `valid` means we currently hold a
+  // non-expired token (whether or not this call rotated it). Throttled by the
+  // callers so a doomed token can't spam the refresh endpoint.
   let lastReauthMs = 0;
-  async function reauth(): Promise<boolean> {
+  async function reauth(): Promise<{ advanced: boolean; valid: boolean }> {
     lastReauthMs = Date.now();
-    const refreshed = await tryRefresh();
-    const regrabbed = await grabTokenFromCookie();
-    return refreshed || regrabbed;
+    const before = identity?.expiresAt ?? 0;
+    await tryRefresh();
+    await grabTokenFromCookie();
+    const after = identity?.expiresAt ?? 0;
+    const advanced = after > before;
+    const valid = identity?.expiresAt !== undefined && identity.expiresAt > Date.now();
+    return { advanced, valid };
   }
 
   // The held bearer is short-lived (~15 min). On a long import it expires
@@ -520,8 +550,10 @@ export default defineBackground(() => {
 
       case 'REAUTH': {
         // Force a fresh bearer on demand (panel calls this before each course).
-        const ok = await reauth();
-        return { type: 'REAUTH_RESULT', ok, identity };
+        // Report whether the token actually advanced vs is merely still valid so
+        // the panel can log honestly instead of claiming a refresh that no-op'd.
+        const { advanced, valid } = await reauth();
+        return { type: 'REAUTH_RESULT', advanced, valid, identity };
       }
     }
   }
