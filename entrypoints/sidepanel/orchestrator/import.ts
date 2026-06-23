@@ -8,13 +8,15 @@ import {
   buildPlan,
   executePlan,
   buildFidelityReport,
-  fidelityReportToJson,
-  fidelityReportToMarkdown,
+  buildBlockIndex,
+  resolveManualWork,
+  buildCourseReportMarkdown,
+  buildCourseReportJson,
+  buildRunCsv,
   checkSourceNotTarget,
   IdMap,
   findBankRef,
   verifyParity,
-  parityReportToMarkdown,
   summarizeFlags,
   parseTypefaces,
   resolveTypefaces,
@@ -39,6 +41,7 @@ import {
   type AccountIdentity,
   type FidelityReport,
   type ParityReport,
+  type RunCsvCourse,
   type Relay,
   type RelayResponse,
   type WriteSpec,
@@ -310,6 +313,8 @@ export async function runImport(
 ): Promise<ImportRunResult> {
   const pacing = opts.pacing ?? DEFAULT_PACING;
   const outcomes: CourseImportOutcome[] = [];
+  // Rows for the single run-level CSV (one file for the whole run), built per course.
+  const csvCourses: RunCsvCourse[] = [];
 
   // Safe-import gate: never write into the source account (unless overridden).
   const source = await readSourceIdentity(storage);
@@ -436,13 +441,26 @@ export async function runImport(
     };
     const steps = buildPlan(input);
 
-    // Resume: rehydrate a prior job log so a retry never double-creates.
-    const priorLog = await storage.readImportArtifact(`${courseId}.joblog.json`);
+    // Resume: rehydrate the prior id map so a retry never double-creates. The id
+    // map now lives nested in the consolidated report.json (`.idMap`); fall back
+    // to the legacy standalone joblog.json for migrations started before that.
     let ids = new IdMap();
-    if (priorLog) {
-      const parsed = JSON.parse(priorLog) as Record<string, string>;
-      delete parsed._courseTitle; // informational header only — not an id mapping
-      ids = IdMap.fromJSON(parsed);
+    const priorReport = await storage.readImportArtifact(`${courseId}.report.json`);
+    if (priorReport) {
+      try {
+        const parsed = JSON.parse(priorReport) as { idMap?: Record<string, string> };
+        if (parsed.idMap) ids = IdMap.fromJSON(parsed.idMap);
+      } catch {
+        /* corrupt report — start fresh */
+      }
+    }
+    if (ids.size === 0) {
+      const priorLog = await storage.readImportArtifact(`${courseId}.joblog.json`);
+      if (priorLog) {
+        const parsed = JSON.parse(priorLog) as Record<string, string>;
+        delete parsed._courseTitle; // informational header only — not an id mapping
+        ids = IdMap.fromJSON(parsed);
+      }
     }
 
     const readAsset = async (sourceKey: string) => {
@@ -492,24 +510,10 @@ export async function runImport(
     }
 
     const report = buildFidelityReport(steps, res, courseId, courseTitle);
-    // Persist outputs (never into the read-only archive dirs).
-    await storage.writeImportArtifact(
-      `${courseId}.report.md`,
-      fidelityReportToMarkdown(report),
-    );
-    await storage.writeImportArtifact(
-      `${courseId}.report.json`,
-      fidelityReportToJson(report),
-    );
-    await storage.writeImportArtifact(
-      `${courseId}.joblog.json`,
-      // Lead with a human-readable name so even the id-map file says which course
-      // it is; the resume reader above strips `_courseTitle` before rehydrating.
-      JSON.stringify({ _courseTitle: courseTitle ?? courseId, ...res.idMap }, null, 2),
-    );
 
     // Read-back parity (live, successful runs only): paced GET_COURSE of the new
     // course → structural diff vs the archived source. The true round-trip check.
+    // Done BEFORE persisting so it folds into the consolidated report.
     let parity: ParityReport | undefined;
     if (!opts.dryRun && res.ok && res.newCourseId) {
       await pacedDelay(pacing);
@@ -517,24 +521,32 @@ export async function runImport(
       const rb = await rpc({ type: 'GET_COURSE', courseId: res.newCourseId });
       if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
         parity = verifyParity(course, rb.result.data.doc, res.flags);
-        await storage.writeImportArtifact(
-          `${courseId}.parity.md`,
-          parityReportToMarkdown(parity, {
-            title: courseTitle,
-            sourceCourseId: courseId,
-            newCourseId: res.newCourseId,
-          }),
-        );
         onEvent({
           kind: 'log',
           message: parity.ok
             ? `Parity OK — ${parity.blocks.compared} block(s) match (${parity.expectedDivergences.length} expected divergence(s))`
-            : `Parity DIVERGENCES — ${parity.issues.length} unexpected (see ${courseId}.parity.md)`,
+            : `Parity DIVERGENCES — ${parity.issues.length} unexpected (see ${courseId}.report.md)`,
         });
       } else {
         onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
       }
     }
+
+    // Resolve every manual-handling flag to a real location (course/lesson/block
+    // names + sequence numbers) and persist TWO consolidated files per course:
+    //   .report.md   — brief, human, issue-focused (report + parity + manual work)
+    //   .report.json — machine-readable (report + parity + manual work + id map)
+    // (Replaces the old 4-file layout: report.md/json + joblog.json + parity.md.)
+    const blockIndex = buildBlockIndex(course);
+    const manual = resolveManualWork(res.flags, blockIndex);
+    await storage.writeImportArtifact(
+      `${courseId}.report.md`,
+      buildCourseReportMarkdown({ report, parity, manual }),
+    );
+    await storage.writeImportArtifact(
+      `${courseId}.report.json`,
+      buildCourseReportJson({ report, parity, manual, idMap: res.idMap }),
+    );
 
     const status: CourseStatus = opts.dryRun
       ? 'planned'
@@ -555,6 +567,13 @@ export async function runImport(
       report,
       orphanedCourseId: res.orphanedCourseId,
       parity,
+    });
+    csvCourses.push({
+      title: courseTitle,
+      courseId,
+      targetCourseId: res.newCourseId,
+      status,
+      manual,
     });
 
     const titleStr = course.course?.title ?? courseId;
@@ -590,6 +609,15 @@ export async function runImport(
   // Courses that were queued but never reached (Stop pressed before them).
   const attempted = new Set(outcomes.map((o) => o.courseId));
   const notStarted = courseIds.filter((id) => !attempted.has(id));
+
+  // One CSV for the whole run: every course + the manual work remaining, with
+  // human locations (course/lesson/block names + numbers). Not-started courses
+  // are listed too so nothing is silently dropped.
+  for (const id of notStarted) {
+    csvCourses.push({ courseId: id, status: 'not-started', manual: [] });
+  }
+  await storage.writeImportArtifact('import-summary.csv', buildRunCsv(csvCourses));
+  onEvent({ kind: 'log', message: 'Wrote run summary → import-summary.csv' });
 
   emitRunSummary(onEvent, outcomes, notStarted, stopped, opts.dryRun);
 
