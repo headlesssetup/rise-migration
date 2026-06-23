@@ -162,9 +162,15 @@ is the same `GET_YURL → S3 PUT → CRUSH_IMAGE {courseId, original} → {key:<
      shape as cover/card; may also nest an uncropped `originalImage` with its OWN
      key/crushedKey — upload + remap ALL of them so none survives).
    Migration re-uploads the exported `key` + `crushedKey` (+ nested `originalImage` keys)
-   verbatim and remaps every one (no re-crush). NOT yet captured / still flagged:
-   `overlayNavigationImage` (appears UI-less — inherited from the cover), `blockBackgroundImage`,
-   and user-uploaded `theme.*` keys (no guessing — see CLAUDE.md).
+   verbatim and remaps every one (no re-crush).
+   - **block background** → NOT a course field: it's block-level
+     `item.background.media.image.{key,crushedKey}`, set via `UPDATE_BLOCK_DEBOUNCE`
+     (MITM-confirmed). Already handled by the copy-faithful per-block media path
+     (`collectAssetKeys(block)` → upload + `patch-block-media`); needs no special code.
+   - **overlayNavigationImage** → no upload UI; Rise reuses the cover overlay image
+     (inherited). Nothing to migrate unless a course carries a distinct key (then it
+     stays flagged).
+   - user-uploaded **`theme.*`** image keys → deferred (not yet wired).
 
 `refs` ties an asset to a block item via the path `items:<itemId>/items:<subItemId>`.
 
@@ -330,8 +336,9 @@ JSON body** (the field shape) AND, where rotation/state matters, the **response*
 `Set-Cookie`. For media: the `GET_YURL → S3 PUT → CRUSH/TRANSCODE` chain plus the `UPDATE_*`
 that sets the key. Record the confirmed envelope here before coding.
 
-**Captured-but-not-yet-wired (need their own capture):** `overlayNavigationImage` (appears to
-have no upload UI — inherited from the cover), `blockBackgroundImage`, user-uploaded `theme.*`
-image keys; US-plane silent-auth (only EU confirmed — though the URL is derived from token
-claims so it should port). (Wired & confirmed: course `coverImage`/`cardImage`, `media` logo,
-`lessonHeaderImage` incl. nested `originalImage`.)
+**Wired & confirmed:** course `coverImage`/`cardImage`, `media` (logo), `lessonHeaderImage`
+(incl. nested `originalImage`); block backgrounds (`item.background…`, via the generic block
+media path). **Deferred / not wired:** user-uploaded `theme.*` image keys (skip for now);
+`overlayNavigationImage` (no upload UI — inherited from cover). **Unconfirmed:** US-plane
+silent-auth (only EU captured — but the authorize URL is derived from token claims, so it
+should port).
