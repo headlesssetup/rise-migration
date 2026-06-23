@@ -4,8 +4,13 @@ import { classifyString, scanCourse } from './scan';
 import type { GetCourseDocument } from '@/shared/types/rise';
 
 describe('classifyString', () => {
-  it('subtypes uploaded media keys by extension/path', () => {
-    expect(classifyString('https://articulateusercontent.com/rise/x.jpg')).toBe(
+  it('subtypes uploaded media keys by extension/path (by KEY PATH, any host)', () => {
+    // An upload is the rise/courses|questionBanks key path — regardless of host.
+    expect(classifyString('https://articulateusercontent.com/rise/courses/abc/x.jpg')).toBe(
+      'media-image',
+    );
+    // EU usercontent host — same rule.
+    expect(classifyString('https://articulateusercontent.eu/rise/courses/abc/x.jpg')).toBe(
       'media-image',
     );
     expect(classifyString('rise/courses/abc/file.mp4')).toBe('media-video');
@@ -22,10 +27,24 @@ describe('classifyString', () => {
     ).toBe('media-storyline');
   });
 
-  it('classifies CDN and embeds distinctly', () => {
+  it('classifies CDN and embeds distinctly (US + EU planes)', () => {
     expect(classifyString('https://cdn.articulate.com/assets/x.jpg')).toBe('cdn');
+    expect(classifyString('https://cdn.eu.articulate.com/assets/rise/assets/themes/classic/cover.jpg')).toBe('cdn');
     expect(classifyString('https://www.youtube.com/watch?v=1')).toBe('embed');
     expect(classifyString('https://vimeo.com/123')).toBe('embed');
+  });
+
+  it('keeps a BUILT-IN served from the usercontent host as cdn (not an upload)', () => {
+    // The usercontent host serves built-ins under /assets/rise/… — these must NOT
+    // be treated as uploads (they'd be wrongly blanked from a migrated theme).
+    expect(
+      classifyString('https://articulateusercontent.eu/assets/rise/assets/themes/example-header-image.jpg'),
+    ).toBe('cdn');
+    expect(
+      classifyString('https://articulateusercontent.com/assets/rise/assets/themes/example-header-image.jpg'),
+    ).toBe('cdn');
+    // A bare source filename (image block `originalUrl`) is not a media key.
+    expect(classifyString('9f49b7678e07e72d17ca07b51087353f.jpg')).toBeNull();
   });
 
   it('returns null for plain strings', () => {

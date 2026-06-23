@@ -70,14 +70,18 @@ interface VariantFieldAcc {
 
 const MAX_SNIPPET = 200;
 
-// String classification. Order matters: embed/cdn are distinct (a YouTube URL
-// never matches the others); usercontent/rise keys are uploaded media.
-const RE_USERCONTENT = /articulateusercontent\.com\//i;
-const RE_CDN = /cdn\.articulate\.com\//i;
+// String classification. An UPLOADED asset is identified by its
+// `rise/courses|questionBanks/{id}/…` KEY PATH — NOT by host: the usercontent host
+// (US `.com` / EU `.eu`) serves BOTH uploads (`rise/courses/…`) AND built-in shared
+// assets (`/assets/rise/…themes/…`, default block media). So we match the key path
+// first; a cdn/usercontent URL WITHOUT such a key is a built-in → kept as `cdn`.
+const RE_USERCONTENT = /articulateusercontent\.(?:com|eu)\//i;
+const RE_CDN = /cdn(?:\.eu)?\.articulate\.com\//i;
 const RE_EMBED = /(?:youtube\.com|youtu\.be|vimeo\.com)/i;
 // Uploaded-media keys live under rise/courses/{id}/… (course assets) and
 // rise/questionBanks/{id}/… (question-bank assets) — both are re-uploaded on
-// migration. (rise/assets/… are CDN theme assets, kept as-is, so not matched.)
+// migration. (`assets/rise/…` / `rise/assets/…` are CDN/built-in theme assets,
+// kept as-is, so not matched here.)
 const RE_RISE_KEY = /(?:^|[/"'\s])rise\/(?:courses|questionBanks)\/[^/\s"']+\//i;
 
 const RE_IMG = /\.(?:jpe?g|png|gif|svg|webp|bmp|avif|tiff?)(?:[?#]|$)/i;
@@ -99,11 +103,14 @@ function mediaSubtype(path: string, value: string): RefKind {
  * `path` (the JSON location) lets uploaded media be split into image/video/etc.
  */
 export function classifyString(value: string, path = ''): RefKind | null {
-  if (RE_CDN.test(value)) return 'cdn';
   if (RE_EMBED.test(value)) return 'embed';
-  if (RE_USERCONTENT.test(value) || RE_RISE_KEY.test(value)) {
-    return mediaSubtype(path, value);
-  }
+  // Uploaded media is the key PATH (any host: US/EU usercontent, an images.* transform
+  // URL, or a bare key). Check this BEFORE the host rules so a real upload on the
+  // usercontent host is media, while a built-in on the same host falls through to cdn.
+  if (RE_RISE_KEY.test(value)) return mediaSubtype(path, value);
+  // cdn.articulate.com / cdn.eu.articulate.com, or a usercontent host serving a
+  // built-in shared asset (/assets/rise/… theme covers, default block media) → kept.
+  if (RE_CDN.test(value) || RE_USERCONTENT.test(value)) return 'cdn';
   return null;
 }
 

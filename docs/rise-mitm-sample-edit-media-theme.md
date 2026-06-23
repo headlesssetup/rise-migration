@@ -60,3 +60,48 @@ rise/courses/UPDATE_COURSE              200   (×2 — two theme changes)
 The operator hit a transient "error opening a theme" — but **zero 4xx/5xx appear on
 any Articulate call in the entire capture**, so it never surfaced as a failed API
 request (a client-side fluke that self-recovered). Nothing to handle.
+
+## Body-confirmed shapes (re-capture WITH bodies, `b6e21345`)
+
+**Create:** `POST /manage/api/content {"createBookmark":false,"folderId":"all"}` → `{"id":…}`
+(verbatim our envelope). **Image upload:** `GET_YURL {assetPath:"courses/{id}",
+filename:<sha256>.jpg}` → `{key:"rise/courses/{id}/<short>.jpg", url:<presigned S3>}`;
+then `CRUSH_IMAGE {original:<key>}` → `{key:<crushedKey>}`. The image block media:
+```jsonc
+"media": { "image": {
+  "key":         "rise/courses/{id}/dBJqKiS92WZoXnws.jpg",   // original (uploaded)
+  "crushedKey":  "rise/courses/{id}/2drjLWfISvDwnLFB.jpg",   // crush output (uploaded)
+  "isSkipCrush": true, "useCrushedKey": false, "sourcedFrom": "USER",
+  "originalUrl": "9f49…<sha256>.jpg",   // bare source filename — NOT a key
+  "dimensions": { "originalWidth":1440, "originalHeight":810 } } }
+```
+Both `key` and `crushedKey` are `rise/courses/{id}/…` → our scan uploads BOTH verbatim
+and remaps BOTH (no crush pass). `isSkipCrush`/`useCrushedKey`/`sourcedFrom`/`originalUrl`
+are in the parity VOLATILE set (copied verbatim, not compared).
+
+**Video here was a BUILT-IN** (`Coastline.mp4` from block-defaults), not an upload:
+`src/poster/thumbnail` are `cdn.eu.articulate.com/assets/rise/…` and
+`key:"assets/rise/assets/block-defaults/coastline.mp4"` — kept as references (round-trips
+as-is). ⚠ So this capture still does NOT contain an UPLOADED video's block body; the
+uploaded-video poster/thumbnail shape remains as documented in §8 (transform URL over a
+`rise/courses/{id}/…` key), not freshly body-confirmed.
+
+**Theme (`UPDATE_COURSE {theme}`):** `themeId:"classic"`, `coverImage:
+"https://cdn.eu.articulate.com/assets/rise/assets/themes/classic/cover-image/2_wfh.jpg"`,
+`lessonHeaderImage: "https://articulateusercontent.eu/assets/rise/assets/themes/example-header-image.jpg"`,
+plus colors/typeface ids/nav flags — copied back verbatim.
+
+### ⚠ Bug this capture exposed (fixed)
+`theme.lessonHeaderImage` is a **built-in served from the usercontent host** under
+`/assets/rise/…`. Our `classifyString` classified media **by host** (`articulateusercontent.com`)
+— so on the **US→EU** path the source's built-in header (`articulateusercontent.com/assets/rise/…`)
+was tagged `media-image` and **blanked by `set-theme`'s `blankUploadedMediaKeys`**, silently
+dropping the built-in header on the migrated course. EU only dodged it because the host
+regexes were `.com`-only. **Fix:** classify uploads by the `rise/courses|questionBanks/{id}/`
+**key path** (any host), and keep cdn/usercontent non-key URLs (incl. `/assets/rise/…`,
+US + EU) as `cdn`. Host regexes are now plane-aware (`scan.ts`, `keys.ts`).
+
+### No action needed
+- **Default block content:** Rise seeds a new block with stock content (stock photo/video,
+  lorem-ipsum text) which the user then edits. Our import sends the SOURCE block's final
+  content via `CREATE_BLOCKS`, so Rise's seeding never enters our path — no impact.

@@ -41,9 +41,9 @@ export interface AssetKey {
 //  - Bounded fallback: for keys embedded inside a larger HTML/text blob, capture
 //    each match up to a real delimiter (quote / whitespace / markup / paren).
 const RE_WHOLE_VALUE =
-  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.com\/)?(rise\/(?:courses|questionBanks)\/\S+)$/i;
+  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?(rise\/(?:courses|questionBanks)\/\S+)$/i;
 const RE_USERCONTENT_URL =
-  /https?:\/\/(?:www\.)?articulateusercontent\.com\/([^\s"'<>\\)]+)/gi;
+  /https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/([^\s"'<>\\)]+)/gi;
 const RE_BARE_RISE_KEY =
   /rise\/(?:courses|questionBanks)\/[^\s"'<>\\)]+/gi;
 
