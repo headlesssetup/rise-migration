@@ -251,6 +251,56 @@ export function insertQuestionBankQuestions(payload: {
   return ducks('lessons', 'INSERT_QUESTION_BANK_QUESTIONS', payload);
 }
 
+// --- Storyline / Review 360 attach (protocol §8) ----------------------------
+
+/** POST /api/rise-runtime/copy_review_item — server-side S3 copy of a published
+ *  Review-360 package into the course's asset space (`rise/courses/{courseId}/{leaf}/…`),
+ *  exactly as the editor's "add from Review 360" picker does (capture-confirmed,
+ *  `ffd25a16-storylinemitm.txt`). `jobId` IS the empty storyline block's id. The
+ *  response is a list of S3 CopyObjectResult entries. NOT a ducks RPC — a direct
+ *  rise-runtime route. After this, patch the block with {@link updateBlockDebounce}
+ *  using {@link buildStorylineMedia}. */
+export function copyReviewItem(args: {
+  courseId: string;
+  /** The staged item's prefix, `review/items/{leaf}`. */
+  reviewPrefix: string;
+  /** The target (empty) storyline block id — sent as `jobId`. */
+  blockId: string;
+}): WriteSpec {
+  return {
+    url: '/api/rise-runtime/copy_review_item',
+    method: 'POST',
+    body: JSON.stringify({
+      id: args.courseId,
+      reviewPrefix: args.reviewPrefix,
+      jobId: args.blockId,
+    }),
+    label: `copy_review_item → block ${args.blockId}`,
+  };
+}
+
+/** Build the `media.storyline` object set on a storyline block after the copy.
+ *  `contentPrefix` is the copied bundle location `rise/courses/{courseId}/{leaf}`;
+ *  `src` is its `story.html`; `meta` is copied verbatim from the archived source
+ *  block (== the package's `threeSixty.json`); `processing:false` (already copied).
+ *  Shape confirmed against the EU `UPDATE_BLOCK_DEBOUNCE` capture. */
+export function buildStorylineMedia(args: {
+  contentPrefix: string;
+  meta: unknown;
+  title?: string;
+}): { storyline: Record<string, unknown> } {
+  return {
+    storyline: {
+      contentPrefix: args.contentPrefix,
+      src: `${args.contentPrefix}/story.html`,
+      meta: args.meta,
+      processing: false,
+      ...(args.title !== undefined ? { title: args.title } : {}),
+      type: 'storyline',
+    },
+  };
+}
+
 // --- Asset upload chain (protocol §8) ---------------------------------------
 
 export function getYurl(args: {

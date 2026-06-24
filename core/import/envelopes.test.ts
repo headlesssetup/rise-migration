@@ -5,6 +5,9 @@ import {
   getYurl,
   s3Put,
   createLesson,
+  copyReviewItem,
+  buildStorylineMedia,
+  updateBlockDebounce,
 } from './envelopes';
 
 describe('write envelopes', () => {
@@ -41,5 +44,48 @@ describe('write envelopes', () => {
     expect(body.payload.author).toBe('auth0|x');
     expect(body.payload.selectedAuthorId).toBe('auth0|x');
     expect(body.payload.courseId).toBe('C1');
+  });
+
+  it('copy_review_item is a direct rise-runtime POST with {id,reviewPrefix,jobId=blockId}', () => {
+    const spec = copyReviewItem({ courseId: 'C1', reviewPrefix: 'review/items/LEAF', blockId: 'blk_9' });
+    expect(spec.url).toBe('/api/rise-runtime/copy_review_item');
+    expect(spec.method).toBe('POST');
+    expect(JSON.parse(spec.body!)).toEqual({
+      id: 'C1',
+      reviewPrefix: 'review/items/LEAF',
+      jobId: 'blk_9',
+    });
+  });
+
+  it('buildStorylineMedia derives src from contentPrefix and marks processing:false', () => {
+    const media = buildStorylineMedia({
+      contentPrefix: 'rise/courses/C1/LEAF',
+      meta: { title: 'Geo 101', version: '1' },
+      title: 'Geo 101',
+    });
+    expect(media).toEqual({
+      storyline: {
+        contentPrefix: 'rise/courses/C1/LEAF',
+        src: 'rise/courses/C1/LEAF/story.html',
+        meta: { title: 'Geo 101', version: '1' },
+        processing: false,
+        title: 'Geo 101',
+        type: 'storyline',
+      },
+    });
+  });
+
+  it('storyline media drops into UPDATE_BLOCK_DEBOUNCE as the block item media', () => {
+    const media = buildStorylineMedia({ contentPrefix: 'rise/courses/C1/LEAF', meta: {} });
+    const spec = updateBlockDebounce({
+      id: 'blk_9',
+      courseId: 'C1',
+      lessonId: 'les_1',
+      item: { id: 'item_1', media },
+    });
+    expect(spec.url).toBe('/api/rise-runtime/ducks/rise/lessons/UPDATE_BLOCK_DEBOUNCE');
+    const body = JSON.parse(spec.body!);
+    expect(body.payload.item.media.storyline.src).toBe('rise/courses/C1/LEAF/story.html');
+    expect(body.payload.id).toBe('blk_9');
   });
 });
