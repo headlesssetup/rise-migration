@@ -1,0 +1,81 @@
+import { describe, expect, it } from 'vitest';
+import { awaitExportLocation, type WsLike } from './ws-export-client';
+
+// A fake WebSocket that records sends and lets the test drive events.
+class FakeWs implements WsLike {
+  sent: string[] = [];
+  closed = false;
+  private listeners: Record<string, Array<(ev?: { data?: unknown }) => void>> = {};
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.closed = true;
+  }
+  addEventListener(type: string, cb: (ev?: { data?: unknown }) => void): void {
+    (this.listeners[type] ??= []).push(cb);
+  }
+  fire(type: string, ev?: { data?: unknown }): void {
+    for (const cb of this.listeners[type] ?? []) cb(ev);
+  }
+}
+
+const SUCCESS = (jobId: string, location: string): { data: string } => ({
+  data: JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'notify',
+    params: { type: 'package:success', payload: { jobId, location } },
+  }),
+});
+
+describe('awaitExportLocation', () => {
+  it('identifies on open and resolves with the matching job location', async () => {
+    const ws = new FakeWs();
+    const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', jobId: '8797', connect: () => ws });
+
+    ws.fire('open');
+    expect(JSON.parse(ws.sent[0]!)).toMatchObject({ method: 'identify', params: { token: 'JWT' } });
+
+    ws.fire('message', { data: '{"id":0,"result":{"sessionId":"S"}}' }); // ignored, keep waiting
+    ws.fire('message', SUCCESS('8797', 'https://cdn/x.zip'));
+
+    await expect(p).resolves.toEqual({ location: 'https://cdn/x.zip', jobId: '8797' });
+    expect(ws.closed).toBe(true);
+    // a close frame was sent before teardown
+    expect(ws.sent.some((s) => s.includes('"method":"close"'))).toBe(true);
+  });
+
+  it('ignores a notify for a different job, then resolves on ours', async () => {
+    const ws = new FakeWs();
+    const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', jobId: '8797', connect: () => ws });
+    ws.fire('open');
+    ws.fire('message', SUCCESS('9999', 'https://cdn/other.zip'));
+    ws.fire('message', SUCCESS('8797', 'https://cdn/ours.zip'));
+    await expect(p).resolves.toEqual({ location: 'https://cdn/ours.zip', jobId: '8797' });
+  });
+
+  it('rejects on a package error frame', async () => {
+    const ws = new FakeWs();
+    const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', jobId: '8797', connect: () => ws });
+    ws.fire('open');
+    ws.fire('message', {
+      data: '{"method":"notify","params":{"type":"package:error","payload":{"jobId":"8797","message":"boom"}}}',
+    });
+    await expect(p).rejects.toThrow(/package error.*boom/);
+  });
+
+  it('rejects on socket close before success', async () => {
+    const ws = new FakeWs();
+    const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', connect: () => ws });
+    ws.fire('open');
+    ws.fire('close');
+    await expect(p).rejects.toThrow(/closed before/);
+  });
+
+  it('rejects on timeout', async () => {
+    const ws = new FakeWs();
+    const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', connect: () => ws, timeoutMs: 5 });
+    ws.fire('open');
+    await expect(p).rejects.toThrow(/timed out/);
+  });
+});

@@ -16,6 +16,9 @@ export interface WriteSpec {
   base64Body?: string;
   /** Content-Type to send (defaults to application/json when `body` is set). */
   contentType?: string;
+  /** Extra request headers (e.g. `Content-MD5` for a Review-360 upload PUT whose
+   *  presigned signature covers `content-md5;host`). Merged after Content-Type. */
+  headers?: Record<string, string>;
   /** Omit the bearer Authorization header (presigned S3 PUT carries its own). */
   noAuth?: boolean;
   /** Human label for the dry-run plan + loud-fail reports. */
@@ -330,6 +333,26 @@ export function s3Put(args: {
     contentType: args.contentType,
     noAuth: true,
     label: 'S3 PUT (upload bytes)',
+  };
+}
+
+/** S3 PUT for a Review-360 package upload. Differs from {@link s3Put} in that the
+ *  presigned url signs `content-md5;host`, so the PUT MUST carry `Content-MD5`
+ *  (base64 MD5 of the bytes — the same value sent to `yurl:get`). No auth. */
+export function s3PutReview(args: {
+  url: string;
+  base64Body: string;
+  contentMd5Base64: string;
+  contentType?: string;
+}): WriteSpec {
+  return {
+    url: args.url,
+    method: 'PUT',
+    base64Body: args.base64Body,
+    contentType: args.contentType ?? 'application/zip',
+    headers: { 'Content-MD5': args.contentMd5Base64 },
+    noAuth: true,
+    label: 'S3 PUT (Review-360 package)',
   };
 }
 

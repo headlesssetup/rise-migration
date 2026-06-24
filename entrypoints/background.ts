@@ -46,6 +46,7 @@ interface RelaySpec {
   body?: string;
   base64Body?: string;
   contentType?: string;
+  headers?: Record<string, string>;
   noAuth?: boolean;
 }
 
@@ -64,6 +65,7 @@ async function fetchInRiseTab(
     body?: string;
     base64Body?: string;
     contentType?: string;
+    headers?: Record<string, string>;
     noAuth?: boolean;
   },
   token: string | null,
@@ -83,6 +85,9 @@ async function fetchInRiseTab(
       body = spec.body;
       headers['Content-Type'] = spec.contentType || 'application/json';
     }
+    // Explicit per-spec headers (e.g. Content-MD5 on a Review-360 upload PUT)
+    // override the defaults above.
+    if (spec.headers) Object.assign(headers, spec.headers);
 
     const res = await fetch(spec.url, {
       method: spec.method,
@@ -225,6 +230,7 @@ export default defineBackground(() => {
             body: spec.body,
             base64Body: spec.base64Body,
             contentType: spec.contentType,
+            headers: spec.headers,
             noAuth: spec.noAuth,
           },
           token,

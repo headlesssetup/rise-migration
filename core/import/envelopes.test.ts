@@ -8,6 +8,7 @@ import {
   copyReviewItem,
   buildStorylineMedia,
   updateBlockDebounce,
+  s3PutReview,
 } from './envelopes';
 
 describe('write envelopes', () => {
@@ -73,6 +74,15 @@ describe('write envelopes', () => {
         type: 'storyline',
       },
     });
+  });
+
+  it('Review-360 S3 PUT carries Content-MD5, is no-auth, application/zip', () => {
+    const spec = s3PutReview({ url: 'https://s3/x.zip?sig', base64Body: 'QUJD', contentMd5Base64: 'bWQ1' });
+    expect(spec.method).toBe('PUT');
+    expect(spec.noAuth).toBe(true);
+    expect(spec.contentType).toBe('application/zip');
+    expect(spec.headers).toEqual({ 'Content-MD5': 'bWQ1' });
+    expect(spec.base64Body).toBe('QUJD');
   });
 
   it('storyline media drops into UPDATE_BLOCK_DEBOUNCE as the block item media', () => {
