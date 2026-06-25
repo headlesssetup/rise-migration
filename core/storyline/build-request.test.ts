@@ -22,6 +22,12 @@ describe('buildRawExportRequest', () => {
     expect(spec.url.startsWith('http')).toBe(false);
   });
 
+  it('omits the bearer (build/raw is cookie-authed) but keeps cookies', () => {
+    const { spec } = buildRawExportRequest(args);
+    expect(spec.omitBearer).toBe(true);
+    expect(spec.noAuth).toBeUndefined(); // cookies still sent
+  });
+
   it('reproduces the captured payload field-for-field', () => {
     const { spec, websocketSessionId } = buildRawExportRequest(args);
     expect(websocketSessionId).toBe(args.websocketSessionId);

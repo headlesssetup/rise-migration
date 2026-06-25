@@ -91,6 +91,10 @@ export interface StorylineExportSummary {
   packaged: number;
   skipped: number;
   failed: number;
+  /** Courses not attempted because the run aborted early (e.g. auth). */
+  notAttempted: number;
+  /** Set when the run aborted early; the reason (shown to the operator). */
+  aborted?: string;
   /** Per-course failures (courseId → message) for the report. */
   errors: Array<{ courseId: string; error: string }>;
 }
@@ -102,6 +106,12 @@ async function defaultFetchZip(url: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/** A build failure that's about auth/freshness affects EVERY course, so we abort
+ *  the whole run rather than reload-and-retry 152 times. */
+function isAuthError(msg: string): boolean {
+  return /\b40[13]\b|forbidden|unauthor|expired|\btoken\b|session/i.test(msg);
+}
+
 export interface StorylineExportDeps {
   /** Trigger build + await the zip URL (default: background STORYLINE_EXPORT). */
   exportOne?: (
@@ -109,6 +119,8 @@ export interface StorylineExportDeps {
     title: string,
   ) => Promise<{ ok: true; location: string; jobId: string } | { ok: false; error: string }>;
   fetchZip?: (url: string) => Promise<Uint8Array>;
+  /** Refresh the bearer/cookie once before the run (default: background REAUTH). */
+  refresh?: () => Promise<{ advanced: boolean; valid: boolean; via?: string } | void>;
   pacing?: PacingConfig;
   /** Re-export even if a manifest already exists (default false → resume/skip). */
   force?: boolean;
@@ -121,11 +133,18 @@ const defaultExportOne: NonNullable<StorylineExportDeps['exportOne']> = async (c
   return { ok: true, location: resp.result.data.location, jobId: resp.result.data.jobId };
 };
 
+const defaultRefresh: NonNullable<StorylineExportDeps['refresh']> = async () => {
+  const r = await rpc({ type: 'REAUTH' });
+  return r.type === 'REAUTH_RESULT' ? { advanced: r.advanced, valid: r.valid, via: r.via } : undefined;
+};
+
 /**
  * LIVE: export + repackage + store Storyline packages for every saved course
  * that needs it. Sequential + paced (build is an authoring write); zip downloads
  * are direct CDN fetches. Resumable: a course with an existing manifest is
- * skipped unless `force`.
+ * skipped unless `force`. Aborts the whole run on the first auth failure (a
+ * stale session affects every course) so it never grinds — telling the operator
+ * to open a Rise course editor (the only thing that rotates the cookie) + retry.
  */
 export async function exportStorylinePackages(
   storage: Storage,
@@ -134,6 +153,7 @@ export async function exportStorylinePackages(
 ): Promise<StorylineExportSummary> {
   const exportOne = deps.exportOne ?? defaultExportOne;
   const fetchZip = deps.fetchZip ?? defaultFetchZip;
+  const refresh = deps.refresh ?? defaultRefresh;
   const pacing = deps.pacing ?? DEFAULT_PACING;
 
   const targets = await scanSavedCoursesForStoryline(storage, onEvent);
@@ -142,8 +162,18 @@ export async function exportStorylinePackages(
     packaged: 0,
     skipped: 0,
     failed: 0,
+    notAttempted: 0,
     errors: [],
   };
+  if (!targets.length) return summary;
+
+  // Refresh once up front (the build is cookie-authed; a stale session 403s).
+  try {
+    const r = await refresh();
+    if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+  } catch {
+    /* best-effort */
+  }
 
   for (let i = 0; i < targets.length; i++) {
     const { courseId, title, blocks } = targets[i]!;
@@ -200,16 +230,27 @@ export async function exportStorylinePackages(
         message: `${label} ${title ?? courseId}: ${leavesDone.size} package(s) → storyline/${courseId}/`,
       });
     } catch (e) {
-      summary.failed += 1;
       const error = (e as Error).message;
+      summary.failed += 1;
       summary.errors.push({ courseId, error });
       onEvent({ kind: 'log', message: `${label} ${title ?? courseId}: FAILED — ${error}` });
+
+      // A stale session 403s every build — abort instead of looping 152×.
+      if (isAuthError(error)) {
+        summary.aborted = error;
+        summary.notAttempted = targets.length - (i + 1);
+        onEvent({
+          kind: 'log',
+          message: `⛔ Aborting: looks like an auth/session failure. Open a Rise COURSE EDITOR (not the dashboard) to rotate the token, then run again. ${summary.notAttempted} course(s) not attempted.`,
+        });
+        break;
+      }
     }
   }
 
   onEvent({
     kind: 'log',
-    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s).`,
+    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s).`,
   });
   return summary;
 }

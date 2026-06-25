@@ -97,6 +97,9 @@ export function buildRawExportRequest(
       url: `/api/rise-runtime/build/${encodeURIComponent(args.courseId)}/raw`,
       method: 'POST',
       body: JSON.stringify(payload),
+      // build/raw is cookie-authed: the editor sends NO Authorization header
+      // (capture-confirmed). Attaching a (possibly stale) bearer makes it 403.
+      omitBearer: true,
       label: `build raw export ${args.courseId}`,
     },
   };

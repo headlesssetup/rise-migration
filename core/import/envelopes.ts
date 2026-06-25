@@ -21,6 +21,11 @@ export interface WriteSpec {
   headers?: Record<string, string>;
   /** Omit the bearer Authorization header (presigned S3 PUT carries its own). */
   noAuth?: boolean;
+  /** Omit ONLY the bearer header but KEEP first-party cookies (credentials:
+   *  include). For endpoints that are cookie-authed and reject a stale bearer —
+   *  e.g. `build/{id}/raw`, which the editor calls with cookies and NO
+   *  Authorization header (capture-confirmed). */
+  omitBearer?: boolean;
   /** Human label for the dry-run plan + loud-fail reports. */
   label: string;
 }

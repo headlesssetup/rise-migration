@@ -50,6 +50,7 @@ interface RelaySpec {
   contentType?: string;
   headers?: Record<string, string>;
   noAuth?: boolean;
+  omitBearer?: boolean;
 }
 
 // Executed INSIDE the Rise tab (isolated world) — a same-origin fetch that
@@ -69,12 +70,16 @@ async function fetchInRiseTab(
     contentType?: string;
     headers?: Record<string, string>;
     noAuth?: boolean;
+    omitBearer?: boolean;
   },
   token: string | null,
 ): Promise<InPageResult> {
   try {
     const headers: Record<string, string> = {};
-    if (token && !spec.noAuth) headers.Authorization = `Bearer ${token}`;
+    // noAuth: no bearer + no cookies (presigned S3). omitBearer: no bearer but
+    // KEEP cookies (cookie-authed endpoints like build/raw, which 403 on a stale
+    // bearer). Default: bearer + cookies.
+    if (token && !spec.noAuth && !spec.omitBearer) headers.Authorization = `Bearer ${token}`;
 
     let body: BodyInit | undefined;
     if (spec.base64Body !== undefined) {
@@ -234,6 +239,7 @@ export default defineBackground(() => {
             contentType: spec.contentType,
             headers: spec.headers,
             noAuth: spec.noAuth,
+            omitBearer: spec.omitBearer,
           },
           token,
         ],
