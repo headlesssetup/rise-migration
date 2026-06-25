@@ -413,4 +413,54 @@ export class FileSystemStorage implements Storage {
       return null;
     }
   }
+
+  // --- Phase 4: storyline packages (storyline/<courseId>/<leaf>.zip) ---
+
+  private storylineDir(): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('storyline', { create: true });
+  }
+
+  private async storylineCourseDir(courseId: string): Promise<FileSystemDirectoryHandle> {
+    return (await this.storylineDir()).getDirectoryHandle(courseId, { create: true });
+  }
+
+  async writeStorylineZip(courseId: string, leaf: string, bytes: Uint8Array): Promise<void> {
+    const dir = await this.storylineCourseDir(courseId);
+    await this.writeFile(dir, `${leaf}.zip`, bytes as BufferSource);
+  }
+
+  async hasStorylineZip(courseId: string, leaf: string): Promise<boolean> {
+    try {
+      const dir = await this.storylineCourseDir(courseId);
+      await dir.getFileHandle(`${leaf}.zip`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async readStorylineZip(courseId: string, leaf: string): Promise<Uint8Array | null> {
+    try {
+      const dir = await this.storylineCourseDir(courseId);
+      const handle = await dir.getFileHandle(`${leaf}.zip`);
+      return new Uint8Array(await (await handle.getFile()).arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
+
+  async writeStorylineManifest(courseId: string, json: string): Promise<void> {
+    const dir = await this.storylineDir();
+    await this.writeFile(dir, `${courseId}.manifest.json`, json);
+  }
+
+  async readStorylineManifest(courseId: string): Promise<string | null> {
+    try {
+      const dir = await this.storylineDir();
+      const handle = await dir.getFileHandle(`${courseId}.manifest.json`);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
 }

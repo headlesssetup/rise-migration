@@ -102,4 +102,18 @@ export interface Storage {
   writeImportArtifact(name: string, contents: string): Promise<void>;
   /** Read a prior import artifact (resume the job log), or null if absent. */
   readImportArtifact(name: string): Promise<string | null>;
+
+  // --- Phase 4: storyline packages (the export zip-pipeline output) ---
+  /** Write a repackaged Review-360 upload zip for one storyline leaf →
+   *  `storyline/<courseId>/<leaf>.zip`. */
+  writeStorylineZip(courseId: string, leaf: string, bytes: Uint8Array): Promise<void>;
+  /** Has this storyline package zip already been built? (resume / skip). */
+  hasStorylineZip(courseId: string, leaf: string): Promise<boolean>;
+  /** Read a built storyline package zip (import: upload to Review 360), or null. */
+  readStorylineZip(courseId: string, leaf: string): Promise<Uint8Array | null>;
+  /** Write a course's storyline manifest → `storyline/<courseId>.manifest.json`
+   *  (blockId → {lessonId, leaf, meta, zip}). The join key for the import attach. */
+  writeStorylineManifest(courseId: string, json: string): Promise<void>;
+  /** Read a course's storyline manifest, or null. */
+  readStorylineManifest(courseId: string): Promise<string | null>;
 }

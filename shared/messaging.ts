@@ -42,7 +42,12 @@ export type BackgroundRequest =
   // re-read the rotated `_articulate_rise_` cookie). The panel calls this before
   // each course so a long, write-quiet import never starts on a stale token (the
   // webRequest observer can't catch a fresh bearer when there's no page traffic).
-  | { type: 'REAUTH' };
+  | { type: 'REAUTH' }
+  // Phase 4 — trigger a Storyline web/raw export for one course and await its
+  // finished zip URL over the ws.eu JSON-RPC socket. Runs in the background
+  // because it owns the bearer (the socket `identify` needs it). The panel then
+  // downloads + repackages + stores the zip.
+  | { type: 'STORYLINE_EXPORT'; courseId: string; title: string };
 
 /** Account-level raw exports that share a {raw, doc} result shape. */
 export type RawKind = 'blockTemplates' | 'typefaces';
@@ -70,6 +75,10 @@ export type BackgroundResponse =
       result: FetchResult<{ raw: string; doc: unknown }>;
     }
   | { type: 'WRITE_RESULT'; result: WriteRelayResult }
+  | {
+      type: 'STORYLINE_EXPORT_RESULT';
+      result: FetchResult<{ location: string; jobId: string }>;
+    }
   | {
       type: 'REAUTH_RESULT';
       // `advanced`: the token's `exp` actually moved forward (a real rotation).

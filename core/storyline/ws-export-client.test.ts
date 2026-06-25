@@ -45,6 +45,25 @@ describe('awaitExportLocation', () => {
     expect(ws.sent.some((s) => s.includes('"method":"close"'))).toBe(true);
   });
 
+  it('fires onIdentified with the bound session id (to trigger build/raw)', async () => {
+    const ws = new FakeWs();
+    const seen: string[] = [];
+    const p = awaitExportLocation({
+      token: 'JWT',
+      sessionId: 'S',
+      jobId: '8797',
+      connect: () => ws,
+      onIdentified: (sid) => {
+        seen.push(sid);
+      },
+    });
+    ws.fire('open');
+    ws.fire('message', { data: '{"id":0,"result":{"sessionId":"S"}}' });
+    ws.fire('message', SUCCESS('8797', 'https://cdn/x.zip'));
+    await expect(p).resolves.toEqual({ location: 'https://cdn/x.zip', jobId: '8797' });
+    expect(seen).toEqual(['S']);
+  });
+
   it('ignores a notify for a different job, then resolves on ours', async () => {
     const ws = new FakeWs();
     const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', jobId: '8797', connect: () => ws });

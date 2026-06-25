@@ -18,6 +18,8 @@ import {
   type RequestSpec,
 } from '@/core/rise-client';
 import type { WriteSpec } from '@/core/import/envelopes';
+import { buildRawExportRequest, parseBuildAck } from '@/core/storyline/build-request';
+import { awaitExportLocation, type WsLike } from '@/core/storyline/ws-export-client';
 import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
@@ -616,6 +618,49 @@ export default defineBackground(() => {
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
+
+      case 'STORYLINE_EXPORT': {
+        // Trigger the web/raw export and await its zip URL on the ws.eu socket.
+        // The socket runs here so the bearer never leaves the background; the
+        // build/raw POST is sent only AFTER `identify` so we can't miss the
+        // completion notify. One course at a time (the panel paces the loop), so
+        // the first package:success is ours.
+        if (!token) {
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: false, error: 'No Rise token captured yet.' },
+          };
+        }
+        const sessionId = crypto.randomUUID();
+        const { spec } = buildRawExportRequest({
+          courseId: msg.courseId,
+          title: msg.title,
+          websocketSessionId: sessionId,
+        });
+        try {
+          const loc = await awaitExportLocation({
+            token,
+            sessionId,
+            connect: (url) => new WebSocket(url) as unknown as WsLike,
+            onIdentified: async () => {
+              const r = await relayWrite(spec);
+              if (!r.ok) {
+                throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 200)}`);
+              }
+              parseBuildAck(r.text); // assert a jobId came back
+            },
+          });
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: true, status: 200, data: loc },
+          };
+        } catch (e) {
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: false, error: (e as Error).message },
+          };
+        }
+      }
 
       case 'REAUTH': {
         // Force a fresh bearer on demand (panel calls this before each course).

@@ -29,6 +29,12 @@ export {
 } from './assets';
 export { fetchAccountExtras, type AccountExtrasSummary } from './account';
 export {
+  scanSavedCoursesForStoryline,
+  exportStorylinePackages,
+  type StorylineCourseScan,
+  type StorylineExportSummary,
+} from './storyline';
+export {
   runImport,
   readSourceIdentity,
   readArchiveInfo,

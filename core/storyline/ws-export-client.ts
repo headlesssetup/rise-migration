@@ -41,6 +41,11 @@ export interface AwaitExportOpts {
   connect?: WsConnect;
   url?: string;
   timeoutMs?: number;
+  /** Fired once the `identify` result arrives (server has bound our session).
+   *  The caller triggers the `build/raw` request here — sending it only after the
+   *  socket is listening guarantees we never miss the `package:success` notify.
+   *  A throw rejects the whole wait. */
+  onIdentified?: (sessionId: string) => void | Promise<void>;
 }
 
 export interface ExportLocation {
@@ -106,7 +111,13 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
       const data = ev?.data;
       const text = typeof data === 'string' ? data : String(data ?? '');
       const frame = parseExportFrame(text);
-      if (frame.kind === 'package-success') {
+      if (frame.kind === 'identified') {
+        if (opts.onIdentified) {
+          Promise.resolve(opts.onIdentified(frame.sessionId)).catch((e) =>
+            done(() => reject(new Error(`build trigger failed: ${(e as Error).message}`))),
+          );
+        }
+      } else if (frame.kind === 'package-success') {
         if (opts.jobId && frame.jobId && frame.jobId !== opts.jobId) return; // not our job
         done(() => resolve({ location: frame.location, jobId: frame.jobId }));
       } else if (frame.kind === 'package-error') {

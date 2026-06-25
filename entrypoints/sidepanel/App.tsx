@@ -55,8 +55,10 @@ import {
   listAllCourses,
   scanSavedBanks,
   scanSavedCourses,
+  exportStorylinePackages,
   type AssetsSummary,
   type ProgressEvent,
+  type StorylineExportSummary,
 } from './orchestrator';
 import { rpc } from './rpc';
 
@@ -116,6 +118,7 @@ export function App() {
   const [novelty, setNovelty] = useState<NoveltyReport | null>(null);
   const [banks, setBanks] = useState<BankCatalog | null>(null);
   const [assets, setAssets] = useState<AssetsSummary | null>(null);
+  const [storyline, setStoryline] = useState<StorylineExportSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   // Only auto-scroll the log to the bottom when the user is already there — if
   // they've scrolled up to read, leave their position alone.
@@ -470,6 +473,26 @@ export function App() {
     }
   }, [storage, onEvent, addLog, logBreak, session]);
 
+  const runStoryline = useCallback(async () => {
+    if (!storage) return;
+    logBreak('Export storyline packages');
+    setPhase('exporting');
+    setStoryline(null);
+    setProgress(null);
+    addLog(
+      'Scanning saved courses for Storyline blocks, then exporting + repackaging each (Review-360 form)…',
+    );
+    const summary = await exportStorylinePackages(storage, onEvent);
+    setStoryline(summary);
+    setPhase('done');
+    addLog(
+      `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks. → storyline/<courseId>/<leaf>.zip + manifest.`,
+    );
+    if (summary.failed) {
+      for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
+    }
+  }, [storage, onEvent, addLog, logBreak]);
+
   const runAccount = useCallback(async () => {
     if (!storage) return;
     logBreak('Export account data');
@@ -686,6 +709,26 @@ export function App() {
           and YouTube/Vimeo embeds are kept as references. No Rise tab required.
         </p>
         {assets && <AssetsView summary={assets} />}
+      </section>
+
+      {/* D · Embeds — Storyline packages */}
+      <section className="card">
+        <h2>D · Embeds (Storyline)</h2>
+        <button onClick={runStoryline} disabled={busy || !storage || !session?.risePresent}>
+          {phase === 'exporting' ? 'Working…' : 'Export storyline packages'}
+        </button>
+        <p className="hint">
+          Finds saved courses containing Storyline/Mighty blocks, triggers a Rise web export for
+          each (paced), downloads the zip from the CDN, and repackages every storyline bundle into
+          a Review-360 upload zip → storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip + a per-course
+          manifest. Re-runnable (skips courses already exported). Needs a logged-in Rise tab.
+        </p>
+        {storyline && (
+          <p className="hint">
+            {storyline.packaged} packaged · {storyline.skipped} skipped · {storyline.failed} failed
+            {' '}of {storyline.courses} storyline course(s).
+          </p>
+        )}
       </section>
       </>
       )}
