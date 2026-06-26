@@ -185,15 +185,21 @@ export function parseContentPrefix(item: unknown): string | null {
   if (typeof node.contentPrefix === 'string' && node.contentPrefix) {
     return node.contentPrefix;
   }
-  // Fallback: derive from a ready version's package key
-  // (review/items/{leaf}/story_content/… → review/items/{leaf}).
+  // `items:get` carries the published prefix on the VERSION object, not the item
+  // top level — `value.versions[].contentPrefix` (capture-confirmed). The
+  // version's `package.key` is empty (""), so prefer contentPrefix, then derive
+  // from the version's thumbnail/package key prefix. Newest version first.
   const versions = Array.isArray(node.versions) ? node.versions : [];
-  for (const v of versions) {
+  for (let k = versions.length - 1; k >= 0; k--) {
+    const v = versions[k];
     if (!isObject(v)) continue;
-    const pkg = isObject(v.package) ? v.package : undefined;
-    const key = pkg && typeof pkg.key === 'string' ? pkg.key : undefined;
-    const m = key?.match(/^(review\/items\/[^/]+)/);
-    if (m) return m[1]!;
+    if (typeof v.contentPrefix === 'string' && v.contentPrefix) return v.contentPrefix;
+    for (const field of ['thumbnail', 'package'] as const) {
+      const o = isObject(v[field]) ? (v[field] as Record<string, unknown>) : undefined;
+      const key = o && typeof o.key === 'string' ? o.key : undefined;
+      const m = key?.match(/^(review\/items\/[^/]+)/);
+      if (m) return m[1]!;
+    }
   }
   return null;
 }
@@ -201,11 +207,10 @@ export function parseContentPrefix(item: unknown): string | null {
 /** True when an item's newest version reports a terminal "ready"/"published"
  *  state (vs "uploading"/"processing"). */
 export function isItemReady(item: unknown): boolean {
+  // A published item resolves a contentPrefix — the authoritative readiness signal.
+  if (parseContentPrefix(item) !== null) return true;
   if (!isObject(item)) return false;
   const node = isObject(item.value) ? item.value : isObject(item.item) ? item.item : item;
-  // A published item exposes a contentPrefix; treat that as the readiness signal
-  // (the `items:get` value carries it once processing finishes).
-  if (isObject(node) && typeof node.contentPrefix === 'string' && node.contentPrefix) return true;
   const versions = isObject(node) && Array.isArray(node.versions) ? node.versions : [];
   const last = versions[versions.length - 1];
   const state = isObject(last) && typeof last.state === 'string' ? last.state : '';

@@ -125,6 +125,36 @@ describe('parseContentPrefix / isItemReady', () => {
     expect(isItemReady({ success: true, value: { versions: [{ state: 'uploading' }] } })).toBe(false);
   });
 
+  it('reads contentPrefix from the VERSION object (real items:get shape)', () => {
+    // The fresh item carries the prefix on versions[].contentPrefix; package.key
+    // is empty. (Capture: review/items/rQsyzQ2x4zj6PIdX.)
+    const ack = {
+      success: true,
+      value: {
+        id: 'e75d33fd',
+        versions: [
+          {
+            state: 'ready',
+            package: { key: '', md5_checksum: 'd41d8cd98f00b204e9800998ecf8427e' },
+            thumbnail: { key: 'review/items/rQsyzQ2x4zj6PIdX/story_content/thumbnail.jpg' },
+            contentPrefix: 'review/items/rQsyzQ2x4zj6PIdX',
+          },
+        ],
+      },
+    };
+    expect(parseContentPrefix(ack)).toBe('review/items/rQsyzQ2x4zj6PIdX');
+    expect(isItemReady(ack)).toBe(true);
+  });
+
+  it('derives the prefix from a version thumbnail key when contentPrefix is absent', () => {
+    expect(
+      parseContentPrefix({
+        success: true,
+        value: { versions: [{ thumbnail: { key: 'review/items/ABC/story_content/thumbnail.jpg' } }] },
+      }),
+    ).toBe('review/items/ABC');
+  });
+
   it('derives the prefix from a version package key', () => {
     expect(
       parseContentPrefix({
