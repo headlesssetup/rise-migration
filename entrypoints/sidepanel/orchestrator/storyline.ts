@@ -55,9 +55,18 @@ function courseTitle(doc: unknown): string | undefined {
 export async function scanSavedCoursesForStoryline(
   storage: Storage,
   onEvent: (e: ProgressEvent) => void,
+  /** Restrict the scan to these course ids (the operator's selection). When
+   *  omitted, scans every saved course. */
+  onlyCourseIds?: Set<string>,
 ): Promise<StorylineCourseScan[]> {
-  const ids = await storage.listSaved();
-  onEvent({ kind: 'log', message: `Scanning ${ids.length} saved course(s) for Storyline blocks…` });
+  const saved = await storage.listSaved();
+  const ids = onlyCourseIds ? saved.filter((id) => onlyCourseIds.has(id)) : saved;
+  onEvent({
+    kind: 'log',
+    message: onlyCourseIds
+      ? `Scanning ${ids.length} selected course(s) for Storyline blocks…`
+      : `Scanning ${ids.length} saved course(s) for Storyline blocks…`,
+  });
   const out: StorylineCourseScan[] = [];
   for (let i = 0; i < ids.length; i++) {
     const courseId = ids[i]!;
@@ -135,6 +144,8 @@ export interface StorylineExportDeps {
   pacing?: PacingConfig;
   /** Re-export even if a manifest already exists (default false → resume/skip). */
   force?: boolean;
+  /** Restrict to these course ids (the operator's selection); omit for all. */
+  onlyCourseIds?: Set<string>;
 }
 
 const defaultExportOne: NonNullable<StorylineExportDeps['exportOne']> = async (courseId, title) => {
@@ -167,7 +178,7 @@ export async function exportStorylinePackages(
   const refresh = deps.refresh ?? defaultRefresh;
   const pacing = deps.pacing ?? DEFAULT_PACING;
 
-  const targets = await scanSavedCoursesForStoryline(storage, onEvent);
+  const targets = await scanSavedCoursesForStoryline(storage, onEvent, deps.onlyCourseIds);
   const summary: StorylineExportSummary = {
     courses: targets.length,
     packaged: 0,

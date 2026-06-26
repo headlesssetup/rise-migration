@@ -479,10 +479,15 @@ export function App() {
     setPhase('exporting');
     setStoryline(null);
     setProgress(null);
+    // Scope to the currently SELECTED courses so the operator can test 1-2 of
+    // hundreds; if nothing is selected, fall back to all saved courses.
+    const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
     addLog(
-      'Scanning saved courses for Storyline blocks, then exporting + repackaging each (Review-360 form)…',
+      onlyCourseIds
+        ? `Exporting Storyline packages for ${onlyCourseIds.size} selected course(s)…`
+        : 'Scanning ALL saved courses for Storyline blocks, then exporting + repackaging each (Review-360 form)…',
     );
-    const summary = await exportStorylinePackages(storage, onEvent);
+    const summary = await exportStorylinePackages(storage, onEvent, { onlyCourseIds });
     setStoryline(summary);
     setPhase('done');
     addLog(
@@ -491,7 +496,7 @@ export function App() {
     if (summary.failed) {
       for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
     }
-  }, [storage, onEvent, addLog, logBreak]);
+  }, [storage, onEvent, addLog, logBreak, selected]);
 
   const runAccount = useCallback(async () => {
     if (!storage) return;
@@ -715,13 +720,18 @@ export function App() {
       <section className="card">
         <h2>D · Embeds (Storyline)</h2>
         <button onClick={runStoryline} disabled={busy || !storage || !session?.risePresent}>
-          {phase === 'exporting' ? 'Working…' : 'Export storyline packages'}
+          {phase === 'exporting'
+            ? 'Working…'
+            : selected.size > 0
+              ? `Export storyline packages (${selected.size} selected)`
+              : 'Export storyline packages (ALL saved)'}
         </button>
         <p className="hint">
-          Finds saved courses containing Storyline/Mighty blocks, triggers a Rise web export for
-          each (paced), downloads the zip from the CDN, and repackages every storyline bundle into
-          a Review-360 upload zip → storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip + a per-course
-          manifest. Re-runnable (skips courses already exported). Needs a logged-in Rise tab.
+          For the courses <b>selected above</b> (or all saved courses if none selected) that
+          contain Storyline/Mighty blocks: triggers a Rise web export (paced), downloads the zip,
+          and repackages every storyline bundle into a Review-360 upload zip →
+          storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip + a per-course manifest. Select 1–2 courses in
+          C to test without exporting everything. Re-runnable (skips courses already exported).
         </p>
         {storyline && (
           <p className="hint">

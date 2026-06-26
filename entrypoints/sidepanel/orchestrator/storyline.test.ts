@@ -85,6 +85,21 @@ describe('scanSavedCoursesForStoryline', () => {
   });
 });
 
+describe('scanSavedCoursesForStoryline — scoped to selection', () => {
+  it('scans only the selected course ids', async () => {
+    const docFor = (id: string) =>
+      JSON.stringify({ payload: { ...COURSE_DOC, course: { id, title: id } } });
+    const store = {
+      listSaved: async () => ['C1', 'C2', 'C3'],
+      readCourse: async (id: string) => docFor(id),
+    } as any;
+    const { onEvent, logs } = sink();
+    const scans = await scanSavedCoursesForStoryline(store, onEvent, new Set(['C2']));
+    expect(scans.map((s) => s.courseId)).toEqual(['C2']);
+    expect(logs.some((l) => /1 selected course/.test(l))).toBe(true);
+  });
+});
+
 describe('exportStorylinePackages', () => {
   it('triggers export, downloads, repackages each leaf, writes a manifest', async () => {
     const { store, zips, manifests } = makeStorage();
