@@ -111,19 +111,19 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
     try {
       ws = connect(opts.url ?? WS_EXPORT_URL);
     } catch (e) {
-      reject(new Error(`ws.eu connect failed: ${(e as Error).message}`));
+      reject(new Error(`Rise export socket: connect failed: ${(e as Error).message}`));
       return;
     }
 
     timer = setTimeout(
-      () => done(() => reject(new Error(`ws.eu export timed out after ${timeoutMs}ms`))),
+      () => done(() => reject(new Error(`Rise export socket: export timed out after ${timeoutMs}ms`))),
       timeoutMs,
     );
     // Fail fast if `identify` never lands — almost always a stale token.
     idTimer = setTimeout(() => {
       if (!identified) {
         done(() =>
-          reject(new Error(`ws.eu identify not received within ${identifyTimeoutMs}ms (token likely stale)`)),
+          reject(new Error(`Rise export socket: identify not received within ${identifyTimeoutMs}ms (token likely stale)`)),
         );
       }
     }, identifyTimeoutMs);
@@ -133,7 +133,7 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
         opts.onOpen?.();
         ws.send(buildIdentify(opts.token));
       } catch (e) {
-        done(() => reject(new Error(`ws.eu identify send failed: ${(e as Error).message}`)));
+        done(() => reject(new Error(`Rise export socket: identify send failed: ${(e as Error).message}`)));
       }
     });
 
@@ -155,17 +155,17 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
       } else if (frame.kind === 'package-error') {
         if (opts.jobId && frame.jobId && frame.jobId !== opts.jobId) return;
         done(() =>
-          reject(new Error(`ws.eu package error (${frame.type})${frame.message ? `: ${frame.message}` : ''}`)),
+          reject(new Error(`Rise export socket: package error (${frame.type})${frame.message ? `: ${frame.message}` : ''}`)),
         );
       }
       // 'identified' / 'other' — keep waiting.
     });
 
     ws.addEventListener('error', () => {
-      done(() => reject(new Error('ws.eu socket error')));
+      done(() => reject(new Error('Rise export socket: socket error')));
     });
     ws.addEventListener('close', () => {
-      done(() => reject(new Error('ws.eu socket closed before package:success')));
+      done(() => reject(new Error('Rise export socket: socket closed before package:success')));
     });
   });
 }

@@ -189,12 +189,23 @@ export async function exportStorylinePackages(
   };
   if (!targets.length) return summary;
 
-  // Refresh once up front (the build is cookie-authed; a stale session 403s).
+  // Proper auth BEFORE any action: refresh once up front and abort if the token
+  // can't be made valid — a stale session fails every export, so don't attempt.
   try {
     const r = await refresh();
     if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+    if (r && r.valid === false) {
+      summary.aborted = 'stale session token';
+      summary.notAttempted = targets.length;
+      onEvent({
+        kind: 'log',
+        message:
+          '⛔ Session token is stale and could not be refreshed. Open a Rise COURSE EDITOR (any course, not the dashboard) on the SOURCE account, keep it focused, then run again.',
+      });
+      return summary;
+    }
   } catch {
-    /* best-effort */
+    /* best-effort — proceed and let the first course surface any auth issue */
   }
 
   for (let i = 0; i < targets.length; i++) {
@@ -376,6 +387,15 @@ export async function uploadStorylineToReview360(
   try {
     const r = await refresh();
     if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+    if (r && r.valid === false) {
+      summary.aborted = 'stale session token';
+      onEvent({
+        kind: 'log',
+        message:
+          '⛔ Session token is stale and could not be refreshed. Open a Rise COURSE EDITOR (any course, not the dashboard) on the TARGET account, keep it focused, then run again.',
+      });
+      return summary;
+    }
   } catch {
     /* best-effort */
   }

@@ -144,6 +144,20 @@ describe('exportStorylinePackages', () => {
     expect(exportOne).not.toHaveBeenCalled();
   });
 
+  it('aborts up-front (attempts nothing) when the token cannot be refreshed', async () => {
+    const { store } = makeStorage();
+    const { onEvent, logs } = sink();
+    const exportOne = vi.fn();
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne,
+      fetchZip: vi.fn(),
+      refresh: vi.fn(async () => ({ advanced: false, valid: false })),
+    });
+    expect(exportOne).not.toHaveBeenCalled();
+    expect(summary.aborted).toMatch(/stale/);
+    expect(logs.some((l) => /COURSE EDITOR/.test(l))).toBe(true);
+  });
+
   it('records a per-course (non-auth) failure without throwing', async () => {
     const { store } = makeStorage();
     const { onEvent } = sink();

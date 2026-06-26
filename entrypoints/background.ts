@@ -181,6 +181,20 @@ export default defineBackground(() => {
     return any.find((t) => typeof t.id === 'number');
   }
 
+  // A Rise COURSE EDITOR tab — URL path `/authoring/{id}`. Operator-confirmed:
+  // ONLY a course-editor boot rotates the bearer; reloading the dashboard /
+  // project list (`/manage`, `/`) does NOT. So token refresh must target one of
+  // these, never the dashboard. Prefer the active/last-focused editor.
+  async function findCourseEditorTab(): Promise<chrome.tabs.Tab | undefined> {
+    const isEditor = (t: chrome.tabs.Tab): boolean =>
+      typeof t.id === 'number' && /\/authoring\/[^/]+/.test(t.url ?? '');
+    const active = await chrome.tabs.query({ url: RISE_TAB_GLOBS, active: true, lastFocusedWindow: true });
+    const hit = active.find(isEditor);
+    if (hit) return hit;
+    const any = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
+    return any.find(isEditor);
+  }
+
   // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
   // the access token Rise sends as `Authorization: Bearer`. This needs no course
   // navigation and no page reload: the Cookies API reads it (even httpOnly) for
@@ -372,7 +386,11 @@ export default defineBackground(() => {
   // operator to open a course). We reload the active/last-focused Rise tab (the
   // one the operator is looking at and that writes already ride).
   async function reloadRiseTabForToken(): Promise<boolean> {
-    const tab = await findRiseTab();
+    // ONLY reload a course-editor tab — reloading the dashboard/project list is
+    // useless (it never rotates the bearer) and disruptive, so we never do it.
+    // If no editor tab is open, give up here; the caller reports "open a course
+    // editor" rather than churning the wrong tab.
+    const tab = await findCourseEditorTab();
     if (!tab || typeof tab.id !== 'number') return false;
     const before = identity?.expiresAt ?? 0;
     try {
