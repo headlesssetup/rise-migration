@@ -52,7 +52,10 @@ export function connectReviewSocket(opts: {
   timeoutMs?: number;
 }): Promise<Socket> {
   const base = opts.base ?? REVIEW_SOCKET_BASE;
-  const socket = io(`${base}/user/${encodeURIComponent(opts.userId)}`, {
+  // The namespace is `/user/{userId}` with the LITERAL user id (e.g.
+  // `auth0|5d53…`) — capture-confirmed. Do NOT percent-encode it: an encoded
+  // pipe (`auth0%7C…`) yields "Invalid namespace" from the server.
+  const socket = io(`${base}/user/${opts.userId}`, {
     transports: ['websocket'],
     auth: { token: opts.token },
     forceNew: true,
