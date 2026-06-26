@@ -23,6 +23,7 @@ import {
   readArchiveInfo,
   readSourceIdentity,
   runImport,
+  uploadStorylineToReview360,
   type AccountSettingsSummary,
   type ArchiveInfo,
   type BankImportOutcome,
@@ -204,6 +205,14 @@ export function ImportView({
         onEvent={onEvent}
         logBreak={logBreak}
         stop={stop}
+      />
+      <StorylineUploadSection
+        storage={storage}
+        liveOk={liveOk}
+        running={running}
+        setRunning={setRunning}
+        onEvent={onEvent}
+        logBreak={logBreak}
       />
     </section>
   );
@@ -594,6 +603,56 @@ function CoursesSection({
       )}
       {blocked && <p style={{ color: '#b00', fontWeight: 600 }}>BLOCKED: {blocked}</p>}
       {outcomes.length > 0 && <OutcomeTable outcomes={outcomes} />}
+    </CollapsibleStep>
+  );
+}
+
+/** Stage C — upload the locally staged Storyline packages to the TARGET account's
+ *  Review 360 (records each review/items/{leaf} prefix into the course manifest,
+ *  ready for the course-import attach). A write to the target, so it rides the
+ *  same target-confirmation gate. */
+function StorylineUploadSection({
+  storage,
+  liveOk,
+  running,
+  setRunning,
+  onEvent,
+  logBreak,
+}: {
+  storage: Storage | null;
+  liveOk: boolean;
+  running: boolean;
+  setRunning: (b: boolean) => void;
+  onEvent: (e: ProgressEvent) => void;
+  logBreak: (label?: string) => void;
+}) {
+  const go = useCallback(async () => {
+    if (!storage) return;
+    logBreak('Upload storyline packages → Review 360');
+    setRunning(true);
+    try {
+      const s = await uploadStorylineToReview360(storage, onEvent);
+      onEvent({
+        kind: 'log',
+        message: `Done: ${s.uploaded} uploaded, ${s.skipped} skipped, ${s.failed} failed${s.notAttempted ? `, ${s.notAttempted} not attempted` : ''}.`,
+      });
+    } finally {
+      setRunning(false);
+    }
+  }, [storage, onEvent, logBreak, setRunning]);
+
+  return (
+    <CollapsibleStep title="D · Storyline → Review 360" defaultOpen={false}>
+      <p className="hint">
+        Uploads every staged package (storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip) to the
+        <b> target</b> account's Review 360 over socket.io, then records each
+        review/items/&lt;leaf&gt; prefix back into the course manifest — the join key the course
+        import uses to attach Storyline blocks. Run on the target tab. Resumable (skips packages
+        already uploaded).
+      </p>
+      <button onClick={go} disabled={!liveOk || running}>
+        {running ? 'Uploading…' : 'Upload staged packages'}
+      </button>
     </CollapsibleStep>
   );
 }

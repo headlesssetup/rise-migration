@@ -100,6 +100,35 @@ async function readCourseAssets(
   return { entries, fileByKey };
 }
 
+/** Build the storyline attach map for a source course from its storyline
+ *  manifest: SOURCE block id → {reviewPrefix, meta, title}, but ONLY for blocks
+ *  whose package has been uploaded (manifest.uploads[leaf].reviewPrefix exists).
+ *  Blocks without an uploaded package are left to the manual flag path. */
+async function readStorylineAttach(
+  storage: Storage,
+  courseId: string,
+): Promise<Map<string, { reviewPrefix: string; meta?: unknown; title?: string }> | undefined> {
+  const raw = await storage.readStorylineManifest(courseId);
+  if (!raw) return undefined;
+  try {
+    const m = JSON.parse(raw) as {
+      blocks?: Array<{ blockId: string; leaf: string; meta?: unknown }>;
+      uploads?: Record<string, { reviewPrefix?: string }>;
+    };
+    const map = new Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>();
+    for (const b of m.blocks ?? []) {
+      const reviewPrefix = m.uploads?.[b.leaf]?.reviewPrefix;
+      if (!reviewPrefix) continue;
+      const title =
+        b.meta && typeof b.meta === 'object' ? (b.meta as { title?: string }).title : undefined;
+      map.set(b.blockId, { reviewPrefix, meta: b.meta, title });
+    }
+    return map.size ? map : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Collect the banks referenced by draw-from-bank blocks in a course doc. */
 async function readReferencedBanks(
   storage: Storage,
@@ -302,11 +331,19 @@ export async function runImport(
 
     const { entries, fileByKey } = await readCourseAssets(storage, courseId);
     const banksById = await readReferencedBanks(storage, course);
+    const storylineAttach = await readStorylineAttach(storage, courseId);
+    if (storylineAttach) {
+      onEvent({
+        kind: 'log',
+        message: `Storyline: ${storylineAttach.size} block(s) have uploaded packages → will attach (rest flagged).`,
+      });
+    }
 
     const input: PlanInput = {
       course,
       assets: entries,
       banksById,
+      storylineAttach,
       // The current account-local user (the `_articulate_user_id` owner), NOT the
       // Okta `sub` — same principal the folders API requires. Author of created
       // lessons/locks; keeps every created resource owned by the live account.

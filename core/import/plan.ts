@@ -72,6 +72,12 @@ export interface PlanInput {
    *  plan emits a bind step (auto-bind) WITHOUT creating the bank — the bank and
    *  its question ids already exist on the target. Supersedes `recreateBanks`. */
   boundBanks?: Map<string, { newBankId: string; questionIds: string[] }>;
+  /** Staged Storyline packages already uploaded to the TARGET Review 360, keyed
+   *  by SOURCE block id → its `review/items/{leaf}` prefix + meta/title. When an
+   *  entry exists for a storyline block, the plan emits an ATTACH (copy_review_item
+   *  + media patch) instead of a manual flag. Built by the orchestrator from the
+   *  course's storyline manifest (only entries whose package has been uploaded). */
+  storylineAttach?: Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>;
 }
 
 export type PlanStep =
@@ -166,6 +172,18 @@ export type PlanStep =
       kind: 'flag-storyline';
       sourceLessonId: string;
       sourceBlockId: string;
+      summary: string;
+    }
+  | {
+      // Storyline/Mighty block whose package is staged + uploaded to the target
+      // Review 360: copy_review_item into the course, then patch media.storyline.
+      kind: 'attach-storyline';
+      sourceLessonId: string;
+      sourceBlockId: string;
+      /** `review/items/{leaf}` on the target account (from the upload). */
+      reviewPrefix: string;
+      meta?: unknown;
+      title?: string;
       summary: string;
     }
   | {
@@ -394,6 +412,19 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Create lesson "${lTitle}" (${lType})`,
     });
 
+    // Set the course title right after the FIRST lesson materializes the course
+    // (the bare shell is a title-less catalog row, and Rise rejects titling a
+    // lesson-less course). Early so a partial/stopped import is identifiable in
+    // the dashboard instead of a nameless course.
+    if (idx === 0) {
+      steps.push({
+        kind: 'set-title',
+        sourceCourseId,
+        title,
+        summary: `Set course title "${title}"`,
+      });
+    }
+
     // Lesson-level media (header image + any lesson `media`) — uploaded BEFORE
     // UPDATE_LESSON so the lesson payload carries the remapped key instead of a
     // blank. Same orphan/oversize handling as block media; oversize is PREDICTED
@@ -469,12 +500,25 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       const variant = String(block.variant ?? '');
 
       if (isStoryline(block)) {
-        steps.push({
-          kind: 'flag-storyline',
-          sourceLessonId,
-          sourceBlockId,
-          summary: `⚠ Storyline/Mighty block needs manual Review-360 attach`,
-        });
+        const attach = input.storylineAttach?.get(sourceBlockId);
+        if (attach) {
+          steps.push({
+            kind: 'attach-storyline',
+            sourceLessonId,
+            sourceBlockId,
+            reviewPrefix: attach.reviewPrefix,
+            meta: attach.meta,
+            title: attach.title,
+            summary: `Attach Storyline from ${attach.reviewPrefix}`,
+          });
+        } else {
+          steps.push({
+            kind: 'flag-storyline',
+            sourceLessonId,
+            sourceBlockId,
+            summary: `⚠ Storyline/Mighty block needs manual Review-360 attach`,
+          });
+        }
         continue;
       }
 
@@ -559,14 +603,16 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     // (no unlock — we never locked)
   });
 
-  // Title now — best-effort, AFTER the course has been materialized by its first
-  // lesson (the shell on its own is a catalog row, not a real course).
-  steps.push({
-    kind: 'set-title',
-    sourceCourseId,
-    title,
-    summary: `Set course title "${title}"`,
-  });
+  // Fallback title for a lesson-less course (the per-first-lesson title above
+  // never fired). A confirmed bare shell is a real course, so titling it is safe.
+  if (ordered.length === 0) {
+    steps.push({
+      kind: 'set-title',
+      sourceCourseId,
+      title,
+      summary: `Set course title "${title}"`,
+    });
+  }
 
   // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
   // ("add a lesson to your course before theming"). Applied once, course-level.

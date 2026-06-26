@@ -16,8 +16,16 @@ export interface WriteSpec {
   base64Body?: string;
   /** Content-Type to send (defaults to application/json when `body` is set). */
   contentType?: string;
+  /** Extra request headers (e.g. `Content-MD5` for a Review-360 upload PUT whose
+   *  presigned signature covers `content-md5;host`). Merged after Content-Type. */
+  headers?: Record<string, string>;
   /** Omit the bearer Authorization header (presigned S3 PUT carries its own). */
   noAuth?: boolean;
+  /** Omit ONLY the bearer header but KEEP first-party cookies (credentials:
+   *  include). For endpoints that are cookie-authed and reject a stale bearer —
+   *  e.g. `build/{id}/raw`, which the editor calls with cookies and NO
+   *  Authorization header (capture-confirmed). */
+  omitBearer?: boolean;
   /** Human label for the dry-run plan + loud-fail reports. */
   label: string;
 }
@@ -251,6 +259,56 @@ export function insertQuestionBankQuestions(payload: {
   return ducks('lessons', 'INSERT_QUESTION_BANK_QUESTIONS', payload);
 }
 
+// --- Storyline / Review 360 attach (protocol §8) ----------------------------
+
+/** POST /api/rise-runtime/copy_review_item — server-side S3 copy of a published
+ *  Review-360 package into the course's asset space (`rise/courses/{courseId}/{leaf}/…`),
+ *  exactly as the editor's "add from Review 360" picker does (capture-confirmed,
+ *  `ffd25a16-storylinemitm.txt`). `jobId` IS the empty storyline block's id. The
+ *  response is a list of S3 CopyObjectResult entries. NOT a ducks RPC — a direct
+ *  rise-runtime route. After this, patch the block with {@link updateBlockDebounce}
+ *  using {@link buildStorylineMedia}. */
+export function copyReviewItem(args: {
+  courseId: string;
+  /** The staged item's prefix, `review/items/{leaf}`. */
+  reviewPrefix: string;
+  /** The target (empty) storyline block id — sent as `jobId`. */
+  blockId: string;
+}): WriteSpec {
+  return {
+    url: '/api/rise-runtime/copy_review_item',
+    method: 'POST',
+    body: JSON.stringify({
+      id: args.courseId,
+      reviewPrefix: args.reviewPrefix,
+      jobId: args.blockId,
+    }),
+    label: `copy_review_item → block ${args.blockId}`,
+  };
+}
+
+/** Build the `media.storyline` object set on a storyline block after the copy.
+ *  `contentPrefix` is the copied bundle location `rise/courses/{courseId}/{leaf}`;
+ *  `src` is its `story.html`; `meta` is copied verbatim from the archived source
+ *  block (== the package's `threeSixty.json`); `processing:false` (already copied).
+ *  Shape confirmed against the EU `UPDATE_BLOCK_DEBOUNCE` capture. */
+export function buildStorylineMedia(args: {
+  contentPrefix: string;
+  meta: unknown;
+  title?: string;
+}): { storyline: Record<string, unknown> } {
+  return {
+    storyline: {
+      contentPrefix: args.contentPrefix,
+      src: `${args.contentPrefix}/story.html`,
+      meta: args.meta,
+      processing: false,
+      ...(args.title !== undefined ? { title: args.title } : {}),
+      type: 'storyline',
+    },
+  };
+}
+
 // --- Asset upload chain (protocol §8) ---------------------------------------
 
 export function getYurl(args: {
@@ -280,6 +338,26 @@ export function s3Put(args: {
     contentType: args.contentType,
     noAuth: true,
     label: 'S3 PUT (upload bytes)',
+  };
+}
+
+/** S3 PUT for a Review-360 package upload. Differs from {@link s3Put} in that the
+ *  presigned url signs `content-md5;host`, so the PUT MUST carry `Content-MD5`
+ *  (base64 MD5 of the bytes — the same value sent to `yurl:get`). No auth. */
+export function s3PutReview(args: {
+  url: string;
+  base64Body: string;
+  contentMd5Base64: string;
+  contentType?: string;
+}): WriteSpec {
+  return {
+    url: args.url,
+    method: 'PUT',
+    base64Body: args.base64Body,
+    contentType: args.contentType ?? 'application/zip',
+    headers: { 'Content-MD5': args.contentMd5Base64 },
+    noAuth: true,
+    label: 'S3 PUT (Review-360 package)',
   };
 }
 

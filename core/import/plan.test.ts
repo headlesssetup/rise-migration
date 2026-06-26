@@ -367,6 +367,37 @@ describe('buildPlan media + flags', () => {
     );
     expect(steps.some((s) => s.kind === 'flag-storyline')).toBe(true);
   });
+
+  it('attaches a storyline block when its package is uploaded (else flags)', () => {
+    const course = {
+      course: { id: 'SRC', title: 'C' },
+      lessons: [
+        {
+          id: 'L1',
+          position: 0,
+          type: 'blocks',
+          title: 'L',
+          items: [
+            { id: 'cb1', family: '360', variant: 'storyline', items: [{ id: 'ci1' }] },
+            { id: 'cb2', family: '360', variant: 'storyline', items: [{ id: 'ci2' }] },
+          ],
+        },
+      ],
+    };
+    const steps = buildPlan(
+      input({
+        course,
+        storylineAttach: new Map([
+          ['cb1', { reviewPrefix: 'review/items/LEAF1', meta: { title: 'S1' }, title: 'S1' }],
+        ]),
+      }),
+    );
+    const attach = steps.find((s) => s.kind === 'attach-storyline');
+    expect(attach).toMatchObject({ sourceBlockId: 'cb1', reviewPrefix: 'review/items/LEAF1' });
+    // cb2 has no uploaded package → still flagged
+    expect(steps.some((s) => s.kind === 'flag-storyline' && s.sourceBlockId === 'cb2')).toBe(true);
+    expect(steps.some((s) => s.kind === 'attach-storyline' && s.sourceBlockId === 'cb2')).toBe(false);
+  });
 });
 
 describe('buildPlan — lesson header media', () => {

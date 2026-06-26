@@ -55,8 +55,10 @@ import {
   listAllCourses,
   scanSavedBanks,
   scanSavedCourses,
+  exportStorylinePackages,
   type AssetsSummary,
   type ProgressEvent,
+  type StorylineExportSummary,
 } from './orchestrator';
 import { rpc } from './rpc';
 
@@ -106,7 +108,7 @@ export function App() {
   const [copied, setCopied] = useState(false);
   // Live import status for the log-header countdown (set via ImportView).
   const [importStatus, setImportStatus] = useState<
-    { label: string; finishAt: number | null } | null
+    { label: string; finishAt: number | null; done: boolean } | null
   >(null);
   const [, forceTick] = useState(0);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
@@ -116,6 +118,7 @@ export function App() {
   const [novelty, setNovelty] = useState<NoveltyReport | null>(null);
   const [banks, setBanks] = useState<BankCatalog | null>(null);
   const [assets, setAssets] = useState<AssetsSummary | null>(null);
+  const [storyline, setStoryline] = useState<StorylineExportSummary | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   // Only auto-scroll the log to the bottom when the user is already there — if
   // they've scrolled up to read, leave their position alone.
@@ -157,10 +160,11 @@ export function App() {
     (e: Extract<ProgressEvent, { kind: 'import-status' }>) => {
       setImportStatus(
         e.done
-          ? { label: e.label, finishAt: null }
+          ? { label: e.label, finishAt: null, done: true }
           : {
               label: e.label,
               finishAt: e.etaSeconds != null ? Date.now() + e.etaSeconds * 1000 : null,
+              done: false,
             },
       );
     },
@@ -240,8 +244,10 @@ export function App() {
       if (e.kind === 'log') addLog(e.message);
       else if (e.kind === 'course')
         setProgress({ done: e.index + 1, total: e.total });
+      // Drive the header countdown for export/upload too (not just import).
+      else if (e.kind === 'import-status') onImportStatus(e);
     },
-    [addLog],
+    [addLog, onImportStatus],
   );
 
   const useFolder = useCallback(
@@ -470,6 +476,31 @@ export function App() {
     }
   }, [storage, onEvent, addLog, logBreak, session]);
 
+  const runStoryline = useCallback(async () => {
+    if (!storage) return;
+    logBreak('Export storyline packages');
+    setPhase('exporting');
+    setStoryline(null);
+    setProgress(null);
+    // Scope to the currently SELECTED courses so the operator can test 1-2 of
+    // hundreds; if nothing is selected, fall back to all saved courses.
+    const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
+    addLog(
+      onlyCourseIds
+        ? `Exporting Storyline packages for ${onlyCourseIds.size} selected course(s)…`
+        : 'Scanning ALL saved courses for Storyline blocks, then exporting + repackaging each (Review-360 form)…',
+    );
+    const summary = await exportStorylinePackages(storage, onEvent, { onlyCourseIds });
+    setStoryline(summary);
+    setPhase('done');
+    addLog(
+      `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks. → storyline/<courseId>/<leaf>.zip + manifest.`,
+    );
+    if (summary.failed) {
+      for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
+    }
+  }, [storage, onEvent, addLog, logBreak, selected]);
+
   const runAccount = useCallback(async () => {
     if (!storage) return;
     logBreak('Export account data');
@@ -687,6 +718,31 @@ export function App() {
         </p>
         {assets && <AssetsView summary={assets} />}
       </section>
+
+      {/* D · Embeds — Storyline packages */}
+      <section className="card">
+        <h2>D · Embeds (Storyline)</h2>
+        <button onClick={runStoryline} disabled={busy || !storage || !session?.risePresent}>
+          {phase === 'exporting'
+            ? 'Working…'
+            : selected.size > 0
+              ? `Export storyline packages (${selected.size} selected)`
+              : 'Export storyline packages (ALL saved)'}
+        </button>
+        <p className="hint">
+          For the courses <b>selected above</b> (or all saved courses if none selected) that
+          contain Storyline/Mighty blocks: triggers a Rise web export (paced), downloads the zip,
+          and repackages every storyline bundle into a Review-360 upload zip →
+          storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip + a per-course manifest. Select 1–2 courses in
+          C to test without exporting everything. Re-runnable (skips courses already exported).
+        </p>
+        {storyline && (
+          <p className="hint">
+            {storyline.packaged} packaged · {storyline.skipped} skipped · {storyline.failed} failed
+            {' '}of {storyline.courses} storyline course(s).
+          </p>
+        )}
+      </section>
       </>
       )}
 
@@ -725,7 +781,9 @@ export function App() {
                 {importStatus.label}
                 {importStatus.finishAt != null
                   ? ` · ${fmtRemaining(importStatus.finishAt - Date.now())} remaining`
-                  : ''}
+                  : importStatus.done
+                    ? ''
+                    : ' · estimating…'}
               </span>
             )}
           </span>

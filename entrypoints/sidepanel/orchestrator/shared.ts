@@ -14,6 +14,26 @@ export type ProgressEvent =
   // there's enough signal to estimate; `done` marks the run finished.
   | { kind: 'import-status'; label: string; etaSeconds: number | null; done: boolean };
 
+/**
+ * Build a live countdown (`import-status`) event from elapsed wall-clock and the
+ * fraction of work done. Self-correcting and pacing-agnostic. The ETA is null
+ * until there's a little signal (>2% done AND >3s elapsed) so the first estimate
+ * isn't wildly noisy; the header shows "estimating…" until then. Shared by the
+ * import, storyline export, and storyline upload loops.
+ */
+export function etaStatus(args: {
+  label: string;
+  doneFraction: number;
+  runStartMs: number;
+  nowMs: number;
+}): Extract<ProgressEvent, { kind: 'import-status' }> {
+  const f = Math.max(0, Math.min(1, args.doneFraction));
+  const elapsed = args.nowMs - args.runStartMs;
+  const etaSeconds =
+    f > 0.02 && elapsed > 3000 ? Math.round((elapsed * (1 - f)) / f / 1000) : null;
+  return { kind: 'import-status', label: args.label, etaSeconds, done: false };
+}
+
 /** Unwrap a saved raw body — accept either the ducks envelope (`{payload}`) or
  *  the bare payload — into the course document we scan. */
 export function unwrap(raw: string): GetCourseDocument {

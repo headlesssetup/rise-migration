@@ -18,6 +18,15 @@ import {
   type RequestSpec,
 } from '@/core/rise-client';
 import type { WriteSpec } from '@/core/import/envelopes';
+import { buildRawExportRequest, parseBuildAck } from '@/core/storyline/build-request';
+import { awaitExportLocation, wsExportUrlForPlane, type WsLike } from '@/core/storyline/ws-export-client';
+import { s3PutReview } from '@/core/import/envelopes';
+import {
+  awaitContentPrefix,
+  connectReviewSocket,
+  reviewSocketBaseForPlane,
+  uploadStorylinePackage,
+} from '@/core/storyline/review-socket-client';
 import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
@@ -46,7 +55,9 @@ interface RelaySpec {
   body?: string;
   base64Body?: string;
   contentType?: string;
+  headers?: Record<string, string>;
   noAuth?: boolean;
+  omitBearer?: boolean;
 }
 
 // Executed INSIDE the Rise tab (isolated world) — a same-origin fetch that
@@ -64,13 +75,18 @@ async function fetchInRiseTab(
     body?: string;
     base64Body?: string;
     contentType?: string;
+    headers?: Record<string, string>;
     noAuth?: boolean;
+    omitBearer?: boolean;
   },
   token: string | null,
 ): Promise<InPageResult> {
   try {
     const headers: Record<string, string> = {};
-    if (token && !spec.noAuth) headers.Authorization = `Bearer ${token}`;
+    // noAuth: no bearer + no cookies (presigned S3). omitBearer: no bearer but
+    // KEEP cookies (cookie-authed endpoints like build/raw, which 403 on a stale
+    // bearer). Default: bearer + cookies.
+    if (token && !spec.noAuth && !spec.omitBearer) headers.Authorization = `Bearer ${token}`;
 
     let body: BodyInit | undefined;
     if (spec.base64Body !== undefined) {
@@ -83,6 +99,9 @@ async function fetchInRiseTab(
       body = spec.body;
       headers['Content-Type'] = spec.contentType || 'application/json';
     }
+    // Explicit per-spec headers (e.g. Content-MD5 on a Review-360 upload PUT)
+    // override the defaults above.
+    if (spec.headers) Object.assign(headers, spec.headers);
 
     const res = await fetch(spec.url, {
       method: spec.method,
@@ -162,6 +181,20 @@ export default defineBackground(() => {
     return any.find((t) => typeof t.id === 'number');
   }
 
+  // A Rise COURSE EDITOR tab — URL path `/authoring/{id}`. Operator-confirmed:
+  // ONLY a course-editor boot rotates the bearer; reloading the dashboard /
+  // project list (`/manage`, `/`) does NOT. So token refresh must target one of
+  // these, never the dashboard. Prefer the active/last-focused editor.
+  async function findCourseEditorTab(): Promise<chrome.tabs.Tab | undefined> {
+    const isEditor = (t: chrome.tabs.Tab): boolean =>
+      typeof t.id === 'number' && /\/authoring\/[^/]+/.test(t.url ?? '');
+    const active = await chrome.tabs.query({ url: RISE_TAB_GLOBS, active: true, lastFocusedWindow: true });
+    const hit = active.find(isEditor);
+    if (hit) return hit;
+    const any = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
+    return any.find(isEditor);
+  }
+
   // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
   // the access token Rise sends as `Authorization: Bearer`. This needs no course
   // navigation and no page reload: the Cookies API reads it (even httpOnly) for
@@ -225,7 +258,9 @@ export default defineBackground(() => {
             body: spec.body,
             base64Body: spec.base64Body,
             contentType: spec.contentType,
+            headers: spec.headers,
             noAuth: spec.noAuth,
+            omitBearer: spec.omitBearer,
           },
           token,
         ],
@@ -351,7 +386,11 @@ export default defineBackground(() => {
   // operator to open a course). We reload the active/last-focused Rise tab (the
   // one the operator is looking at and that writes already ride).
   async function reloadRiseTabForToken(): Promise<boolean> {
-    const tab = await findRiseTab();
+    // ONLY reload a course-editor tab — reloading the dashboard/project list is
+    // useless (it never rotates the bearer) and disruptive, so we never do it.
+    // If no editor tab is open, give up here; the caller reports "open a course
+    // editor" rather than churning the wrong tab.
+    const tab = await findCourseEditorTab();
     if (!tab || typeof tab.id !== 'number') return false;
     const before = identity?.expiresAt ?? 0;
     try {
@@ -610,6 +649,133 @@ export default defineBackground(() => {
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
+
+      case 'STORYLINE_EXPORT': {
+        // Trigger the web/raw export and await its zip URL on the ws.eu socket.
+        // The socket runs here so the bearer never leaves the background; the
+        // build/raw POST is sent only AFTER `identify` so we can't miss the
+        // completion notify. One course at a time (the panel paces the loop), so
+        // the first package:success is ours.
+        if (!token) {
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: false, error: 'No Rise token captured yet.' },
+          };
+        }
+        // Keep the bearer fresh PER COURSE: the ws `identify` is token-authed and
+        // fails silently (socket opens, no identify result) on a stale token —
+        // the dominant failure on a long run. Re-read the rotated cookie cheaply;
+        // reauth (tab reload) only when actually near expiry.
+        if (tokenExpiringSoon()) await reauth();
+        else await grabTokenFromCookie();
+
+        // The completion socket is PLANE-SPECIFIC: a US export's package:success
+        // is pushed to wss://ws.articulate.com, an EU export's to ws.eu. Listen on
+        // the plane of the source Rise tab (where build/raw runs), else we wait
+        // forever on the wrong host.
+        const exportTab = await findRiseTab();
+        const plane = planeFromHost(exportTab?.url);
+        const wsUrl = wsExportUrlForPlane(plane);
+        const trace: string[] = [`plane=${plane ?? '?'}`, `ws=${wsUrl}`];
+        try {
+          const loc = await awaitExportLocation({
+            token,
+            url: wsUrl,
+            connect: (url) => new WebSocket(url) as unknown as WsLike,
+            // Fail fast if identify never lands (stale token); allow big-course
+            // server builds plenty of time once identified.
+            identifyTimeoutMs: 30_000,
+            timeoutMs: 240_000,
+            onOpen: () => trace.push('open'),
+            // The sessionId is SERVER-ASSIGNED: it comes back on the `identify`
+            // result and MUST be echoed as build/raw's websocketSessionId, or the
+            // server never routes the package:success notify to our socket
+            // (capture-confirmed: identify→{sessionId} == build/raw websocketSessionId).
+            onIdentified: async (serverSessionId) => {
+              trace.push(`identified(${serverSessionId.slice(0, 8)})`);
+              const { spec } = buildRawExportRequest({
+                courseId: msg.courseId,
+                title: msg.title,
+                websocketSessionId: serverSessionId,
+              });
+              const r = await relayWrite(spec);
+              trace.push(`build HTTP ${r.status}`);
+              if (!r.ok) {
+                throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 150)}`);
+              }
+              trace.push(`jobId ${parseBuildAck(r.text).jobId}`);
+            },
+          });
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: true, status: 200, data: loc },
+          };
+        } catch (e) {
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
+          };
+        }
+      }
+
+      case 'STORYLINE_UPLOAD': {
+        // Upload one repackaged storyline zip to the TARGET Review 360 over
+        // socket.io, then resolve its published contentPrefix. Plane-agnostic:
+        // the review-sockets host follows the active tab's plane.
+        if (!token) {
+          return { type: 'STORYLINE_UPLOAD_RESULT', result: { ok: false, error: 'No Rise token captured yet.' } };
+        }
+        const userId = await readAccountUserId();
+        if (!userId) {
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: false, error: 'No target account user id (open a logged-in Rise/360 tab).' },
+          };
+        }
+        const tab = await findRiseTab();
+        const base = reviewSocketBaseForPlane(planeFromHost(tab?.url));
+        const trace: string[] = [`base=${base}`, `user=${userId.slice(0, 12)}`];
+        let socket: Awaited<ReturnType<typeof connectReviewSocket>> | null = null;
+        try {
+          socket = await connectReviewSocket({ userId, token, base });
+          trace.push('connected');
+          const zipBytes = Uint8Array.from(atob(msg.zipB64), (c) => c.charCodeAt(0));
+          const { itemId, key } = await uploadStorylinePackage({
+            socket,
+            userId,
+            fileName: msg.fileName,
+            zipBytes,
+            md5Base64: msg.md5Base64,
+            md5Hex: msg.md5Hex,
+            // Cross-origin presigned PUT with Content-MD5 (reuse the same base64
+            // bytes/md5 the panel computed; bytes arg is identical).
+            putBytes: async (url) => {
+              const r = await relayWrite(
+                s3PutReview({ url, base64Body: msg.zipB64, contentMd5Base64: msg.md5Base64 }),
+              );
+              if (!r.ok) throw new Error(`S3 PUT HTTP ${r.status}: ${(r.text ?? '').slice(0, 120)}`);
+            },
+          });
+          trace.push(`item ${itemId.slice(0, 8)}`, `key ${key.split('/').pop()}`);
+          const contentPrefix = await awaitContentPrefix(socket, itemId, { timeoutMs: 180_000 });
+          trace.push(`prefix ${contentPrefix}`);
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: true, status: 200, data: { itemId, contentPrefix, key } },
+          };
+        } catch (e) {
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
+          };
+        } finally {
+          try {
+            socket?.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }
+      }
 
       case 'REAUTH': {
         // Force a fresh bearer on demand (panel calls this before each course).
