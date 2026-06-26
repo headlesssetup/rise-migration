@@ -644,6 +644,13 @@ export default defineBackground(() => {
             result: { ok: false, error: 'No Rise token captured yet.' },
           };
         }
+        // Keep the bearer fresh PER COURSE: the ws `identify` is token-authed and
+        // fails silently (socket opens, no identify result) on a stale token —
+        // the dominant failure on a long run. Re-read the rotated cookie cheaply;
+        // reauth (tab reload) only when actually near expiry.
+        if (tokenExpiringSoon()) await reauth();
+        else await grabTokenFromCookie();
+
         // The completion socket is PLANE-SPECIFIC: a US export's package:success
         // is pushed to wss://ws.articulate.com, an EU export's to ws.eu. Listen on
         // the plane of the source Rise tab (where build/raw runs), else we wait
@@ -657,7 +664,10 @@ export default defineBackground(() => {
             token,
             url: wsUrl,
             connect: (url) => new WebSocket(url) as unknown as WsLike,
-            timeoutMs: 120_000,
+            // Fail fast if identify never lands (stale token); allow big-course
+            // server builds plenty of time once identified.
+            identifyTimeoutMs: 30_000,
+            timeoutMs: 240_000,
             onOpen: () => trace.push('open'),
             // The sessionId is SERVER-ASSIGNED: it comes back on the `identify`
             // result and MUST be echoed as build/raw's websocketSessionId, or the

@@ -49,7 +49,13 @@ export interface AwaitExportOpts {
   jobId?: string;
   connect?: WsConnect;
   url?: string;
+  /** Overall budget once identified — the server-side package build. Big courses
+   *  (many storyline blocks) need time, so this is generous. */
   timeoutMs?: number;
+  /** Budget for the `identify` result to arrive. If it doesn't, the token is
+   *  almost certainly stale (identify is token-authed and fails silently) — fail
+   *  FAST so the caller can refresh + retry instead of burning the full budget. */
+  identifyTimeoutMs?: number;
   /** Fired when the socket opens (before `identify` is sent) — for tracing. */
   onOpen?: () => void;
   /** Fired once the `identify` result arrives (server has bound our session).
@@ -72,14 +78,18 @@ export interface ExportLocation {
 export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocation> {
   const connect = opts.connect ?? defaultConnect;
   const timeoutMs = opts.timeoutMs ?? 180_000;
+  const identifyTimeoutMs = opts.identifyTimeoutMs ?? 30_000;
 
   return new Promise<ExportLocation>((resolve, reject) => {
     let settled = false;
+    let identified = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let idTimer: ReturnType<typeof setTimeout> | undefined;
     let ws: WsLike;
 
     const cleanup = (): void => {
       if (timer) clearTimeout(timer);
+      if (idTimer) clearTimeout(idTimer);
       try {
         ws.send(buildClose());
       } catch {
@@ -109,6 +119,14 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
       () => done(() => reject(new Error(`ws.eu export timed out after ${timeoutMs}ms`))),
       timeoutMs,
     );
+    // Fail fast if `identify` never lands — almost always a stale token.
+    idTimer = setTimeout(() => {
+      if (!identified) {
+        done(() =>
+          reject(new Error(`ws.eu identify not received within ${identifyTimeoutMs}ms (token likely stale)`)),
+        );
+      }
+    }, identifyTimeoutMs);
 
     ws.addEventListener('open', () => {
       try {
@@ -124,6 +142,8 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
       const text = typeof data === 'string' ? data : String(data ?? '');
       const frame = parseExportFrame(text);
       if (frame.kind === 'identified') {
+        identified = true;
+        if (idTimer) clearTimeout(idTimer);
         if (opts.onIdentified) {
           Promise.resolve(opts.onIdentified(frame.sessionId)).catch((e) =>
             done(() => reject(new Error(`build trigger failed: ${(e as Error).message}`))),
