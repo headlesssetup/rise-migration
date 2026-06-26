@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { awaitExportLocation, type WsLike } from './ws-export-client';
+import { awaitExportLocation, wsExportUrlForPlane, type WsLike } from './ws-export-client';
+
+describe('wsExportUrlForPlane', () => {
+  it('maps US to the .com host and EU/unknown to the .eu host', () => {
+    expect(wsExportUrlForPlane('us')).toBe('wss://ws.articulate.com/');
+    expect(wsExportUrlForPlane('eu')).toBe('wss://ws.eu.articulate.com/');
+    expect(wsExportUrlForPlane(null)).toBe('wss://ws.eu.articulate.com/');
+  });
+});
 
 // A fake WebSocket that records sends and lets the test drive events.
 class FakeWs implements WsLike {

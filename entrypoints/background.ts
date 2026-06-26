@@ -19,7 +19,7 @@ import {
 } from '@/core/rise-client';
 import type { WriteSpec } from '@/core/import/envelopes';
 import { buildRawExportRequest, parseBuildAck } from '@/core/storyline/build-request';
-import { awaitExportLocation, type WsLike } from '@/core/storyline/ws-export-client';
+import { awaitExportLocation, wsExportUrlForPlane, type WsLike } from '@/core/storyline/ws-export-client';
 import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
@@ -637,26 +637,38 @@ export default defineBackground(() => {
             result: { ok: false, error: 'No Rise token captured yet.' },
           };
         }
+        // The completion socket is PLANE-SPECIFIC: a US export's package:success
+        // is pushed to wss://ws.articulate.com, an EU export's to ws.eu. Listen on
+        // the plane of the source Rise tab (where build/raw runs), else we wait
+        // forever on the wrong host.
+        const exportTab = await findRiseTab();
+        const plane = planeFromHost(exportTab?.url);
+        const wsUrl = wsExportUrlForPlane(plane);
+        const trace: string[] = [`plane=${plane ?? '?'}`, `ws=${wsUrl}`];
         try {
           const loc = await awaitExportLocation({
             token,
+            url: wsUrl,
             connect: (url) => new WebSocket(url) as unknown as WsLike,
             timeoutMs: 120_000,
+            onOpen: () => trace.push('open'),
             // The sessionId is SERVER-ASSIGNED: it comes back on the `identify`
             // result and MUST be echoed as build/raw's websocketSessionId, or the
             // server never routes the package:success notify to our socket
             // (capture-confirmed: identify→{sessionId} == build/raw websocketSessionId).
             onIdentified: async (serverSessionId) => {
+              trace.push(`identified(${serverSessionId.slice(0, 8)})`);
               const { spec } = buildRawExportRequest({
                 courseId: msg.courseId,
                 title: msg.title,
                 websocketSessionId: serverSessionId,
               });
               const r = await relayWrite(spec);
+              trace.push(`build HTTP ${r.status}`);
               if (!r.ok) {
-                throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 200)}`);
+                throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 150)}`);
               }
-              parseBuildAck(r.text); // assert a jobId came back
+              trace.push(`jobId ${parseBuildAck(r.text).jobId}`);
             },
           });
           return {
@@ -666,7 +678,7 @@ export default defineBackground(() => {
         } catch (e) {
           return {
             type: 'STORYLINE_EXPORT_RESULT',
-            result: { ok: false, error: (e as Error).message },
+            result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
           };
         }
       }

@@ -15,6 +15,14 @@ import { buildClose, buildIdentify, parseExportFrame } from './ws-export';
 
 export const WS_EXPORT_URL = 'wss://ws.eu.articulate.com/';
 
+/** Plane-aware ws.eu/ws completion host. The export job runs on whichever plane
+ *  the source Rise tab is on, and `package:success` is pushed to THAT plane's
+ *  socket — so a US export must listen on `wss://ws.articulate.com/`, not the EU
+ *  host. (US drops the `.eu` infix, mirroring every other Articulate host.) */
+export function wsExportUrlForPlane(plane: 'us' | 'eu' | null | undefined): string {
+  return plane === 'us' ? 'wss://ws.articulate.com/' : 'wss://ws.eu.articulate.com/';
+}
+
 /** The slice of `WebSocket` we use — a real `WebSocket` satisfies it (via the
  *  cast in the default factory). One non-overloaded signature so fakes and the
  *  runner both typecheck cleanly. */
@@ -42,6 +50,8 @@ export interface AwaitExportOpts {
   connect?: WsConnect;
   url?: string;
   timeoutMs?: number;
+  /** Fired when the socket opens (before `identify` is sent) — for tracing. */
+  onOpen?: () => void;
   /** Fired once the `identify` result arrives (server has bound our session).
    *  The caller triggers the `build/raw` request here — sending it only after the
    *  socket is listening guarantees we never miss the `package:success` notify.
@@ -102,6 +112,7 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
 
     ws.addEventListener('open', () => {
       try {
+        opts.onOpen?.();
         ws.send(buildIdentify(opts.token));
       } catch (e) {
         done(() => reject(new Error(`ws.eu identify send failed: ${(e as Error).message}`)));
