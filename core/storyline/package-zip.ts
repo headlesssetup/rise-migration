@@ -90,7 +90,10 @@ export function buildReview360Zip(pkg: PackageFiles): Uint8Array {
   const entries: Record<string, Uint8Array> = {};
   for (const [rel, data] of pkg) {
     if (rel === 'story.html') {
-      const html = new TextDecoder().decode(data);
+      // ignoreBOM: keep a leading UTF-8 BOM (the real Storyline story.html has
+      // one). The default TextDecoder strips it, which left our story.html 3 bytes
+      // short of the genuine package and made Review 360 reject the item version.
+      const html = new TextDecoder('utf-8', { ignoreBOM: true }).decode(data);
       entries[rel] = new TextEncoder().encode(webStoryHtmlToReview360(html));
     } else {
       entries[rel] = data;

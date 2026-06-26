@@ -94,6 +94,26 @@ describe('buildReview360Zip', () => {
   });
 });
 
+describe('buildReview360Zip — story.html byte fidelity', () => {
+  // The genuine Storyline story.html starts with a UTF-8 BOM; the default
+  // TextDecoder strips it, which left our package 3 bytes short and made Review
+  // 360 reject the item version. Drive the real fixtures through the zip builder
+  // and assert the output story.html is byte-for-byte the Review-360 form.
+  const rawBytes = (name: string): Uint8Array =>
+    new Uint8Array(
+      readFileSync(fileURLToPath(new URL(`../../tests/fixtures/storyline/${name}`, import.meta.url))),
+    );
+
+  it('preserves the BOM (output equals the real R360 story.html byte-for-byte)', () => {
+    const web = rawBytes('web-story.html');
+    const r360 = rawBytes('r360-story.html');
+    expect(web.slice(0, 3)).toEqual(new Uint8Array([0xef, 0xbb, 0xbf])); // fixture has a BOM
+    const pkg = new Map<string, Uint8Array>([['story.html', web]]);
+    const out = unzipSync(buildReview360Zip(pkg));
+    expect(out['story.html']).toEqual(r360);
+  });
+});
+
 describe('repackageLeafFromWebExport', () => {
   it('goes web-export bytes → R360 zip bytes in one call', () => {
     const out = unzipSync(repackageLeafFromWebExport(makeWebExportZip(), LEAF));
