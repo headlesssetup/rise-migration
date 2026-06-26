@@ -24,7 +24,7 @@ import {
   unzipToMap,
 } from '@/core/storyline/package-zip';
 import { rpc } from '../rpc';
-import { unwrap, type ProgressEvent } from './shared';
+import { etaStatus, unwrap, type ProgressEvent } from './shared';
 
 /** Base64-encode bytes in chunks (spread would overflow the stack on MB zips). */
 function toBase64(bytes: Uint8Array): string {
@@ -208,10 +208,19 @@ export async function exportStorylinePackages(
     /* best-effort — proceed and let the first course surface any auth issue */
   }
 
+  const runStart = Date.now();
   for (let i = 0; i < targets.length; i++) {
     const { courseId, title, blocks } = targets[i]!;
     const label = `[${i + 1}/${targets.length}]`;
     onEvent({ kind: 'course', index: i, total: targets.length, courseId, title });
+    onEvent(
+      etaStatus({
+        label: `Exporting ${i + 1}/${targets.length}`,
+        doneFraction: i / targets.length,
+        runStartMs: runStart,
+        nowMs: Date.now(),
+      }),
+    );
 
     if (!deps.force && (await storage.readStorylineManifest(courseId))) {
       summary.skipped += 1;
@@ -281,6 +290,7 @@ export async function exportStorylinePackages(
     }
   }
 
+  onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
   onEvent({
     kind: 'log',
     message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s).`,
@@ -412,6 +422,7 @@ export async function uploadStorylineToReview360(
   }
 
   let aborted = false;
+  const runStart = Date.now();
   for (let i = 0; i < work.length; i++) {
     if (aborted) {
       summary.notAttempted += 1;
@@ -420,6 +431,14 @@ export async function uploadStorylineToReview360(
     const { courseId, title, leaf } = work[i]!;
     const label = `[${i + 1}/${work.length}]`;
     onEvent({ kind: 'course', index: i, total: work.length, courseId, title });
+    onEvent(
+      etaStatus({
+        label: `Uploading ${i + 1}/${work.length}`,
+        doneFraction: i / work.length,
+        runStartMs: runStart,
+        nowMs: Date.now(),
+      }),
+    );
 
     const manifest = manifests.find((m) => m.courseId === courseId)!;
     if (!deps.force && manifest.uploads?.[leaf]?.reviewPrefix) {
@@ -469,5 +488,6 @@ export async function uploadStorylineToReview360(
     kind: 'log',
     message: `Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} package(s).`,
   });
+  onEvent({ kind: 'import-status', label: 'Storyline upload complete', etaSeconds: null, done: true });
   return summary;
 }

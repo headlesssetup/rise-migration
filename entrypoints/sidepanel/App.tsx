@@ -108,7 +108,7 @@ export function App() {
   const [copied, setCopied] = useState(false);
   // Live import status for the log-header countdown (set via ImportView).
   const [importStatus, setImportStatus] = useState<
-    { label: string; finishAt: number | null } | null
+    { label: string; finishAt: number | null; done: boolean } | null
   >(null);
   const [, forceTick] = useState(0);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
@@ -160,10 +160,11 @@ export function App() {
     (e: Extract<ProgressEvent, { kind: 'import-status' }>) => {
       setImportStatus(
         e.done
-          ? { label: e.label, finishAt: null }
+          ? { label: e.label, finishAt: null, done: true }
           : {
               label: e.label,
               finishAt: e.etaSeconds != null ? Date.now() + e.etaSeconds * 1000 : null,
+              done: false,
             },
       );
     },
@@ -243,8 +244,10 @@ export function App() {
       if (e.kind === 'log') addLog(e.message);
       else if (e.kind === 'course')
         setProgress({ done: e.index + 1, total: e.total });
+      // Drive the header countdown for export/upload too (not just import).
+      else if (e.kind === 'import-status') onImportStatus(e);
     },
-    [addLog],
+    [addLog, onImportStatus],
   );
 
   const useFolder = useCallback(
@@ -778,7 +781,9 @@ export function App() {
                 {importStatus.label}
                 {importStatus.finishAt != null
                   ? ` · ${fmtRemaining(importStatus.finishAt - Date.now())} remaining`
-                  : ''}
+                  : importStatus.done
+                    ? ''
+                    : ' · estimating…'}
               </span>
             )}
           </span>
