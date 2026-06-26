@@ -637,18 +637,21 @@ export default defineBackground(() => {
             result: { ok: false, error: 'No Rise token captured yet.' },
           };
         }
-        const sessionId = crypto.randomUUID();
-        const { spec } = buildRawExportRequest({
-          courseId: msg.courseId,
-          title: msg.title,
-          websocketSessionId: sessionId,
-        });
         try {
           const loc = await awaitExportLocation({
             token,
-            sessionId,
             connect: (url) => new WebSocket(url) as unknown as WsLike,
-            onIdentified: async () => {
+            timeoutMs: 120_000,
+            // The sessionId is SERVER-ASSIGNED: it comes back on the `identify`
+            // result and MUST be echoed as build/raw's websocketSessionId, or the
+            // server never routes the package:success notify to our socket
+            // (capture-confirmed: identify→{sessionId} == build/raw websocketSessionId).
+            onIdentified: async (serverSessionId) => {
+              const { spec } = buildRawExportRequest({
+                courseId: msg.courseId,
+                title: msg.title,
+                websocketSessionId: serverSessionId,
+              });
               const r = await relayWrite(spec);
               if (!r.ok) {
                 throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 200)}`);

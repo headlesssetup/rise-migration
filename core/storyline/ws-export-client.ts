@@ -33,8 +33,9 @@ const defaultConnect: WsConnect = (url) => new WebSocket(url) as unknown as WsLi
 
 export interface AwaitExportOpts {
   token: string;
-  /** The session id also sent as `websocketSessionId` in build/raw. */
-  sessionId: string;
+  /** Informational only — the session is SERVER-assigned (returned by `identify`
+   *  and surfaced via `onIdentified`). Not used to drive the wait. */
+  sessionId?: string;
   /** Resolve only on the notify for this job id (recommended). If omitted, the
    *  first `package:success` wins — fine for a single in-flight build. */
   jobId?: string;
