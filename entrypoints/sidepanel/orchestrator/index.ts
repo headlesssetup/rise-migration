@@ -31,8 +31,10 @@ export { fetchAccountExtras, type AccountExtrasSummary } from './account';
 export {
   scanSavedCoursesForStoryline,
   exportStorylinePackages,
+  uploadStorylineToReview360,
   type StorylineCourseScan,
   type StorylineExportSummary,
+  type StorylineUploadSummary,
 } from './storyline';
 export {
   runImport,

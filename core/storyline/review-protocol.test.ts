@@ -117,6 +117,14 @@ describe('parseContentPrefix / isItemReady', () => {
     expect(parseContentPrefix({ item: { contentPrefix: 'review/items/abc' } })).toBe('review/items/abc');
   });
 
+  it('unwraps the items:get {success,value} ack envelope (capture-confirmed)', () => {
+    expect(
+      parseContentPrefix({ success: true, value: { contentPrefix: 'review/items/Q8FESjfUTG1pKZ9O' } }),
+    ).toBe('review/items/Q8FESjfUTG1pKZ9O');
+    expect(isItemReady({ success: true, value: { contentPrefix: 'review/items/Q8FESjfUTG1pKZ9O' } })).toBe(true);
+    expect(isItemReady({ success: true, value: { versions: [{ state: 'uploading' }] } })).toBe(false);
+  });
+
   it('derives the prefix from a version package key', () => {
     expect(
       parseContentPrefix({

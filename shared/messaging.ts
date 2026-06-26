@@ -47,7 +47,19 @@ export type BackgroundRequest =
   // finished zip URL over the ws.eu JSON-RPC socket. Runs in the background
   // because it owns the bearer (the socket `identify` needs it). The panel then
   // downloads + repackages + stores the zip.
-  | { type: 'STORYLINE_EXPORT'; courseId: string; title: string };
+  | { type: 'STORYLINE_EXPORT'; courseId: string; title: string }
+  // Phase 4 — upload one repackaged storyline zip to the TARGET Review 360 over
+  // socket.io (items:create → yurl:get → S3 PUT → items:update → items:upload),
+  // then poll items:get for the published contentPrefix. Runs in the background
+  // (token + socket + cross-origin PUT). Plane-agnostic: targets the active tab's
+  // plane. `zipB64` is the package zip; md5s are precomputed by the panel.
+  | {
+      type: 'STORYLINE_UPLOAD';
+      zipB64: string;
+      fileName: string;
+      md5Base64: string;
+      md5Hex: string;
+    };
 
 /** Account-level raw exports that share a {raw, doc} result shape. */
 export type RawKind = 'blockTemplates' | 'typefaces';
@@ -78,6 +90,10 @@ export type BackgroundResponse =
   | {
       type: 'STORYLINE_EXPORT_RESULT';
       result: FetchResult<{ location: string; jobId: string }>;
+    }
+  | {
+      type: 'STORYLINE_UPLOAD_RESULT';
+      result: FetchResult<{ itemId: string; contentPrefix: string; key: string }>;
     }
   | {
       type: 'REAUTH_RESULT';

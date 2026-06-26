@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  awaitContentPrefix,
   emitAck,
   parseItemId,
+  reviewSocketBaseForPlane,
   uploadStorylinePackage,
   type AckSocket,
 } from './review-socket-client';
@@ -24,6 +26,38 @@ class FakeSocket implements AckSocket {
 
 const PRESIGNED =
   'https://360-prod-eu-central-1.s3.eu-central-1.amazonaws.com/review/uploads/PFX/blk_9.zip?X-Amz-Signature=z';
+
+describe('reviewSocketBaseForPlane', () => {
+  it('maps plane to the review-sockets host (US drops .eu)', () => {
+    expect(reviewSocketBaseForPlane('us')).toBe('https://360-review-sockets.articulate.com');
+    expect(reviewSocketBaseForPlane('eu')).toBe('https://360-review-sockets.eu.articulate.com');
+    expect(reviewSocketBaseForPlane(null)).toBe('https://360-review-sockets.eu.articulate.com');
+  });
+});
+
+describe('awaitContentPrefix', () => {
+  it('polls items:get until a contentPrefix appears (unwrapping {success,value})', async () => {
+    let calls = 0;
+    const sock = new FakeSocket(() => {
+      calls += 1;
+      return calls < 3
+        ? { success: true, value: { versions: [{ state: 'uploading' }] } }
+        : { success: true, value: { contentPrefix: 'review/items/QQ' } };
+    });
+    const cp = await awaitContentPrefix(sock, 'item-1', { pollMs: 0, sleep: async () => {} });
+    expect(cp).toBe('review/items/QQ');
+    expect(calls).toBe(3);
+    expect(sock.calls.every((c) => c.event === 'items:get')).toBe(true);
+  });
+
+  it('throws on timeout', async () => {
+    const sock = new FakeSocket(() => ({ success: true, value: {} }));
+    let t = 0;
+    await expect(
+      awaitContentPrefix(sock, 'item-1', { pollMs: 1, timeoutMs: 5, sleep: async () => {}, now: () => (t += 10) }),
+    ).rejects.toThrow(/not ready/);
+  });
+});
 
 describe('parseItemId', () => {
   it('reads id from assorted ack shapes', () => {

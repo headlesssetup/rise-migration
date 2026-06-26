@@ -171,8 +171,15 @@ function isObject(v: unknown): v is Record<string, unknown> {
  */
 export function parseContentPrefix(item: unknown): string | null {
   if (!isObject(item)) return null;
-  // Unwrap a single-item ack envelope ({item:{…}} / {data:{…}}).
-  const node = isObject(item.item) ? item.item : isObject(item.data) ? item.data : item;
+  // Unwrap a single-item ack envelope. `items:get` returns
+  // `{success:true, value:{…}}` (capture-confirmed); also tolerate {item}/{data}.
+  const node = isObject(item.value)
+    ? item.value
+    : isObject(item.item)
+      ? item.item
+      : isObject(item.data)
+        ? item.data
+        : item;
   if (!isObject(node)) return null;
 
   if (typeof node.contentPrefix === 'string' && node.contentPrefix) {
@@ -195,7 +202,10 @@ export function parseContentPrefix(item: unknown): string | null {
  *  state (vs "uploading"/"processing"). */
 export function isItemReady(item: unknown): boolean {
   if (!isObject(item)) return false;
-  const node = isObject(item.item) ? item.item : item;
+  const node = isObject(item.value) ? item.value : isObject(item.item) ? item.item : item;
+  // A published item exposes a contentPrefix; treat that as the readiness signal
+  // (the `items:get` value carries it once processing finishes).
+  if (isObject(node) && typeof node.contentPrefix === 'string' && node.contentPrefix) return true;
   const versions = isObject(node) && Array.isArray(node.versions) ? node.versions : [];
   const last = versions[versions.length - 1];
   const state = isObject(last) && typeof last.state === 'string' ? last.state : '';

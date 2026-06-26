@@ -11,14 +11,23 @@
 import { io, type Socket } from 'socket.io-client';
 import {
   buildItemsCreate,
+  buildItemsGetArg,
   buildItemsUpdate,
   buildItemsUpload,
   buildYurlGetArg,
+  parseContentPrefix,
   parseYurlAck,
   REVIEW_EVENTS,
 } from './review-protocol';
 
 export const REVIEW_SOCKET_BASE = 'https://360-review-sockets.eu.articulate.com';
+
+/** Plane-aware review-sockets host (EU target by default; US drops the `.eu`). */
+export function reviewSocketBaseForPlane(plane: 'us' | 'eu' | null | undefined): string {
+  return plane === 'us'
+    ? 'https://360-review-sockets.articulate.com'
+    : 'https://360-review-sockets.eu.articulate.com';
+}
 
 /** The slice of a socket.io-client `Socket` we use. */
 export interface AckSocket {
@@ -181,4 +190,38 @@ export async function uploadStorylinePackage(
   await emitAck(opts.socket, REVIEW_EVENTS.upload, [buildItemsUpload({ id: itemId })], t);
 
   return { itemId, key };
+}
+
+/**
+ * Poll `items:get` until the item reports a published `contentPrefix`
+ * (`review/items/{leaf}`) — the value the import attach feeds to
+ * `copy_review_item`. Server-side unzip/transcode is async, so we poll. Throws
+ * on timeout. `sleep` is injectable for tests.
+ */
+export async function awaitContentPrefix(
+  socket: AckSocket,
+  itemId: string,
+  opts: {
+    pollMs?: number;
+    timeoutMs?: number;
+    ackTimeoutMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<string> {
+  const pollMs = opts.pollMs ?? 3000;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = opts.now ?? (() => Date.now());
+  const start = now();
+  for (;;) {
+    const { id, opts: getOpts } = buildItemsGetArg(itemId);
+    const ack = await emitAck(socket, REVIEW_EVENTS.get, [id, getOpts], opts.ackTimeoutMs);
+    const cp = parseContentPrefix(ack);
+    if (cp) return cp;
+    if (now() - start > timeoutMs) {
+      throw new Error(`Review-360 item ${itemId} not ready after ${timeoutMs}ms`);
+    }
+    await sleep(pollMs);
+  }
 }

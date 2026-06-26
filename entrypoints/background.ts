@@ -20,6 +20,13 @@ import {
 import type { WriteSpec } from '@/core/import/envelopes';
 import { buildRawExportRequest, parseBuildAck } from '@/core/storyline/build-request';
 import { awaitExportLocation, wsExportUrlForPlane, type WsLike } from '@/core/storyline/ws-export-client';
+import { s3PutReview } from '@/core/import/envelopes';
+import {
+  awaitContentPrefix,
+  connectReviewSocket,
+  reviewSocketBaseForPlane,
+  uploadStorylinePackage,
+} from '@/core/storyline/review-socket-client';
 import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import type {
@@ -680,6 +687,65 @@ export default defineBackground(() => {
             type: 'STORYLINE_EXPORT_RESULT',
             result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
           };
+        }
+      }
+
+      case 'STORYLINE_UPLOAD': {
+        // Upload one repackaged storyline zip to the TARGET Review 360 over
+        // socket.io, then resolve its published contentPrefix. Plane-agnostic:
+        // the review-sockets host follows the active tab's plane.
+        if (!token) {
+          return { type: 'STORYLINE_UPLOAD_RESULT', result: { ok: false, error: 'No Rise token captured yet.' } };
+        }
+        const userId = await readAccountUserId();
+        if (!userId) {
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: false, error: 'No target account user id (open a logged-in Rise/360 tab).' },
+          };
+        }
+        const tab = await findRiseTab();
+        const base = reviewSocketBaseForPlane(planeFromHost(tab?.url));
+        const trace: string[] = [`base=${base}`, `user=${userId.slice(0, 12)}`];
+        let socket: Awaited<ReturnType<typeof connectReviewSocket>> | null = null;
+        try {
+          socket = await connectReviewSocket({ userId, token, base });
+          trace.push('connected');
+          const zipBytes = Uint8Array.from(atob(msg.zipB64), (c) => c.charCodeAt(0));
+          const { itemId, key } = await uploadStorylinePackage({
+            socket,
+            userId,
+            fileName: msg.fileName,
+            zipBytes,
+            md5Base64: msg.md5Base64,
+            md5Hex: msg.md5Hex,
+            // Cross-origin presigned PUT with Content-MD5 (reuse the same base64
+            // bytes/md5 the panel computed; bytes arg is identical).
+            putBytes: async (url) => {
+              const r = await relayWrite(
+                s3PutReview({ url, base64Body: msg.zipB64, contentMd5Base64: msg.md5Base64 }),
+              );
+              if (!r.ok) throw new Error(`S3 PUT HTTP ${r.status}: ${(r.text ?? '').slice(0, 120)}`);
+            },
+          });
+          trace.push(`item ${itemId.slice(0, 8)}`, `key ${key.split('/').pop()}`);
+          const contentPrefix = await awaitContentPrefix(socket, itemId, { timeoutMs: 180_000 });
+          trace.push(`prefix ${contentPrefix}`);
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: true, status: 200, data: { itemId, contentPrefix, key } },
+          };
+        } catch (e) {
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
+          };
+        } finally {
+          try {
+            socket?.disconnect();
+          } catch {
+            /* ignore */
+          }
         }
       }
 

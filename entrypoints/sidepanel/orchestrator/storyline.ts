@@ -17,6 +17,7 @@
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import { findStorylineBlocks, type StorylineBlockRef } from '@/core/storyline/detect';
+import { md5Base64, md5Hex } from '@/core/storyline/md5';
 import {
   buildReview360Zip,
   extractPackage,
@@ -24,6 +25,16 @@ import {
 } from '@/core/storyline/package-zip';
 import { rpc } from '../rpc';
 import { unwrap, type ProgressEvent } from './shared';
+
+/** Base64-encode bytes in chunks (spread would overflow the stack on MB zips). */
+function toBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CH));
+  }
+  return btoa(bin);
+}
 
 export interface StorylineCourseScan {
   courseId: string;
@@ -251,6 +262,181 @@ export async function exportStorylinePackages(
   onEvent({
     kind: 'log',
     message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s).`,
+  });
+  return summary;
+}
+
+// --- Stage C: upload staged packages to the TARGET Review 360 -----------------
+
+/** Per-leaf upload record folded back into the course manifest (the import
+ *  attach reads `reviewPrefix` from here). */
+export interface StorylineUploadRecord {
+  itemId: string;
+  reviewPrefix: string;
+}
+
+export interface StorylineUploadSummary {
+  /** Course manifests scanned. */
+  courses: number;
+  /** Packages (leaves) uploaded this run. */
+  uploaded: number;
+  /** Packages already uploaded (resume). */
+  skipped: number;
+  failed: number;
+  notAttempted: number;
+  aborted?: string;
+  errors: Array<{ courseId: string; leaf: string; error: string }>;
+}
+
+export interface StorylineUploadDeps {
+  /** Upload one zip → {itemId, contentPrefix} (default: background STORYLINE_UPLOAD). */
+  uploadOne?: (args: {
+    zipB64: string;
+    fileName: string;
+    md5Base64: string;
+    md5Hex: string;
+  }) => Promise<{ ok: true; itemId: string; contentPrefix: string } | { ok: false; error: string }>;
+  refresh?: () => Promise<{ advanced: boolean; valid: boolean; via?: string } | void>;
+  pacing?: PacingConfig;
+  /** Re-upload even if a reviewPrefix is already recorded. */
+  force?: boolean;
+}
+
+const defaultUploadOne: NonNullable<StorylineUploadDeps['uploadOne']> = async (args) => {
+  const resp = await rpc({ type: 'STORYLINE_UPLOAD', ...args });
+  if (resp.type !== 'STORYLINE_UPLOAD_RESULT') return { ok: false, error: 'unexpected response' };
+  if (!resp.result.ok) return { ok: false, error: resp.result.error };
+  return { ok: true, itemId: resp.result.data.itemId, contentPrefix: resp.result.data.contentPrefix };
+};
+
+interface StoredManifest {
+  courseId: string;
+  title?: string;
+  blocks: Array<{ leaf: string; blockId: string }>;
+  uploads?: Record<string, StorylineUploadRecord>;
+  [k: string]: unknown;
+}
+
+/**
+ * Upload every staged storyline package to the TARGET account's Review 360 and
+ * record each `review/items/{leaf}` prefix back into the course manifest (the
+ * join key the import attach feeds to copy_review_item). Sequential + paced (the
+ * socket handshake is authoring-like); resumable (a leaf with a recorded
+ * reviewPrefix is skipped); aborts on an auth failure like the export pass.
+ *
+ * Run this on the TARGET tab (the account that will own the courses) — the
+ * uploaded review items must be reachable by copy_review_item from that account.
+ */
+export async function uploadStorylineToReview360(
+  storage: Storage,
+  onEvent: (e: ProgressEvent) => void,
+  deps: StorylineUploadDeps = {},
+): Promise<StorylineUploadSummary> {
+  const uploadOne = deps.uploadOne ?? defaultUploadOne;
+  const refresh = deps.refresh ?? (async () => {
+    const r = await rpc({ type: 'REAUTH' });
+    return r.type === 'REAUTH_RESULT' ? { advanced: r.advanced, valid: r.valid, via: r.via } : undefined;
+  });
+  const pacing = deps.pacing ?? DEFAULT_PACING;
+
+  const ids = await storage.listSaved();
+  const manifests: StoredManifest[] = [];
+  for (const id of ids) {
+    const raw = await storage.readStorylineManifest(id);
+    if (!raw) continue;
+    try {
+      manifests.push(JSON.parse(raw) as StoredManifest);
+    } catch {
+      onEvent({ kind: 'log', message: `${id}: unreadable storyline manifest, skipped` });
+    }
+  }
+
+  const summary: StorylineUploadSummary = {
+    courses: manifests.length,
+    uploaded: 0,
+    skipped: 0,
+    failed: 0,
+    notAttempted: 0,
+    errors: [],
+  };
+  onEvent({ kind: 'log', message: `Uploading staged packages from ${manifests.length} course manifest(s) to Review 360…` });
+  if (!manifests.length) return summary;
+
+  try {
+    const r = await refresh();
+    if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+  } catch {
+    /* best-effort */
+  }
+
+  // Flatten to a work-list of unique (courseId, leaf) packages.
+  const work: Array<{ courseId: string; title?: string; leaf: string }> = [];
+  for (const m of manifests) {
+    const seen = new Set<string>();
+    for (const b of m.blocks ?? []) {
+      if (!b.leaf || seen.has(b.leaf)) continue;
+      seen.add(b.leaf);
+      work.push({ courseId: m.courseId, title: m.title, leaf: b.leaf });
+    }
+  }
+
+  let aborted = false;
+  for (let i = 0; i < work.length; i++) {
+    if (aborted) {
+      summary.notAttempted += 1;
+      continue;
+    }
+    const { courseId, title, leaf } = work[i]!;
+    const label = `[${i + 1}/${work.length}]`;
+    onEvent({ kind: 'course', index: i, total: work.length, courseId, title });
+
+    const manifest = manifests.find((m) => m.courseId === courseId)!;
+    if (!deps.force && manifest.uploads?.[leaf]?.reviewPrefix) {
+      summary.skipped += 1;
+      continue;
+    }
+
+    const bytes = await storage.readStorylineZip(courseId, leaf);
+    if (!bytes) {
+      summary.failed += 1;
+      summary.errors.push({ courseId, leaf, error: 'package zip missing on disk' });
+      onEvent({ kind: 'log', message: `${label} ${leaf}: FAILED — package zip missing` });
+      continue;
+    }
+
+    if (summary.uploaded + summary.failed > 0) await pacedDelay(pacing);
+
+    try {
+      onEvent({ kind: 'log', message: `${label} ${title ?? courseId} / ${leaf}: uploading…` });
+      const res = await uploadOne({
+        zipB64: toBase64(bytes),
+        fileName: `${leaf}.zip`,
+        md5Base64: md5Base64(bytes),
+        md5Hex: md5Hex(bytes),
+      });
+      if (!res.ok) throw new Error(res.error);
+
+      manifest.uploads = manifest.uploads ?? {};
+      manifest.uploads[leaf] = { itemId: res.itemId, reviewPrefix: res.contentPrefix };
+      await storage.writeStorylineManifest(courseId, JSON.stringify(manifest, null, 2));
+      summary.uploaded += 1;
+      onEvent({ kind: 'log', message: `${label} ${leaf}: → ${res.contentPrefix}` });
+    } catch (e) {
+      const error = (e as Error).message;
+      summary.failed += 1;
+      summary.errors.push({ courseId, leaf, error });
+      onEvent({ kind: 'log', message: `${label} ${leaf}: FAILED — ${error}` });
+      if (isAuthError(error)) {
+        aborted = true;
+        summary.aborted = error;
+        onEvent({ kind: 'log', message: `⛔ Aborting: auth/session failure. Open a Rise course editor on the TARGET account to refresh, then retry.` });
+      }
+    }
+  }
+
+  onEvent({
+    kind: 'log',
+    message: `Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} package(s).`,
   });
   return summary;
 }
