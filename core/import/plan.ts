@@ -412,6 +412,19 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Create lesson "${lTitle}" (${lType})`,
     });
 
+    // Set the course title right after the FIRST lesson materializes the course
+    // (the bare shell is a title-less catalog row, and Rise rejects titling a
+    // lesson-less course). Early so a partial/stopped import is identifiable in
+    // the dashboard instead of a nameless course.
+    if (idx === 0) {
+      steps.push({
+        kind: 'set-title',
+        sourceCourseId,
+        title,
+        summary: `Set course title "${title}"`,
+      });
+    }
+
     // Lesson-level media (header image + any lesson `media`) — uploaded BEFORE
     // UPDATE_LESSON so the lesson payload carries the remapped key instead of a
     // blank. Same orphan/oversize handling as block media; oversize is PREDICTED
@@ -590,14 +603,16 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     // (no unlock — we never locked)
   });
 
-  // Title now — best-effort, AFTER the course has been materialized by its first
-  // lesson (the shell on its own is a catalog row, not a real course).
-  steps.push({
-    kind: 'set-title',
-    sourceCourseId,
-    title,
-    summary: `Set course title "${title}"`,
-  });
+  // Fallback title for a lesson-less course (the per-first-lesson title above
+  // never fired). A confirmed bare shell is a real course, so titling it is safe.
+  if (ordered.length === 0) {
+    steps.push({
+      kind: 'set-title',
+      sourceCourseId,
+      title,
+      summary: `Set course title "${title}"`,
+    });
+  }
 
   // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
   // ("add a lesson to your course before theming"). Applied once, course-level.

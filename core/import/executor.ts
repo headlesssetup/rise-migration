@@ -188,6 +188,20 @@ export async function executePlan(
       if (deps.shouldStop?.()) {
         result.stopped = true;
         result.idMap = ids.toJSON();
+        // Mark the partial course so it's identifiable in the dashboard (an
+        // unfinished import otherwise leaves a hard-to-spot course). Best-effort,
+        // and only once the course exists. A re-run's early set-title restores the
+        // clean title when the import resumes + completes.
+        if (!dryRun && newCourseId) {
+          const srcTitle =
+            typeof deps.input.course.course?.title === 'string' ? deps.input.course.course.title : '';
+          try {
+            await deps.relay(env.updateCourseTitle(newCourseId, `!unfinished: ${srcTitle}`));
+            log(`Marked partial course title "!unfinished: ${srcTitle}"`);
+          } catch {
+            /* best-effort — the stop still succeeds */
+          }
+        }
         log(`Stopped before step ${stepIdx + 1}/${total} — partial course kept (resumable on re-run)`);
         return result;
       }
