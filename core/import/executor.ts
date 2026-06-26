@@ -576,6 +576,50 @@ export async function executePlan(
           );
           break;
         }
+        case 'attach-storyline': {
+          // Mirror the editor's "add from Review 360": copy the uploaded review
+          // item's bundle into the course, then patch the (empty) block's
+          // media.storyline to point at the copied bundle. The copy preserves the
+          // review item's leaf, so contentPrefix = rise/courses/{courseId}/{leaf}.
+          const entry = srcBlocks.get(step.sourceBlockId);
+          const meta = blockMeta.get(step.sourceBlockId);
+          if (!entry || !meta) throw new WriteError('attach before block create', step.kind);
+          const newLessonId = ids.get(step.sourceLessonId)!;
+          const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
+
+          await send(
+            env.copyReviewItem({
+              courseId: newCourseId,
+              reviewPrefix: step.reviewPrefix,
+              blockId: meta.newId,
+            }),
+            step.kind,
+          );
+
+          const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
+          const item = remapIds(entry.block, ids) as Record<string, unknown>;
+          const items = Array.isArray(item.items) ? item.items : [];
+          const first = items[0];
+          if (first && typeof first === 'object') {
+            (first as Record<string, unknown>).media = env.buildStorylineMedia({
+              contentPrefix,
+              meta: step.meta,
+              title: step.title,
+            });
+          }
+          await send(
+            env.updateBlockDebounce({
+              id: meta.newId,
+              courseId: newCourseId,
+              lessonId: newLessonId,
+              item,
+            }),
+            step.kind,
+          );
+          result.storylineAttached = (result.storylineAttached ?? 0) + 1;
+          log(`${pfx()} ✓ attached storyline → ${contentPrefix}`);
+          break;
+        }
         case 'flag-storyline': {
           result.flags.push({
             kind: 'storyline',

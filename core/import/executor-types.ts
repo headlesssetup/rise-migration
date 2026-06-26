@@ -102,6 +102,9 @@ export interface ExecResult {
   /** Every envelope that was (or would be) sent, in order — the dry-run plan. */
   envelopes: { step: PlanStep['kind']; label: string }[];
   flags: ManualFlag[];
+  /** Storyline blocks attached from staged Review-360 packages (copy_review_item
+   *  + media patch), as opposed to flagged for manual handling. */
+  storylineAttached?: number;
   /** The resumable old→new id map (job log). */
   idMap: Record<string, string>;
   /** New course id once the shell is created. */
