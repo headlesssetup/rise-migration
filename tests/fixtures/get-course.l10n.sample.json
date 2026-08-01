@@ -194,6 +194,31 @@
       "ar": { "displayName": "Arabic", "rightToLeft": true }
     }
   },
+  "labelSets": [
+    {
+      "id": "customSetSrc0000000000mm",
+      "name": "German custom",
+      "iso639Code": "de",
+      "defaultSet": false,
+      "labels": { "courseStart": "LOS GEHT'S", "lessonQuiz": "Quiz" }
+    },
+    {
+      "id": "customSetRu00000000000mm",
+      "name": "Russian custom",
+      "iso639Code": "ru",
+      "defaultSet": false,
+      "labels": { "courseStart": "ПОЕХАЛИ", "lessonQuiz": "Тест" }
+    }
+  ],
+  "defaultLabelSets": [
+    {
+      "id": "defaultRu000000000000000",
+      "name": "Russian",
+      "iso639Code": "ru",
+      "defaultSet": true,
+      "labels": { "courseStart": "НАЧАТЬ КУРС", "lessonQuiz": "Тест" }
+    }
+  ],
   "translationUpdates": {
     "updateCount": 0,
     "localeUpdateCounts": {},

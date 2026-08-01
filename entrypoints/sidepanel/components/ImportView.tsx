@@ -20,6 +20,7 @@ import {
   importAccountSettings,
   importBanks,
   listLocalBanks,
+  estimateCourses,
   readArchiveInfo,
   readSourceIdentity,
   runImport,
@@ -31,6 +32,7 @@ import {
   type LocalBank,
   type ProgressEvent,
 } from '../orchestrator';
+import { formatEstimate } from '@/core/import';
 
 interface ArchiveCourse {
   id: string;
@@ -519,6 +521,36 @@ function CoursesSection({
   const [filter, setFilter] = useState('');
   const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
   const [blocked, setBlocked] = useState<string | null>(null);
+  // "Ready to import?" — rough pre-run time estimate for the selection (local
+  // archive reads + pure plans; debounced so rapid clicking doesn't churn disk).
+  const [estimate, setEstimate] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!storage || selected.size === 0) {
+      setEstimate(null);
+      return;
+    }
+    let alive = true;
+    setEstimate('estimating…');
+    const t = setTimeout(async () => {
+      try {
+        const { estimate: e, stacks, missing } = await estimateCourses(storage, [...selected]);
+        if (!alive) return;
+        const parts = [
+          `${selected.size} course(s)${stacks ? ` (${stacks} multi-language)` : ''}`,
+          `${formatEstimate(e.seconds)} (rough)`,
+        ];
+        if (missing) parts.push(`${missing} not in archive`);
+        setEstimate(parts.join(' · '));
+      } catch {
+        if (alive) setEstimate(null);
+      }
+    }, 500);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [storage, selected]);
 
   useEffect(() => {
     let alive = true;
@@ -613,6 +645,11 @@ function CoursesSection({
               </li>
             ))}
           </ul>
+          {estimate && (
+            <p className="hint" style={{ marginBottom: 4 }}>
+              Ready to import? {estimate}
+            </p>
+          )}
           <div className="row">
             <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>
               {running ? 'Working…' : `Dry-run (${selected.size})`}

@@ -62,6 +62,14 @@ export interface ExecutorDeps {
    *  a paced gap — a few seconds of slack so a just-created course is confirmed
    *  before any write even under replication lag. */
   courseHandshakeTries?: number;
+  /** Poll budget for the stack conversion (await-stack). Each attempt is a paced
+   *  GET …/translations; ~2 s pacing × 240 ≈ 8 min ceiling (a minimal-course AI
+   *  conversion completed in 15–70 s per language in every capture). */
+  stackAwaitTries?: number;
+  /** Run-wide dedup of recreated per-language label sets (account-scoped
+   *  resources): source label-set id → target label-set id. Provided by the
+   *  orchestrator so N courses sharing one custom set create it once. */
+  labelSetCache?: Map<string, string>;
   onProgress?: (done: number, total: number) => void;
   /** Cooperative cancel: checked at the top of each step (after the in-flight
    *  write fully finished — never mid-write). When it returns true the executor
@@ -79,7 +87,10 @@ export interface ManualFlag {
     | 'missing-bank-ref'
     | 'orphan-bank'
     | 'title'
-    | 'typeface';
+    | 'typeface'
+    // Multi-language stacks (docs/rise-multilang.md):
+    | 'locale-selector' // learner language selector must be enabled manually
+    | 'l10n-ref'; // a source course-level l10n ref had no target counterpart
   sourceBlockId?: string;
   sourceKey?: string;
   detail: string;

@@ -14,7 +14,7 @@ import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 import { orderLessons } from './plan';
 import type { ManualFlag } from './executor';
 import { fidelityStatus, type FidelityReport } from './fidelity';
-import type { ParityReport } from './verify';
+import { l10nParityToMarkdown, type L10nParityReport, type ParityReport } from './verify';
 
 /** Where a source block lives, in human (display-order, 1-based) terms. */
 export interface BlockLocation {
@@ -135,6 +135,18 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
       return { itemType: 'Course title', action: 'Set the course title manually in the Rise editor.' };
     case 'typeface':
       return { itemType: 'Missing font', action: 'Provision or select this font manually on the target account.' };
+    case 'locale-selector':
+      return {
+        itemType: 'Language selector',
+        action:
+          'Enable the learner language selector manually (the source course shows it; the toggle has no captured envelope yet).',
+      };
+    case 'l10n-ref':
+      return {
+        itemType: 'Localized course field',
+        action:
+          'A course-level localized value (e.g. cover/logo/description) had no counterpart on the target — set it manually in each language.',
+      };
     default:
       return { itemType: String(kind), action: 'Manual handling required.' };
   }
@@ -144,6 +156,7 @@ function categoryLocation(kind: ManualFlag['kind']): string {
   if (kind === 'title') return 'Course-level';
   if (kind === 'typeface') return 'Theme / fonts';
   if (kind === 'orphan-bank') return 'Question banks';
+  if (kind === 'locale-selector' || kind === 'l10n-ref') return 'Languages';
   return 'Course-level';
 }
 
@@ -192,9 +205,13 @@ function parityLine(parity?: ParityReport): string {
 export function buildCourseReportMarkdown(args: {
   report: FidelityReport;
   parity?: ParityReport;
+  /** Multi-language stack: translation-table parity + the standing warning. */
+  l10nParity?: L10nParityReport;
+  /** Per-language pending-translation counts read back after the import. */
+  l10nPending?: Record<string, number>;
   manual: ManualWorkItem[];
 }): string {
-  const { report: r, parity, manual } = args;
+  const { report: r, parity, l10nParity, l10nPending, manual } = args;
   const status = fidelityStatus(r);
   const resumable = status === 'PARTIAL' || status === 'STOPPED';
   const lines: string[] = [];
@@ -228,6 +245,23 @@ export function buildCourseReportMarkdown(args: {
       lines.push(`- [${x.kind}] ${x.path}${x.detail ? ` — ${x.detail}` : ''}`);
     }
   }
+
+  if (l10nParity) {
+    lines.push('');
+    lines.push(l10nParityToMarkdown(l10nParity));
+    if (l10nPending && Object.keys(l10nPending).length) {
+      const parts = Object.entries(l10nPending).map(([c, n]) => `${c}: ${n}`);
+      lines.push(`- Cells Rise shows as "untranslated" per language: ${parts.join(' · ')}`);
+      lines.push(
+        '  (faithful to the source — those cells fall back to the default language there too)',
+      );
+    }
+    lines.push('');
+    lines.push(
+      '> ⚠ **Never click "Update translation" on this migrated course** — it would AI-translate ' +
+        'exactly the fallback cells above, replacing the migrated behavior with machine text.',
+    );
+  }
   return lines.join('\n');
 }
 
@@ -236,6 +270,8 @@ export function buildCourseReportMarkdown(args: {
 export function buildCourseReportJson(args: {
   report: FidelityReport;
   parity?: ParityReport;
+  l10nParity?: L10nParityReport;
+  l10nPending?: Record<string, number>;
   manual: ManualWorkItem[];
   idMap: Record<string, string>;
 }): string {
@@ -243,6 +279,8 @@ export function buildCourseReportJson(args: {
     {
       ...args.report,
       parity: args.parity ?? null,
+      l10nParity: args.l10nParity ?? null,
+      l10nPending: args.l10nPending ?? null,
       manualWork: args.manual,
       idMap: args.idMap,
     },

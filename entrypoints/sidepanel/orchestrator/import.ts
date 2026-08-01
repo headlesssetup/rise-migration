@@ -10,6 +10,12 @@
 // barrel) keeps the same surface after the split.
 
 import {
+  defaultLocaleOf,
+  isLocalizedStack,
+  resolveStackTitle,
+  stackLocales,
+} from '@/core/l10n';
+import {
   buildPlan,
   executePlan,
   buildFidelityReport,
@@ -22,6 +28,14 @@ import {
   IdMap,
   findBankRef,
   verifyParity,
+  verifyL10nParity,
+  estimateImportSeconds,
+  sumEstimates,
+  formatEstimate,
+  type ImportEstimate,
+  getTranslations,
+  getSubscription,
+  getAvailableLanguages,
   summarizeFlags,
   parseTypefaces,
   moveCourseToFolder,
@@ -34,6 +48,7 @@ import {
   type FidelityReport,
   type ManualWorkItem,
   type ParityReport,
+  type L10nParityReport,
   type RunCsvCourse,
 } from '@/core/import';
 import { isOrphanStatus } from '@/core/assets';
@@ -279,6 +294,41 @@ function parsePriorReport(raw: string | null | undefined): PriorCourseReport | n
  * guard once up front, then imports each course strictly sequentially. Persists
  * `_import/<courseId>.report.{md,json}` + `<courseId>.joblog.json` (resume map).
  */
+/** "Ready to import?" — rough pre-run estimate for the selected courses.
+ *  Local only (archive reads + pure buildPlan; no network, no ids minted).
+ *  Returns per-course estimates + the language count so the UI can show
+ *  "N courses (M multi-language), ~X min (rough)". */
+export async function estimateCourses(
+  storage: Storage,
+  courseIds: string[],
+): Promise<{ estimate: ImportEstimate; stacks: number; missing: number }> {
+  const per: ImportEstimate[] = [];
+  let stacks = 0;
+  let missing = 0;
+  for (const courseId of courseIds) {
+    const raw = await storage.readCourse(courseId);
+    if (!raw) {
+      missing++;
+      continue;
+    }
+    try {
+      const course = unwrap(raw);
+      if (isLocalizedStack(course)) stacks++;
+      const { entries } = await readCourseAssets(storage, courseId);
+      const steps = buildPlan({
+        course,
+        assets: entries,
+        banksById: new Map(),
+        author: 'estimate',
+      });
+      per.push(estimateImportSeconds(steps, entries));
+    } catch {
+      missing++;
+    }
+  }
+  return { estimate: sumEstimates(per), stacks, missing };
+}
+
 export async function runImport(
   storage: Storage,
   courseIds: string[],
@@ -367,6 +417,51 @@ export async function runImport(
   }
   const courseFolders = await readCourseFolders(storage);
 
+  // --- Multi-language stacks (docs/rise-multilang.md): run-level state ---
+  // Account-scoped label sets recreated once per run (source set id → target id).
+  const labelSetCache = new Map<string, string>();
+  // Target's supported translation codes — fetched lazily, once, only when the
+  // run contains a stack. Localization is free on every subscription; this is
+  // purely a locale-code sanity check (cross-plane drift), so a fetch failure
+  // downgrades to a warning (POST /translations still fails loudly if wrong).
+  let availableTargetLangs: Set<string> | null | undefined;
+  const fetchAvailableLangs = async (): Promise<Set<string> | null> => {
+    if (availableTargetLangs !== undefined) return availableTargetLangs;
+    try {
+      const sub = await relay(getSubscription());
+      const subBody = sub.ok ? (safeJson(sub.text) as Record<string, unknown>) : {};
+      const subId = String(subBody?.id ?? '');
+      if (!subId) throw new Error(`subscription id unavailable (HTTP ${sub.status})`);
+      await pacedDelay(pacing);
+      const al = await relay(getAvailableLanguages(subId));
+      if (!al.ok) throw new Error(`available-languages HTTP ${al.status}`);
+      const body = safeJson(al.text) as Record<string, unknown>;
+      const info = (body?.languagesInfo ?? {}) as Record<string, unknown>;
+      const rawTargets = Array.isArray(info.targetLangs) ? info.targetLangs : [];
+      const codes = rawTargets
+        .map((t) =>
+          typeof t === 'string'
+            ? t
+            : String((t as Record<string, unknown>)?.targetLang ?? ''),
+        )
+        .filter(Boolean);
+      availableTargetLangs = codes.length ? new Set(codes) : null;
+      if (!availableTargetLangs) {
+        onEvent({
+          kind: 'log',
+          message: 'WARN available-languages returned no target list — skipping the locale-code sanity check',
+        });
+      }
+    } catch (e) {
+      availableTargetLangs = null;
+      onEvent({
+        kind: 'log',
+        message: `WARN could not read available-languages (${(e as Error).message}) — skipping the locale-code sanity check`,
+      });
+    }
+    return availableTargetLangs;
+  };
+
   // ETA: project remaining time from elapsed wall-clock and the fraction of work
   // done (course index + within-course step fraction). Self-correcting and pacing-
   // agnostic — no need to hardcode per-block/asset times. Live runs only.
@@ -400,8 +495,13 @@ export async function runImport(
       continue;
     }
     const course = unwrap(raw);
+    const courseIsStack = isLocalizedStack(course);
     const courseTitle =
-      typeof course.course?.title === 'string' ? course.course.title : undefined;
+      typeof course.course?.title === 'string'
+        ? course.course.title
+        : courseIsStack
+          ? resolveStackTitle(course) || undefined
+          : undefined;
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId, title: courseTitle });
     emitStatus(i, 0, 1);
     const pfx = `[${i + 1}/${courseIds.length}]`;
@@ -468,6 +568,32 @@ export async function runImport(
       });
     }
 
+    // Multi-language stack: announce + locale-code sanity check BEFORE any write.
+    if (courseIsStack) {
+      const langs = stackLocales(course)
+        .map((l) => String(l.locale ?? ''))
+        .filter(Boolean);
+      onEvent({
+        kind: 'log',
+        message: `${pfx} Multi-language stack (${langs.join(', ')}) — a minimal AI conversion creates the stack shape; every cell is then copied from the archive.`,
+      });
+      if (!opts.dryRun) {
+        const avail = await fetchAvailableLangs();
+        const def = defaultLocaleOf(course);
+        const missing = avail
+          ? langs.filter((c) => c !== def && !avail.has(c))
+          : [];
+        if (missing.length) {
+          const error = `Target plane does not offer translation into: ${missing.join(', ')} — stack cannot be recreated (nothing was written)`;
+          onEvent({ kind: 'log', message: `${pfx} FAILED "${courseTitle ?? courseId}": ${error}` });
+          const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
+          outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
+          csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });
+          continue;
+        }
+      }
+    }
+
     const input: PlanInput = {
       course,
       assets: entries,
@@ -521,6 +647,7 @@ export async function runImport(
       log: (m) => onEvent({ kind: 'log', message: m }),
       onProgress: (done, total) => emitStatus(i, done, total),
       shouldStop: opts.shouldStop,
+      labelSetCache,
     });
 
     // Place the new course into its mapped folder (the course was created at
@@ -560,6 +687,10 @@ export async function runImport(
     // Set when the read-back proves a source/foreign media key survived ON THE
     // TARGET — the executor's own check only inspects a locally derived document.
     let readBackForeign: string[] = [];
+    // Multi-language stack read-back: translation-table parity + per-language
+    // pending-translation counts (informational — see the report warning).
+    let l10nParity: L10nParityReport | undefined;
+    let l10nPending: Record<string, number> | undefined;
     if (!opts.dryRun && res.ok && res.newCourseId) {
       await pacedDelay(pacing);
       onEvent({ kind: 'log', message: `Verifying parity (read-back GET_COURSE ${res.newCourseId})…` });
@@ -599,6 +730,47 @@ export async function runImport(
             `course ${res.newCourseId} (${readBackForeign.slice(0, 3).join(', ')}${readBackForeign.length > 3 ? ', …' : ''})`;
           onEvent({ kind: 'log', message: `${pfx} ${report.error} — course kept; re-run to repair, or fix those blocks manually` });
         }
+
+        // Multi-language stack: verify the translation tables cell-by-cell
+        // (locale sets, per-locale values modulo media remap) and read back the
+        // per-language pending counts for the report.
+        if (courseIsStack) {
+          l10nParity = verifyL10nParity(course, targetDoc);
+          onEvent({
+            kind: 'log',
+            message: l10nParity.ok
+              ? `Language parity OK — ${l10nParity.cells.compared} cell(s) match across ${l10nParity.locales.target.length} language(s)`
+              : `Language parity DIVERGENCES — ${l10nParity.issues.length} issue(s) (see ${courseId}.report.md)`,
+          });
+          if (!l10nParity.ok) {
+            report.ok = false;
+            report.error =
+              report.error ??
+              `Language read-back FAILED: ${l10nParity.issues.length} translation divergence(s) on ${res.newCourseId}`;
+          }
+          await pacedDelay(pacing);
+          const tr = await relay(getTranslations(res.newCourseId));
+          if (tr.ok && tr.text) {
+            const body = safeJson(tr.text) as Record<string, unknown>;
+            const items = Array.isArray(body?.stackItems)
+              ? (body.stackItems as Record<string, unknown>[])
+              : [];
+            l10nPending = {};
+            for (const it of items) {
+              const code = String(it.locale ?? '');
+              const n = typeof it.pendingChangesCount === 'number' ? it.pendingChangesCount : 0;
+              if (code && n > 0) l10nPending[code] = n;
+            }
+            if (Object.keys(l10nPending).length) {
+              onEvent({
+                kind: 'log',
+                message: `${pfx} NOTE: Rise shows pending "untranslated" cells (${Object.entries(l10nPending)
+                  .map(([c, n]) => `${c}: ${n}`)
+                  .join(', ')}) — faithful to the source's fallback state. Do NOT click "Update translation".`,
+              });
+            }
+          }
+        }
       } else {
         onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
       }
@@ -613,20 +785,21 @@ export async function runImport(
     const manual = resolveManualWork(res.flags, blockIndex);
     await storage.writeImportArtifact(
       `${courseId}.report.md`,
-      buildCourseReportMarkdown({ report, parity, manual }),
+      buildCourseReportMarkdown({ report, parity, l10nParity, l10nPending, manual }),
     );
     await storage.writeImportArtifact(
       `${courseId}.report.json`,
-      buildCourseReportJson({ report, parity, manual, idMap: res.idMap }),
+      buildCourseReportJson({ report, parity, l10nParity, l10nPending, manual, idMap: res.idMap }),
     );
 
     const status: CourseStatus = opts.dryRun
       ? 'planned'
       : res.stopped
         ? 'stopped'
-        : // A read-back survivor means the course exists but is NOT faithful — it is
-          // never reported as imported; the course is kept and a re-run repairs it.
-          res.ok && readBackForeign.length
+        : // A read-back survivor (foreign key OR translation divergence) means the
+          // course exists but is NOT faithful — never reported as imported; the
+          // course is kept and a re-run repairs it.
+          res.ok && (readBackForeign.length || (l10nParity && !l10nParity.ok))
           ? 'partial'
           : res.ok
             ? 'imported'
@@ -652,11 +825,11 @@ export async function runImport(
       manual,
     });
 
-    const titleStr = course.course?.title ?? courseId;
+    const titleStr = courseTitle ?? courseId;
     let msg: string;
     if (res.stopped) {
       msg = `STOPPED "${titleStr}" mid-course — partial, resumable on re-run (course ${res.newCourseId ?? '—'})`;
-    } else if (res.ok && readBackForeign.length) {
+    } else if (res.ok && (readBackForeign.length || (l10nParity && !l10nParity.ok))) {
       msg = `PARTIAL "${titleStr}": ${report.error} — course ${res.newCourseId} kept (re-run to repair)`;
     } else if (res.ok) {
       msg = `${opts.dryRun ? 'Planned' : 'Imported'} "${titleStr}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`;

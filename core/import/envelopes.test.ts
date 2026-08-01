@@ -10,6 +10,7 @@ import {
   updateBlockDebounce,
   s3PutReview,
 } from './envelopes';
+import * as env from './envelopes';
 
 describe('write envelopes', () => {
   it('title uses the confirmed UPDATE_COURSE_FIELD_THROTTLE with {course:{id,title}}', () => {
@@ -97,5 +98,88 @@ describe('write envelopes', () => {
     const body = JSON.parse(spec.body!);
     expect(body.payload.item.media.storyline.src).toBe('rise/courses/C1/LEAF/story.html');
     expect(body.payload.id).toBe('blk_9');
+  });
+});
+
+describe('multi-language stack envelopes (docs/rise-multilang.md)', () => {
+  it('createTranslations POSTs sourceLanguage/targetLanguages/formality', () => {
+    const spec = env.createTranslations('C1', {
+      sourceLanguage: 'en-us',
+      targetLanguages: ['ar', 'ru'],
+      formality: 'more',
+    });
+    expect(spec.method).toBe('POST');
+    expect(spec.url).toBe('/manage/api/content/C1/translations');
+    expect(JSON.parse(spec.body!)).toEqual({
+      sourceLanguage: 'en-us',
+      targetLanguages: ['ar', 'ru'],
+      formality: 'more',
+    });
+    // null formality is omitted (capture: the field is absent, not null)
+    const noF = env.createTranslations('C1', {
+      sourceLanguage: 'en-us',
+      targetLanguages: ['de'],
+      formality: null,
+    });
+    expect(JSON.parse(noF.body!)).toEqual({ sourceLanguage: 'en-us', targetLanguages: ['de'] });
+  });
+
+  it('getTranslations / getSubscription / getAvailableLanguages are GETs', () => {
+    expect(env.getTranslations('C1')).toMatchObject({
+      method: 'GET',
+      url: '/manage/api/content/C1/translations',
+    });
+    expect(env.getSubscription()).toMatchObject({ method: 'GET', url: '/manage/api/subscription' });
+    expect(env.getAvailableLanguages('SUB1').url).toBe(
+      '/manage/api/subscription/SUB1/available-languages',
+    );
+  });
+
+  it('updateL10nBatch wraps changes in the ducks envelope', () => {
+    const spec = env.updateL10nBatch('C1', [
+      { action: 'add', l10nId: 'x', lessonId: 'L', locale: 'ru', value: 'v', valueType: 'plain' },
+      { action: 'delete', l10nId: 'y' },
+    ]);
+    expect(spec.url).toBe('/api/rise-runtime/ducks/rise/l10n/UPDATE_L10N_BATCH');
+    const body = JSON.parse(spec.body!);
+    expect(body.type).toBe('rise/l10n/UPDATE_L10N_BATCH');
+    expect(body.payload.courseId).toBe('C1');
+    expect(body.payload.changes).toHaveLength(2);
+  });
+
+  it('updateLocale / createLabelSet / updateLabels match the captured shapes', () => {
+    expect(JSON.parse(env.updateLocale({ courseId: 'C1', locale: 'sq', labelSetId: 'S1' }).body!))
+      .toEqual({
+        type: 'rise/l10n/UPDATE_LOCALE',
+        payload: { courseId: 'C1', locale: 'sq', labelSetId: 'S1' },
+      });
+    expect(JSON.parse(env.createLabelSet({ iso639Code: 'sq', name: 'Copy of Albanian' }).body!).payload)
+      .toEqual({ iso639Code: 'sq', name: 'Copy of Albanian' });
+    expect(JSON.parse(env.updateLabels({ id: 'S1', labels: { courseStart: 'FILLONI' } }).body!).payload)
+      .toEqual({ id: 'S1', labels: { courseStart: 'FILLONI' } });
+  });
+
+  it('createLesson/createBlocks carry translationChanges + ref titles when given', () => {
+    const cl = env.createLesson({
+      author: 'a',
+      courseId: 'C1',
+      position: 2,
+      title: { l10nId: 'ref-1' },
+      translationChanges: [{ action: 'add', l10nId: 'ref-1', locale: 'en-us', value: 'T', valueType: 'plain' }],
+    });
+    const clBody = JSON.parse(cl.body!);
+    expect(clBody.payload.title).toEqual({ l10nId: 'ref-1' });
+    expect(clBody.payload.translationChanges).toHaveLength(1);
+    // absent when not provided (monolingual envelope unchanged)
+    const plain = env.createLesson({ author: 'a', courseId: 'C1', position: 0, title: 'T' });
+    expect(JSON.parse(plain.body!).payload).not.toHaveProperty('translationChanges');
+    const cb = env.createBlocks({
+      courseId: 'C1',
+      lessonId: 'L1',
+      previousBlockId: null,
+      blocks: [{ id: 'b1' }],
+      translationChanges: [],
+    });
+    expect(JSON.parse(cb.body!).payload).not.toHaveProperty('translationChanges');
   });
 });

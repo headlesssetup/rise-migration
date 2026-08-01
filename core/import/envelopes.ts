@@ -173,8 +173,14 @@ export function createLesson(args: {
   author: string;
   courseId: string;
   position: number;
-  title: string;
+  /** Plain string on a monolingual course. On a stack, an {l10nId} ref object —
+   *  the editor sends the ref plus a matching `translationChanges` add
+   *  (capture-confirmed, docs/rise-multilang.md §4.4). */
+  title: string | { l10nId: string };
   type?: string | null;
+  /** Stack only: inline default-locale cell adds riding the create
+   *  ({action:'add', l10nId, locale, value, valueType}). */
+  translationChanges?: unknown[];
 }): WriteSpec {
   return ducks('lessons', 'CREATE_LESSON', {
     author: args.author,
@@ -183,6 +189,9 @@ export function createLesson(args: {
     position: args.position,
     title: args.title,
     type: args.type ?? null,
+    ...(args.translationChanges?.length
+      ? { translationChanges: args.translationChanges }
+      : {}),
   });
 }
 
@@ -221,12 +230,19 @@ export function createBlocks(args: {
   lessonId: string;
   previousBlockId: string | null;
   blocks: unknown[];
+  /** Stack only: inline default-locale cell adds for the {l10nId} refs inside
+   *  `blocks` ({action:'add', l10nId, lessonId, locale, value, valueType} —
+   *  capture-confirmed, docs/rise-multilang.md §4.4). */
+  translationChanges?: unknown[];
 }): WriteSpec {
   return ducks('lessons', 'CREATE_BLOCKS', {
     courseId: args.courseId,
     lessonId: args.lessonId,
     previousBlockId: args.previousBlockId,
     blocks: args.blocks,
+    ...(args.translationChanges?.length
+      ? { translationChanges: args.translationChanges }
+      : {}),
   });
 }
 
@@ -476,4 +492,106 @@ export function postAuthoringLock(body: unknown): WriteSpec {
     body: JSON.stringify(body),
     label: 'POST /api/rise-authoring/locks',
   };
+}
+
+// --- Multi-language stacks (docs/rise-multilang.md) --------------------------
+
+/** POST /manage/api/content/{id}/translations — convert a course into a stack /
+ *  add languages. ALWAYS queues an AI translation per target language (the only
+ *  way locale rows are created); the import uses it as a "stack-shape factory"
+ *  on a minimal placeholder course and overwrites every cell afterwards.
+ *  Capture-confirmed shape: {sourceLanguage, targetLanguages, formality?}.
+ *  Returns 200 with an empty body; completion is polled via
+ *  {@link getTranslations}. */
+export function createTranslations(
+  courseId: string,
+  args: { sourceLanguage: string; targetLanguages: string[]; formality?: string | null },
+): WriteSpec {
+  return {
+    url: `/manage/api/content/${encodeURIComponent(courseId)}/translations`,
+    method: 'POST',
+    body: JSON.stringify({
+      sourceLanguage: args.sourceLanguage,
+      targetLanguages: args.targetLanguages,
+      ...(args.formality ? { formality: args.formality } : {}),
+    }),
+    label: `POST /manage/api/content/${courseId}/translations (${args.targetLanguages.join(',')})`,
+  };
+}
+
+/** GET /manage/api/content/{id}/translations — the stack's state: stackItems[]
+ *  with per-language status (queued→preparing→translating→applying→finalizing→
+ *  complete). 204/empty body = not a stack. Used to poll the conversion. */
+export function getTranslations(courseId: string): WriteSpec {
+  return {
+    url: `/manage/api/content/${encodeURIComponent(courseId)}/translations`,
+    method: 'GET',
+    label: `GET /manage/api/content/${courseId}/translations`,
+  };
+}
+
+/** GET /manage/api/subscription/{subId}/available-languages — supported
+ *  source/target language codes + (informational) AI-credit plan info.
+ *  Localization is free on every subscription; this is a pre-write sanity check
+ *  that the source stack's locale codes exist on the target plane. */
+export function getAvailableLanguages(subscriptionId: string): WriteSpec {
+  return {
+    url: `/manage/api/subscription/${encodeURIComponent(subscriptionId)}/available-languages`,
+    method: 'GET',
+    label: `GET available-languages`,
+  };
+}
+
+/** GET /manage/api/subscription — the target account's subscription (its `id`
+ *  feeds {@link getAvailableLanguages}). */
+export function getSubscription(): WriteSpec {
+  return {
+    url: '/manage/api/subscription',
+    method: 'GET',
+    label: 'GET /manage/api/subscription',
+  };
+}
+
+/** UPDATE_L10N_BATCH — write/delete translation-table cells. Capture-confirmed
+ *  actions: {action:'add', l10nId, lessonId?, locale, value, valueType} (creates
+ *  the cell; the server echoes it back as 'update'), {action:'update', l10nId,
+ *  locale, value}, {action:'delete', l10nId} (removes the id across ALL locales).
+ *  Values may be strings (plain/rich) or media objects (mediaRecord, incl.
+ *  per-locale overrides with translationOverride:true). One locale per envelope
+ *  (mirrors every captured call). */
+export function updateL10nBatch(courseId: string, changes: unknown[]): WriteSpec {
+  return ducks('l10n', 'UPDATE_L10N_BATCH', { courseId, changes });
+}
+
+/** UPDATE_LOCALE — update a locale row, e.g. bind a label set to a language
+ *  ({courseId, locale, labelSetId} — capture-confirmed). Returns the full row. */
+export function updateLocale(args: {
+  courseId: string;
+  locale: string;
+  labelSetId: string;
+}): WriteSpec {
+  return ducks('l10n', 'UPDATE_LOCALE', {
+    courseId: args.courseId,
+    locale: args.locale,
+    labelSetId: args.labelSetId,
+  });
+}
+
+/** CREATE_LABEL_SET — create an ACCOUNT-scoped label set pre-filled with Rise's
+ *  built-in labels for the language ({iso639Code, name} — capture-confirmed).
+ *  Returns the full set incl. its new id and all labels. */
+export function createLabelSet(args: { iso639Code: string; name: string }): WriteSpec {
+  return ducks('labelSets', 'CREATE_LABEL_SET', {
+    iso639Code: args.iso639Code,
+    name: args.name,
+  });
+}
+
+/** UPDATE_LABELS — partial label update on a set ({id, labels:{key:value,…}} —
+ *  capture-confirmed; unlisted keys keep their current value). */
+export function updateLabels(args: {
+  id: string;
+  labels: Record<string, unknown>;
+}): WriteSpec {
+  return ducks('labelSets', 'UPDATE_LABELS', { id: args.id, labels: args.labels });
 }

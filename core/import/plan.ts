@@ -6,6 +6,19 @@
 // or draw-from-bank bind → unlock.
 
 import { collectAssetKeys } from '@/core/assets/keys';
+import {
+  cellKey,
+  collectCells,
+  defaultLocaleOf,
+  formalityGroups,
+  inlineTranslationChanges,
+  isL10nRef,
+  isLocalizedStack,
+  materializeLocale,
+  planCellWrites,
+  resolveStackTitle,
+  stackLocales,
+} from '@/core/l10n';
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 
 /** One source asset, as recorded in `courses/<id>.assets.json` (+ orphan flag). */
@@ -122,6 +135,11 @@ export type PlanStep =
       position: number;
       title: string;
       lessonType: string | null;
+      /** Stack content lesson: create with the SOURCE title ref ({l10nId}) +
+       *  an inline translationChanges add carrying the default-locale title.
+       *  Absent on monolingual lessons and on the pre-conversion placeholder
+       *  (which must be plain — the conversion extracts it into a cell). */
+      l10nTitleRef?: string;
       summary: string;
     }
   | {
@@ -218,6 +236,94 @@ export type PlanStep =
       kind: 'flag-unsupported-media';
       sourceKey: string;
       location: string;
+      summary: string;
+    }
+  // --- Multi-language stacks (docs/rise-multilang.md) ------------------------
+  | {
+      // Pre-conversion placeholder description ('.') so the conversion creates
+      // a description cell/ref we can fill per locale (there is no captured
+      // envelope for ADDING a description to an already-converted stack).
+      kind: 'set-course-description';
+      value: string;
+      summary: string;
+    }
+  | {
+      // POST …/translations — the "stack-shape factory": converts the minimal
+      // placeholder course and creates locale rows. One step per formality
+      // group (formality is a per-call parameter). AI runs only on the
+      // placeholder strings; every cell is overwritten from the source later.
+      kind: 'convert-stack';
+      sourceLanguage: string;
+      targetLanguages: string[];
+      formality: string | null;
+      summary: string;
+    }
+  | {
+      // Poll GET …/translations until every expected language is `complete`,
+      // then GET_COURSE the target to learn its course-level l10n refs
+      // (title/description/cover…) for the cell writes.
+      kind: 'await-stack';
+      expectedLocales: string[];
+      summary: string;
+    }
+  | {
+      // Media referenced ONLY from the translation tables (most stack media
+      // lives there, incl. per-language overrides) — same upload chain as
+      // block media; the keys are remapped inside cell values at write time.
+      kind: 'upload-l10n-asset';
+      sourceKey: string;
+      locale: string;
+      mediaKind: string;
+      filename: string;
+      summary: string;
+    }
+  | {
+      // One UPDATE_L10N_BATCH envelope: the listed source cells of ONE locale
+      // (values resolved from the archive at execution; media keys remapped;
+      // course-level ids mapped to the target's own refs). Batches are ordered
+      // DEFAULT LOCALE FIRST — the pending-flag write-order invariant.
+      kind: 'write-l10n';
+      locale: string;
+      l10nIds: string[];
+      batchIndex: number;
+      batchTotal: number;
+      summary: string;
+    }
+  | {
+      // Recreate a custom per-language label set on the target account
+      // (CREATE_LABEL_SET → UPDATE_LABELS(diff) → UPDATE_LOCALE bind).
+      // Account-scoped: the executor dedupes via deps.labelSetCache.
+      kind: 'set-locale-labelset';
+      locale: string;
+      iso639Code: string;
+      name: string;
+      /** Labels that differ from the language's built-in default set (or the
+       *  full set when no default was archived). */
+      labels: Record<string, unknown>;
+      sourceLabelSetId: string;
+      summary: string;
+    }
+  | {
+      // Delete placeholder-era cells the conversion created that map to nothing
+      // in the source (computed at runtime from the await-stack snapshot;
+      // usually empty — every placeholder cell is normally reused via the ref
+      // map). `delete` removes an id across ALL locales, so only provably-ours
+      // ids qualify.
+      kind: 'cleanup-l10n';
+      summary: string;
+    }
+  | {
+      // FINAL step of a stack plan (replaces the monolingual final set-title,
+      // preserving the `!importing:` partial-marker invariant): write the clean
+      // title + description cells for EVERY locale (default first) onto the
+      // target's own refs.
+      kind: 'set-stack-titles';
+      summary: string;
+    }
+  | {
+      // Source stack shows the learner language selector; the toggle envelope
+      // (TOGGLE_LOCALE_SELECTOR) is not capture-proven → manual flag.
+      kind: 'flag-locale-selector';
       summary: string;
     };
 
@@ -333,7 +439,17 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   const steps: PlanStep[] = [];
   const course = input.course.course ?? {};
   const sourceCourseId = typeof course.id === 'string' ? course.id : 'course';
-  const title = typeof course.title === 'string' ? course.title : sourceCourseId;
+  // Multi-language stack: the doc is l10n-ified ({l10nId} refs + per-locale
+  // tables) — plan the stack sequence (docs/rise-multilang.md). Title/summary
+  // strings and course-image objects come from the MATERIALIZED default locale.
+  const stack = isLocalizedStack(input.course);
+  const mat = stack ? materializeLocale(input.course).doc : input.course;
+  const matCourse = (mat.course ?? {}) as Record<string, unknown>;
+  const title = stack
+    ? resolveStackTitle(input.course) || sourceCourseId
+    : typeof course.title === 'string'
+      ? course.title
+      : sourceCourseId;
   // Display order comes from the course's authoritative ordered lesson-id list
   // (`course.lessons`, protocol §2) — NOT the top-level lesson-objects array order
   // and NOT the `position` field (both were observed to scramble a real course).
@@ -341,11 +457,69 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     Array.isArray(input.course.lessons) ? input.course.lessons : [],
     (course as Record<string, unknown>).lessons,
   );
+  // Materialized twins (same order) for display titles on a stack.
+  const matLessons = orderLessons(
+    Array.isArray(mat.lessons) ? mat.lessons : [],
+    (matCourse as Record<string, unknown>).lessons,
+  );
+  const matTitle = (idx: number): string => lessonTitle(matLessons[idx] ?? lessons[idx] ?? {});
 
   const assetByKey = new Map(input.assets.map((a) => [a.key, a]));
   // Keys attached to a recreatable block (uploaded or orphan-flagged). Anything
   // else (course/lesson/theme/bank media) is flagged unsupported at the end.
   const handledKeys = new Set<string>();
+
+  // Course cover / card / logo images (user-uploaded) — upload + set via
+  // UPDATE_COURSE. Marks their keys handled so the final flagger skips them.
+  // `media` is the cover-page logo (capture-confirmed; `{image:{key,…}}`).
+  // Monolingual: called with the raw course near the end of the plan. Stack:
+  // called with the MATERIALIZED course BEFORE the conversion (the conversion
+  // turns the plain image objects into refs + default-locale cells itself).
+  const planCourseImages = (c: Record<string, unknown>): void => {
+    const coverKey = coverCardImageKey(c.coverImage);
+    const cardKey = coverCardImageKey(c.cardImage);
+    const mediaKey = courseMediaImageKey(c.media);
+    // lessonHeaderImage uses the same `{media:{image:{key}}}` shape as cover/card
+    // (it may also nest an uncropped `originalImage` with its own key/crushedKey —
+    // all handled keys are marked below so none survives as a source key).
+    const headerKey = coverCardImageKey(c.lessonHeaderImage);
+    if (!coverKey && !cardKey && !mediaKey && !headerKey) return;
+    // Orphaned course-image keys (deleted at source, no archived bytes) are
+    // flagged BEFORE the set-course-images step, mirroring block/lesson media:
+    // the executor blanks them (keyMap → '') so UPDATE_COURSE ships without the
+    // image and the course still succeeds — with a flag, not a late hard-fail.
+    const flaggedImgKeys = new Set<string>();
+    const courseImages: [unknown, string][] = [
+      [c.coverImage, 'course cover image'],
+      [c.cardImage, 'course card image'],
+      [c.media, 'course logo'],
+      [c.lessonHeaderImage, 'course lesson-header image'],
+    ];
+    for (const [img, where] of courseImages) {
+      for (const ak of collectAssetKeys(img, sourceCourseId)) {
+        handledKeys.add(ak.key);
+        const entry = assetByKey.get(ak.key);
+        if ((entry?.orphaned || (entry && !entry.file)) && !flaggedImgKeys.has(ak.key)) {
+          flaggedImgKeys.add(ak.key);
+          steps.push({
+            kind: 'flag-orphan-media',
+            sourceLessonId: '',
+            sourceBlockId: '',
+            sourceKey: ak.key,
+            summary: `⚠ Orphaned ${where} (deleted at source): ${ak.key}`,
+          });
+        }
+      }
+    }
+    steps.push({
+      kind: 'set-course-images',
+      hasCover: !!coverKey,
+      hasCard: !!cardKey,
+      hasMedia: !!mediaKey,
+      hasLessonHeader: !!headerKey,
+      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo', headerKey && 'lesson-header'].filter(Boolean).join(' + ')} image`,
+    });
+  };
 
   // 1. Banks first (a draw-from-bank block needs the new bank id) — ONLY when
   // bank recreation is explicitly enabled. Default: draw-from-bank blocks become
@@ -402,40 +576,18 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // we send a sequential 0-based slot (idx) and each create appends in this exact
   // order — no reorder pass needed.
   const ordered = lessons;
-  ordered.forEach((lesson, idx) => {
-    const sourceLessonId = typeof lesson.id === 'string' ? lesson.id : `lesson-${idx}`;
-    const lType = typeof lesson.type === 'string' ? lesson.type : 'blocks';
-    const icon = typeof lesson.icon === 'string' ? lesson.icon : null;
-    const lTitle = lessonTitle(lesson);
 
-    steps.push({
-      kind: 'create-lesson',
-      sourceLessonId,
-      // Sequential 0-based slot in display order — NOT the raw source `position`.
-      // We create lessons in this order, so slot == current length == an append;
-      // sending the raw (possibly gappy/non-0-based) source position let the
-      // server place lessons out of order. `idx` keeps each insert an append.
-      position: idx,
-      title: lTitle,
-      lessonType: lType === 'section' ? 'section' : null, // type set on update
-      summary: `Create lesson "${lTitle}" (${lType})`,
-    });
-
-    // Set a PROVISIONAL course title right after the FIRST lesson materializes
-    // the course (the bare shell is a title-less catalog row, and Rise rejects
-    // titling a lesson-less course). The `!importing:` prefix makes a
-    // hard-crashed partial unmistakable in the dashboard — the clean title is
-    // written by the final set-title step only when the import completes (a
-    // graceful Stop renames to `!unfinished:` instead).
-    if (idx === 0) {
-      steps.push({
-        kind: 'set-title',
-        sourceCourseId,
-        title: `!importing: ${title}`,
-        summary: `Set provisional course title "!importing: ${title}"`,
-      });
-    }
-
+  // Everything a lesson needs AFTER its CREATE_LESSON: lesson media uploads,
+  // UPDATE_LESSON, blocks + per-block follow-ups. Shared by the monolingual
+  // loop and the stack sequence (identical either way — a stack's block JSON is
+  // copy-faithful too, its refs are just one more value shape).
+  const planLessonBody = (
+    lesson: Lesson,
+    sourceLessonId: string,
+    lTitle: string,
+    lType: string,
+    icon: string | null,
+  ): void => {
     // Lesson-level media (header image + any lesson `media`) — uploaded BEFORE
     // UPDATE_LESSON so the lesson payload carries the remapped key instead of a
     // blank. Same orphan/oversize handling as block media; oversize is PREDICTED
@@ -612,18 +764,260 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       }
     }
     // (no unlock — we never locked)
+  };
+
+  const lessonMeta = (
+    lesson: Lesson,
+    idx: number,
+  ): { sourceLessonId: string; lType: string; icon: string | null } => ({
+    sourceLessonId: typeof lesson.id === 'string' ? lesson.id : `lesson-${idx}`,
+    lType: typeof lesson.type === 'string' ? lesson.type : 'blocks',
+    icon: typeof lesson.icon === 'string' ? lesson.icon : null,
   });
 
-  // Fallback provisional title for a lesson-less course (the per-first-lesson
-  // title above never fired). A confirmed bare shell is a real course, so
-  // titling it is safe; the final set-title below still writes the clean title.
-  if (ordered.length === 0) {
+  if (!stack) {
+    ordered.forEach((lesson, idx) => {
+      const { sourceLessonId, lType, icon } = lessonMeta(lesson, idx);
+      const lTitle = lessonTitle(lesson);
+
+      steps.push({
+        kind: 'create-lesson',
+        sourceLessonId,
+        // Sequential 0-based slot in display order — NOT the raw source `position`.
+        // We create lessons in this order, so slot == current length == an append;
+        // sending the raw (possibly gappy/non-0-based) source position let the
+        // server place lessons out of order. `idx` keeps each insert an append.
+        position: idx,
+        title: lTitle,
+        lessonType: lType === 'section' ? 'section' : null, // type set on update
+        summary: `Create lesson "${lTitle}" (${lType})`,
+      });
+
+      // Set a PROVISIONAL course title right after the FIRST lesson materializes
+      // the course (the bare shell is a title-less catalog row, and Rise rejects
+      // titling a lesson-less course). The `!importing:` prefix makes a
+      // hard-crashed partial unmistakable in the dashboard — the clean title is
+      // written by the final set-title step only when the import completes (a
+      // graceful Stop renames to `!unfinished:` instead).
+      if (idx === 0) {
+        steps.push({
+          kind: 'set-title',
+          sourceCourseId,
+          title: `!importing: ${title}`,
+          summary: `Set provisional course title "!importing: ${title}"`,
+        });
+      }
+
+      planLessonBody(lesson, sourceLessonId, lTitle, lType, icon);
+    });
+
+    // Fallback provisional title for a lesson-less course (the per-first-lesson
+    // title above never fired). A confirmed bare shell is a real course, so
+    // titling it is safe; the final set-title below still writes the clean title.
+    if (ordered.length === 0) {
+      steps.push({
+        kind: 'set-title',
+        sourceCourseId,
+        title: `!importing: ${title}`,
+        summary: `Set provisional course title "!importing: ${title}"`,
+      });
+    }
+  } else {
+    // ------ STACK SEQUENCE (docs/rise-multilang.md §"import algorithm") ------
+    const doc = input.course;
+    const defLocale = defaultLocaleOf(doc) ?? 'en-us';
+    const locales = stackLocales(doc);
+    const localeCodes = locales
+      .map((l) => String(l.locale ?? ''))
+      .filter(Boolean);
+
+    // 3a. PLACEHOLDER first lesson (pre-conversion, so the shell can convert and
+    // the conversion has something to extract). It IS the future lesson 1: its
+    // sourceLessonId is the real first lesson's id, so every later step (update,
+    // blocks) addresses it transparently through the id map. Plain-string title
+    // (the conversion turns it into the lesson's title cell, which the cell
+    // writes then fill per locale via the target ref).
+    const first = ordered[0];
+    const firstMeta = first ? lessonMeta(first, 0) : null;
+    const placeholderTitle = first ? matTitle(0) : 'Content';
+    steps.push({
+      kind: 'create-lesson',
+      sourceLessonId: firstMeta?.sourceLessonId ?? '__l10n_placeholder__',
+      position: 0,
+      title: placeholderTitle,
+      lessonType: firstMeta?.lType === 'section' ? 'section' : null,
+      summary: `Create placeholder lesson "${placeholderTitle}" (becomes lesson 1)`,
+    });
+
+    // 3b. Provisional `!importing:` title (plain — the course is not converted
+    // yet), then a placeholder description so the conversion creates a
+    // description ref/cell we can fill (no captured envelope adds one later).
     steps.push({
       kind: 'set-title',
       sourceCourseId,
       title: `!importing: ${title}`,
       summary: `Set provisional course title "!importing: ${title}"`,
     });
+    if (isL10nRef(course.description)) {
+      steps.push({
+        kind: 'set-course-description',
+        value: '.',
+        summary: 'Set placeholder description (conversion creates its l10n ref)',
+      });
+    }
+
+    // 3c. Course images BEFORE conversion (plain objects; the conversion turns
+    // them into refs + default-locale cells itself — capture-proven shape; AI
+    // never touches media). Keys come from the MATERIALIZED course object.
+    planCourseImages(matCourse);
+
+    // 3d. Convert to a stack: one POST per formality group; then poll to
+    // completion. Localization is free on every subscription; the orchestrator
+    // sanity-checks the locale codes against available-languages pre-write.
+    for (const g of formalityGroups(doc)) {
+      steps.push({
+        kind: 'convert-stack',
+        sourceLanguage: defLocale,
+        targetLanguages: g.locales,
+        formality: g.formality,
+        summary: `Add language(s) ${g.locales.join(', ')}${g.formality ? ` (formality: ${g.formality})` : ''} — AI runs on the placeholder only`,
+      });
+    }
+    steps.push({
+      kind: 'await-stack',
+      expectedLocales: localeCodes,
+      summary: `Wait for the stack shape (${localeCodes.join(', ')}) to finish`,
+    });
+
+    // 3e. Table-only media (the bulk of a stack's media lives in the l10n
+    // tables, incl. per-language overrides) — upload BEFORE any cell write so
+    // values carry remapped keys. Block-embedded media (e.g. attachments) rides
+    // the normal per-block loop below.
+    const tables = doc.l10n?.translations ?? {};
+    for (const [locale, table] of Object.entries(tables)) {
+      for (const ak of collectAssetKeys(table, sourceCourseId)) {
+        if (handledKeys.has(ak.key)) continue;
+        handledKeys.add(ak.key);
+        const entry = assetByKey.get(ak.key);
+        if (entry?.orphaned || (entry && !entry.file)) {
+          steps.push({
+            kind: 'flag-orphan-media',
+            sourceLessonId: '',
+            sourceBlockId: '',
+            sourceKey: ak.key,
+            summary: `⚠ Orphaned media in translations (${locale}) (deleted at source): ${ak.key}`,
+          });
+          continue;
+        }
+        if (exceedsUploadLimit(entry?.size)) {
+          steps.push({
+            kind: 'flag-unsupported-media',
+            sourceKey: ak.key,
+            location: `translations (${locale})`,
+            summary: `⚠ Media ~${approxMb(entry!.size!)}MB too large to upload via the extension — attach manually: ${ak.key}`,
+          });
+          continue;
+        }
+        steps.push({
+          kind: 'upload-l10n-asset',
+          sourceKey: ak.key,
+          locale,
+          mediaKind: ak.kind,
+          filename: fileBasename(ak.key),
+          summary: `Upload ${ak.kind} ${fileBasename(ak.key)} (translations ${locale})`,
+        });
+      }
+    }
+
+    // 3f. Content, copy-faithful with the SOURCE l10nId refs kept verbatim.
+    // Lesson 1 reuses the placeholder (update + blocks only); later lessons are
+    // created with their source title ref + an inline default-locale title cell.
+    ordered.forEach((lesson, idx) => {
+      const { sourceLessonId, lType, icon } = lessonMeta(lesson, idx);
+      const lTitle = matTitle(idx);
+      if (idx > 0) {
+        const titleRef = isL10nRef(lesson.title) ? lesson.title.l10nId : undefined;
+        steps.push({
+          kind: 'create-lesson',
+          sourceLessonId,
+          position: idx,
+          title: lTitle,
+          lessonType: lType === 'section' ? 'section' : null,
+          ...(titleRef ? { l10nTitleRef: titleRef } : {}),
+          summary: `Create lesson "${lTitle}" (${lType})`,
+        });
+      }
+      planLessonBody(lesson, sourceLessonId, lTitle, lType, icon);
+    });
+
+    // 3g. Fill every language: batched cell writes, DEFAULT LOCALE FIRST
+    // (write-order invariant — a default row written after its target rows
+    // would flag every cell "new content, untranslated"). Cells shipped inline
+    // at create time are skipped; the course title/description cells are
+    // reserved for the FINAL set-stack-titles step (partial-title invariant).
+    const inlineSkip = new Set<string>();
+    ordered.forEach((lesson, idx) => {
+      if (idx > 0 && isL10nRef(lesson.title)) {
+        const t = doc.l10n?.translations?.[defLocale]?.[lesson.title.l10nId];
+        if (t !== undefined) inlineSkip.add(cellKey(lesson.title.l10nId, defLocale));
+      }
+      for (const ch of inlineTranslationChanges(lesson.items ?? [], doc)) {
+        inlineSkip.add(cellKey(ch.l10nId, defLocale));
+      }
+    });
+    const titleDescIds = [course.title, course.description]
+      .filter(isL10nRef)
+      .map((r) => r.l10nId);
+    for (const id of titleDescIds) {
+      for (const code of Object.keys(tables)) inlineSkip.add(cellKey(id, code));
+    }
+    const batches = planCellWrites(collectCells(doc), { skip: inlineSkip });
+    batches.forEach((batch, i) => {
+      steps.push({
+        kind: 'write-l10n',
+        locale: batch[0]?.locale ?? defLocale,
+        l10nIds: batch.map((c) => c.l10nId),
+        batchIndex: i + 1,
+        batchTotal: batches.length,
+        summary: `Write ${batch.length} translation cell(s) [${batch[0]?.locale ?? ''}] (batch ${i + 1}/${batches.length})`,
+      });
+    });
+
+    // 3h. Custom per-language label sets (account-scoped; deduped run-wide via
+    // the executor's labelSetCache). The DEFAULT locale's set is the course's
+    // own label set — course-level label-set migration is a documented gap.
+    const archivedSets = Array.isArray((doc as Record<string, unknown>).labelSets)
+      ? ((doc as Record<string, unknown>).labelSets as Record<string, unknown>[])
+      : [];
+    const defaultSets = Array.isArray((doc as Record<string, unknown>).defaultLabelSets)
+      ? ((doc as Record<string, unknown>).defaultLabelSets as Record<string, unknown>[])
+      : [];
+    for (const row of locales) {
+      const code = String(row.locale ?? '');
+      if (!code || code === defLocale) continue;
+      const setId = typeof row.labelSetId === 'string' ? row.labelSetId : null;
+      if (!setId) continue; // language default applies — nothing to recreate
+      const set = archivedSets.find((s) => s.id === setId);
+      if (!set) continue; // not in the archive — the read-back will surface it
+      const iso = typeof set.iso639Code === 'string' ? set.iso639Code : code;
+      const name = typeof set.name === 'string' ? set.name : `Imported ${code}`;
+      const labels = (set.labels ?? {}) as Record<string, unknown>;
+      const def = defaultSets.find((s) => s.iso639Code === iso && s.defaultSet === true);
+      const defLabels = (def?.labels ?? {}) as Record<string, unknown>;
+      const overrides: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(labels)) {
+        if (defLabels[k] !== v) overrides[k] = v;
+      }
+      steps.push({
+        kind: 'set-locale-labelset',
+        locale: code,
+        iso639Code: iso,
+        name,
+        labels: overrides,
+        sourceLabelSetId: setId,
+        summary: `Recreate label set "${name}" (${Object.keys(overrides).length} custom label(s)) → ${code}`,
+      });
+    }
   }
 
   // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
@@ -636,53 +1030,9 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   }
 
-  // Course cover / card / logo images (user-uploaded) — upload + set via
-  // UPDATE_COURSE. Mark their keys handled so the flagger below skips them.
-  // `media` is the cover-page logo (capture-confirmed; `{image:{key,…}}`).
-  const coverKey = coverCardImageKey(course.coverImage);
-  const cardKey = coverCardImageKey(course.cardImage);
-  const mediaKey = courseMediaImageKey(course.media);
-  // lessonHeaderImage uses the same `{media:{image:{key}}}` shape as cover/card
-  // (it may also nest an uncropped `originalImage` with its own key/crushedKey —
-  // all handled keys are marked below so none survives as a source key).
-  const headerKey = coverCardImageKey(course.lessonHeaderImage);
-  if (coverKey || cardKey || mediaKey || headerKey) {
-    // Orphaned course-image keys (deleted at source, no archived bytes) are
-    // flagged BEFORE the set-course-images step, mirroring block/lesson media:
-    // the executor blanks them (keyMap → '') so UPDATE_COURSE ships without the
-    // image and the course still succeeds — with a flag, not a late hard-fail.
-    const flaggedImgKeys = new Set<string>();
-    const courseImages: [unknown, string][] = [
-      [course.coverImage, 'course cover image'],
-      [course.cardImage, 'course card image'],
-      [course.media, 'course logo'],
-      [course.lessonHeaderImage, 'course lesson-header image'],
-    ];
-    for (const [img, where] of courseImages) {
-      for (const ak of collectAssetKeys(img, sourceCourseId)) {
-        handledKeys.add(ak.key);
-        const entry = assetByKey.get(ak.key);
-        if ((entry?.orphaned || (entry && !entry.file)) && !flaggedImgKeys.has(ak.key)) {
-          flaggedImgKeys.add(ak.key);
-          steps.push({
-            kind: 'flag-orphan-media',
-            sourceLessonId: '',
-            sourceBlockId: '',
-            sourceKey: ak.key,
-            summary: `⚠ Orphaned ${where} (deleted at source): ${ak.key}`,
-          });
-        }
-      }
-    }
-    steps.push({
-      kind: 'set-course-images',
-      hasCover: !!coverKey,
-      hasCard: !!cardKey,
-      hasMedia: !!mediaKey,
-      hasLessonHeader: !!headerKey,
-      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo', headerKey && 'lesson-header'].filter(Boolean).join(' + ')} image`,
-    });
-  }
+  // Monolingual course cover/card/logo images — the stack path already emitted
+  // its set-course-images (from the MATERIALIZED course) pre-conversion.
+  if (!stack) planCourseImages(course as Record<string, unknown>);
 
   // Media that isn't on a recreatable block OR an uploaded lesson header — theme
   // images and bank question media (lesson headers are handled per-lesson above).
@@ -705,16 +1055,38 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     flagUnsupported(bank, bankId, `bank ${bankId}`);
   }
 
-  // Final title write — the very LAST step, so anything short of a completed
-  // import (hard crash, mid-run failure, Stop) leaves the provisional
-  // `!importing:` / `!unfinished:` marker instead of a clean-titled duplicate.
-  steps.push({
-    kind: 'set-title',
-    sourceCourseId,
-    title,
-    final: true,
-    summary: `Set course title "${title}"`,
-  });
+  if (stack) {
+    // Placeholder-era cells the conversion created that map to nothing in the
+    // source (computed at runtime from the await-stack snapshot; usually none).
+    steps.push({
+      kind: 'cleanup-l10n',
+      summary: 'Delete placeholder-era translation cells (if any)',
+    });
+    if (input.course.l10n?.showLocaleSelector === true) {
+      steps.push({
+        kind: 'flag-locale-selector',
+        summary:
+          '⚠ Source shows the learner language selector — enable it manually (Settings → Languages)',
+      });
+    }
+    // Final step of a stack plan (the partial-title invariant): write the clean
+    // title + description cells for EVERY locale onto the target's own refs.
+    steps.push({
+      kind: 'set-stack-titles',
+      summary: `Set course title "${title}" + description in every language`,
+    });
+  } else {
+    // Final title write — the very LAST step, so anything short of a completed
+    // import (hard crash, mid-run failure, Stop) leaves the provisional
+    // `!importing:` / `!unfinished:` marker instead of a clean-titled duplicate.
+    steps.push({
+      kind: 'set-title',
+      sourceCourseId,
+      title,
+      final: true,
+      summary: `Set course title "${title}"`,
+    });
+  }
 
   return steps;
 }
@@ -734,6 +1106,12 @@ export interface PlanStats {
   storylineFlags: number;
   orphanFlags: number;
   drawFromBank: number;
+  /** Multi-language stack: number of languages ('' /0 for monolingual). */
+  locales: number;
+  /** Translation cells written via batches (excludes create-inlined cells). */
+  l10nCells: number;
+  /** UPDATE_L10N_BATCH envelopes planned. */
+  l10nBatches: number;
 }
 
 export function planStats(steps: PlanStep[]): PlanStats {
@@ -743,14 +1121,23 @@ export function planStats(steps: PlanStep[]): PlanStats {
     (n, s) => (s.kind === 'create-blocks' ? n + s.blocks.length : n),
     0,
   );
+  const l10nCells = steps.reduce(
+    (n, s) => (s.kind === 'write-l10n' ? n + s.l10nIds.length : n),
+    0,
+  );
+  const awaitStep = steps.find((s) => s.kind === 'await-stack');
   return {
     total: steps.length,
     banks: count('create-bank'),
     lessons: count('create-lesson'),
     blocks,
-    uploads: count('upload-asset') + count('upload-lesson-media'),
+    uploads:
+      count('upload-asset') + count('upload-lesson-media') + count('upload-l10n-asset'),
     storylineFlags: count('flag-storyline'),
     orphanFlags: count('flag-orphan-media'),
     drawFromBank: count('bind-draw-from-bank'),
+    locales: awaitStep?.kind === 'await-stack' ? awaitStep.expectedLocales.length : 0,
+    l10nCells,
+    l10nBatches: count('write-l10n'),
   };
 }

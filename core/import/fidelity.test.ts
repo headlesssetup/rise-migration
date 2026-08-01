@@ -85,7 +85,7 @@ describe('fidelityStatus', () => {
     generatedAt: 't',
     dryRun: false,
     ok: false,
-    planned: { total: 0, banks: 0, lessons: 0, blocks: 0, uploads: 0, storylineFlags: 0, orphanFlags: 0, drawFromBank: 0 },
+    planned: { total: 0, banks: 0, lessons: 0, blocks: 0, uploads: 0, storylineFlags: 0, orphanFlags: 0, drawFromBank: 0, locales: 0, l10nCells: 0, l10nBatches: 0 },
     flags: [],
     survivingSourceKeys: [],
     idMappings: 0,

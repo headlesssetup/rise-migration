@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalize, verifyParity, parityReportToMarkdown } from './verify';
+import { canonicalize, verifyParity, verifyL10nParity, parityReportToMarkdown } from './verify';
 import type { GetCourseDocument } from '@/shared/types/rise';
 
 describe('canonicalize', () => {
@@ -193,5 +193,91 @@ describe('verifyParity', () => {
     const r = verifyParity(scrambledSource, builtTarget);
     expect(r.issues).toEqual([]);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe('verifyL10nParity (multi-language stacks)', () => {
+  const source = {
+    course: {
+      id: 'SRC',
+      title: { l10nId: 'src-title' },
+      description: { l10nId: 'src-desc' },
+    },
+    lessons: [{ id: 'SL1', title: { l10nId: 'src-l1' }, items: [] }],
+    l10n: {
+      defaultLocale: 'en-us',
+      locales: [
+        { id: 'r1', locale: 'en-us' },
+        { id: 'r2', locale: 'ru' },
+      ],
+      translations: {
+        'en-us': {
+          'src-title': 'Title',
+          'src-desc': '<p>Desc</p>',
+          'src-l1': 'Lesson 1',
+          'cell-1': '<p>Body</p>',
+          'cell-media': { image: { key: 'rise/courses/SRC/a.jpg', type: 'image' } },
+        },
+        ru: { 'src-title': 'Заголовок', 'cell-1': '<p>Тело</p>' },
+      },
+    },
+  } as never;
+
+  const goodTarget = {
+    course: {
+      id: 'TGT',
+      title: { l10nId: 'tgt-title' },
+      description: { l10nId: 'tgt-desc' },
+    },
+    lessons: [{ id: 'TL1', title: { l10nId: 'tgt-l1' }, items: [] }],
+    l10n: {
+      defaultLocale: 'en-us',
+      locales: [
+        { id: 't1', locale: 'en-us' },
+        { id: 't2', locale: 'ru' },
+      ],
+      translations: {
+        'en-us': {
+          'tgt-title': 'Title',
+          'tgt-desc': '<p>Desc</p>',
+          'tgt-l1': 'Lesson 1',
+          'cell-1': '<p>Body</p>',
+          'cell-media': { image: { key: 'rise/courses/TGT/new.jpg', type: 'image' } },
+        },
+        ru: { 'tgt-title': 'Заголовок', 'cell-1': '<p>Тело</p>' },
+      },
+    },
+  } as never;
+
+  it('passes when every cell matches (ids via ref map, media keys tokenized)', () => {
+    const r = verifyL10nParity(source, goodTarget);
+    expect(r.issues).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.cells.compared).toBe(7);
+    expect(r.locales.target).toEqual(['en-us', 'ru']);
+  });
+
+  it('reports missing locales, missing cells, changed cells and extra cells', () => {
+    const bad = JSON.parse(JSON.stringify(goodTarget)) as {
+      l10n: { translations: Record<string, Record<string, unknown>> };
+    };
+    delete bad.l10n.translations.ru; // locale gone
+    const en = bad.l10n.translations['en-us']!;
+    en['cell-1'] = '<p>Different</p>'; // changed
+    delete en['cell-media']; // missing
+    en['junk-9'] = 'leftover'; // extra
+    const r = verifyL10nParity(source, bad as never);
+    expect(r.ok).toBe(false);
+    const kinds = r.issues.map((i) => i.kind).sort();
+    expect(kinds).toContain('missing-locale');
+    expect(kinds).toContain('missing-cell');
+    expect(kinds).toContain('cell-changed');
+    expect(kinds).toContain('extra-cell');
+  });
+
+  it('is empty-safe on monolingual docs', () => {
+    const r = verifyL10nParity({ course: {} } as never, { course: {} } as never);
+    expect(r.ok).toBe(true);
+    expect(r.cells).toEqual({ source: 0, target: 0, compared: 0 });
   });
 });

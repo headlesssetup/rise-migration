@@ -38,6 +38,7 @@ export {
 } from './storyline';
 export {
   runImport,
+  estimateCourses,
   readSourceIdentity,
   readArchiveInfo,
   importAccountSettings,
