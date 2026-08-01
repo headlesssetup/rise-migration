@@ -39,13 +39,19 @@ export interface AssetKey {
 //    usercontent URL is taken verbatim — including `(`, `)`, `%2520`, unicode —
 //    so filenames like `Group 2 (7).png` are never truncated.
 //  - Bounded fallback: for keys embedded inside a larger HTML/text blob, capture
-//    each match up to a real delimiter (quote / whitespace / markup / paren).
+//    each match up to a real delimiter (quote / whitespace / markup / paren /
+//    `=` `,` `;` separators). The boundary classes mirror the census scanner's
+//    RE_RISE_KEY (core/census/scan.ts) so every string the scanner classifies
+//    as media yields its keys here: the bare-key match requires the same
+//    leading delimiter (so `enterprise/courses/…` can't shed a bogus
+//    `rise/courses/…` key), and both bounded matches stop at the same trailing
+//    separators (so `key1,key2` srcset-style lists don't fuse into one key).
 const RE_WHOLE_VALUE =
   /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?(rise\/(?:courses|questionBanks)\/\S+)$/i;
 const RE_USERCONTENT_URL =
-  /https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/([^\s"'<>\\)]+)/gi;
+  /https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/([^\s"'<>\\)=,;]+)/gi;
 const RE_BARE_RISE_KEY =
-  /rise\/(?:courses|questionBanks)\/[^\s"'<>\\)]+/gi;
+  /(?:^|[/"'\s(=,>;])(rise\/(?:courses|questionBanks)\/[^\s"'<>\\)=,;]+)/gi;
 
 /** Strip a trailing `?query`/`#fragment` and any trailing punctuation that the
  *  bounded char class may have swept up at a sentence/markup boundary. */
@@ -79,7 +85,7 @@ export function extractUploadedKeys(value: string): string[] {
     }
   };
   for (const m of value.matchAll(RE_USERCONTENT_URL)) if (m[1]) add(m[1]);
-  for (const m of value.matchAll(RE_BARE_RISE_KEY)) if (m[0]) add(m[0]);
+  for (const m of value.matchAll(RE_BARE_RISE_KEY)) if (m[1]) add(m[1]);
   return out;
 }
 

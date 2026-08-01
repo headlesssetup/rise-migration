@@ -167,6 +167,62 @@ describe('executePlan — dry run', () => {
   });
 });
 
+describe('executePlan — dry run predicts surviving keys (8b)', () => {
+  it('reports a predicted surviving source key as a FAILURE, not a silent ok', async () => {
+    const input = imageCourse();
+    // Sabotage the plan: drop every step that would upload/patch/blank the
+    // image key, so the dry-run's rebuilt doc still carries the source key.
+    const steps = buildPlan(input).filter(
+      (s) => !['upload-asset', 'patch-block-media', 'flag-orphan-media', 'flag-unsupported-media'].includes(s.kind),
+    );
+    const res = await executePlan(steps, {
+      input,
+      relay: async () => ({ ok: true, status: 200, text: '{}' }),
+      readAsset: async () => null,
+      dryRun: true,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.survivingKeys).toEqual(['rise/courses/SRC/a.jpg']);
+    expect(res.ok).toBe(false); // dry-run no longer forces ok=true
+    expect(res.error).toMatch(/would survive/);
+  });
+});
+
+describe('executePlan — title lifecycle (H4)', () => {
+  it('writes "!importing: <title>" early and the clean title (+description) LAST', async () => {
+    const input = imageCourse();
+    (input.course.course as Record<string, unknown>).description = 'A course about things';
+    const titles: string[] = [];
+    const descs: string[] = [];
+    const { relay } = mockRelay({
+      // Must precede happyHandlers' 'UPDATE_COURSE' (substring match).
+      UPDATE_COURSE_FIELD_THROTTLE: (body: any) => {
+        const c = body?.payload?.course ?? {};
+        if (typeof c.title === 'string') titles.push(c.title);
+        if (typeof c.description === 'string') descs.push(c.description);
+        return { payload: {} };
+      },
+      ...happyHandlers,
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // Provisional marker first, clean title last — a hard crash in between
+    // leaves an unmistakable "!importing:" course, never a plain-titled twin.
+    expect(titles).toEqual(['!importing: My Course', 'My Course']);
+    // Description rides only with the final title write.
+    expect(descs).toEqual(['A course about things']);
+    // The clean-title write is the very last envelope of the run.
+    expect(res.envelopes[res.envelopes.length - 1]!.step).toBe('set-title');
+  });
+});
+
 describe('executePlan — loud fail', () => {
   it('aborts when CREATE_BLOCKS does not confirm the sent id', async () => {
     const input = imageCourse();

@@ -98,10 +98,14 @@ export function findStorylineBlocks(doc: unknown): StorylineBlockRef[] {
   };
 
   walk(doc, '$');
-  // De-dupe (a block reachable by two paths is still one block).
+  // De-dupe by BLOCK ID (a block reachable by two paths is still one block —
+  // keying on the path used to defeat this, yielding duplicate manifest entries
+  // and duplicate attach steps). The FIRST path found is kept for diagnostics.
+  // A block with no id (malformed) falls back to lesson+path so distinct
+  // id-less blocks are not collapsed into one.
   const seen = new Set<string>();
   return out.filter((b) => {
-    const key = `${b.lessonId}/${b.blockId}/${b.path}`;
+    const key = b.blockId || `${b.lessonId}/${b.path}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

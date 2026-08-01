@@ -71,4 +71,29 @@ describe('findStorylineBlocks', () => {
     const wrapped = { payload: { course: { id: 'C', lessons: course.lessons } } };
     expect(findStorylineBlocks(wrapped).length).toBe(2);
   });
+
+  it('dedupes a block reachable via two paths by BLOCK ID, keeping the first path', () => {
+    // The same lessons array hangs off two keys (e.g. top-level AND under
+    // course), so every block is reachable via two distinct JSON paths.
+    const doubled = { lessons: course.lessons, course: { id: 'C1', lessons: course.lessons } };
+    const refs = findStorylineBlocks(doubled);
+    expect(refs.map((r) => r.blockId).sort()).toEqual(['blk_empty', 'blk_story']); // one ref per block
+    // the FIRST path found is kept (diagnostics) — top-level lessons walk first
+    expect(refs.find((r) => r.blockId === 'blk_story')!.path).toMatch(/^\$\.lessons\[0\]/);
+  });
+
+  it('does NOT collapse distinct id-less (malformed) blocks', () => {
+    const doc = {
+      lessons: [
+        {
+          id: 'les_x',
+          items: [
+            { family: '360', variant: 'storyline', items: [] },
+            { family: '360', variant: 'storyline', items: [] },
+          ],
+        },
+      ],
+    };
+    expect(findStorylineBlocks(doc)).toHaveLength(2);
+  });
 });

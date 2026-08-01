@@ -43,10 +43,27 @@ export function locateKey(doc: unknown, path: string): KeyLocation {
   const loc: KeyLocation = {};
   let node: unknown = doc;
   let prevSeg: string | number | undefined;
-  for (const seg of parsePath(path)) {
+  const segs = parsePath(path);
+  for (let i = 0; i < segs.length; i++) {
+    let seg = segs[i]!;
     if (Array.isArray(node) && typeof seg === 'number') {
       node = node[seg];
     } else if (isRecord(node) && typeof seg === 'string') {
+      // A JSON key containing '.' was split apart by parsePath (the scanner
+      // builds paths with a bare `.` joiner). On a miss, greedily rejoin with
+      // the following string segments until one resolves — best-effort
+      // diagnostics only; keys containing '[' stay ambiguous.
+      if (!(seg in node)) {
+        let joined = seg;
+        for (let j = i + 1; j < segs.length && typeof segs[j] === 'string'; j++) {
+          joined = `${joined}.${segs[j]}`;
+          if (joined in node) {
+            seg = joined;
+            i = j;
+            break;
+          }
+        }
+      }
       node = node[seg];
     } else {
       break; // path diverged from the doc — stop with what we have

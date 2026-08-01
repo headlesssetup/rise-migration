@@ -3,9 +3,14 @@ import type { SessionState } from '@/shared/messaging';
 export function SessionView({
   session,
   totalCount,
+  onRefreshCount,
+  refreshDisabled,
 }: {
   session: SessionState | null;
   totalCount: number | null;
+  /** Re-ask for the course count — the auto-fetch gives up after a few tries. */
+  onRefreshCount?: () => void;
+  refreshDisabled?: boolean;
 }) {
   if (!session) return <p className="hint">Connecting…</p>;
   const id = session.identity;
@@ -24,6 +29,19 @@ export function SessionView({
       </li>
       <li>
         Courses: <b>{totalCount ?? '—'}</b>
+        {onRefreshCount && (
+          <>
+            {' '}
+            <button
+              className="copy-btn"
+              onClick={onRefreshCount}
+              disabled={refreshDisabled}
+              title="Re-read the account's course count"
+            >
+              Refresh
+            </button>
+          </>
+        )}
       </li>
     </ul>
   );

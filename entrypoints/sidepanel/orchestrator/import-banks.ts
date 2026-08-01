@@ -18,9 +18,10 @@ import type { ProgressEvent } from './shared';
 import {
   readSourceIdentity,
   refreshToken,
+  makePinnedRelay,
+  pinTargetTab,
   readBankIdMap,
   writeBankIdMap,
-  relayThroughTab,
   safeJson,
 } from './import-shared';
 
@@ -118,8 +119,20 @@ export async function importBanks(
     return { blocked: verdict.reason, outcomes };
   }
 
+  // Pin this operation to ONE target tab before any bank write: unpinned, the
+  // POST/PUT below follow window focus, so a focused SOURCE tab would create the
+  // banks in the source account. Live runs are BLOCKED without a pin; a dry run
+  // writes nothing, so it proceeds with a warning.
+  const { pin, blocked } = await pinTargetTab(target, onEvent);
+  if (blocked && !opts.dryRun) {
+    onEvent({ kind: 'log', message: `BLOCKED: ${blocked}` });
+    return { blocked, outcomes };
+  }
+  if (blocked) onEvent({ kind: 'log', message: `WARN ${blocked} — dry run continues (no writes)` });
+  const relay = makePinnedRelay(pin);
+
   // Start on a fresh bearer (idle panels lapse the ~15 min token).
-  await refreshToken(onEvent, 'run start');
+  await refreshToken(onEvent, 'run start', pin);
 
   // Merge into any previously-imported banks so C sees the full set.
   const bound = await readBankIdMap(storage);
@@ -163,14 +176,14 @@ export async function importBanks(
         newBankId = `dry-bank-${bankId}`;
       } else {
         await pacedDelay(pacing);
-        const cresp = await relayThroughTab(postBank({ folderId: null, title }));
+        const cresp = await relay(postBank({ folderId: null, title }));
         if (!cresp.ok) throw new Error(`create failed (HTTP ${cresp.status})`);
         newBankId = String((safeJson(cresp.text) as { id?: string } | null)?.id ?? '');
         if (!newBankId) throw new Error('create returned no id');
         createdBankId = newBankId; // the shell now exists on the target
 
         await pacedDelay(pacing);
-        const presp = await relayThroughTab(
+        const presp = await relay(
           putBank({
             bankId: newBankId,
             questions: questions as unknown[],

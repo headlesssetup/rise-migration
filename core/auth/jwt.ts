@@ -74,7 +74,3 @@ export function identityFromToken(token: string): Identity | null {
     expiresAt: typeof c.exp === 'number' ? c.exp * 1000 : undefined,
   };
 }
-
-export function isExpired(identity: Identity | null, now: number = Date.now()): boolean {
-  return identity?.expiresAt !== undefined && identity.expiresAt <= now;
-}

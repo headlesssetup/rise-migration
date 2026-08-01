@@ -198,6 +198,41 @@ describe('buildPlan ordering', () => {
     expect(positions).toEqual([0, 1, 2]);
   });
 
+  it('early title is a "!importing:" marker; the LAST step writes the clean title (H4)', () => {
+    const steps = buildPlan(
+      input({
+        course: {
+          course: { id: 'SRC', title: 'My Course' },
+          lessons: [{ id: 'L1', position: 0, type: 'blocks', title: 'L', items: [] }],
+        },
+      }),
+    );
+    const titles = steps.filter((s) => s.kind === 'set-title') as Array<{
+      title: string;
+      final?: boolean;
+    }>;
+    expect(titles.length).toBe(2);
+    // Early provisional marker — a hard-crashed partial stays identifiable.
+    expect(titles[0]!.title).toBe('!importing: My Course');
+    expect(titles[0]!.final).toBeFalsy();
+    // Clean title is the plan's very LAST step (only a completed import gets it).
+    expect(steps[steps.length - 1]).toMatchObject({
+      kind: 'set-title',
+      title: 'My Course',
+      final: true,
+    });
+  });
+
+  it('a lesson-less course also gets provisional + final title writes', () => {
+    const steps = buildPlan(input()); // default input has no lessons
+    const titles = steps.filter((s) => s.kind === 'set-title') as Array<{
+      title: string;
+      final?: boolean;
+    }>;
+    expect(titles.map((t) => t.title)).toEqual(['!importing: My Course', 'My Course']);
+    expect(titles[1]!.final).toBe(true);
+  });
+
   it('section lessons skip locks/blocks', () => {
     const steps = buildPlan(
       input({
@@ -327,6 +362,37 @@ describe('buildPlan media + flags', () => {
     expect(sc?.hasCover).toBe(true);
     // the cover key is handled, NOT flagged
     expect(steps.some((s) => s.kind === 'flag-unsupported-media')).toBe(false);
+  });
+
+  it('flags an ORPHANED course cover before set-course-images (blank, not late hard-fail)', () => {
+    const key = 'rise/courses/SRC/cover.jpg';
+    const steps = buildPlan(
+      input({
+        assets: [{ key, kind: 'media-image', orphaned: true }],
+        course: {
+          course: {
+            id: 'SRC',
+            title: 'C',
+            coverImage: { media: { image: { key } } },
+          },
+          lessons: [
+            { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }] },
+          ],
+        },
+      }),
+    );
+    const flagIdx = steps.findIndex(
+      (s) => s.kind === 'flag-orphan-media' && (s as { sourceKey: string }).sourceKey === key,
+    );
+    const imgIdx = steps.findIndex((s) => s.kind === 'set-course-images');
+    expect(flagIdx).toBeGreaterThan(-1);
+    expect(imgIdx).toBeGreaterThan(-1);
+    // The flag (which blanks the key in the executor) must precede the write.
+    expect(flagIdx).toBeLessThan(imgIdx);
+    // Not double-flagged as unsupported.
+    expect(
+      steps.some((s) => s.kind === 'flag-unsupported-media' && (s as { sourceKey: string }).sourceKey === key),
+    ).toBe(false);
   });
 
   it('still flags a theme/header image that is not the cover/card', () => {

@@ -92,6 +92,15 @@ describe('buildReview360Zip', () => {
     const pkg = extractPackage(unzipToMap(makeWebExportZip()), LEAF);
     expect(buildReview360Zip(pkg)).toEqual(buildReview360Zip(pkg));
   });
+
+  it('aborts the package loudly when the story.html transform no longer matches (M14)', () => {
+    // Drift the player-interface markup (attribute order) so both exact-string
+    // replaces no-op — the zip build must fail, not report success.
+    const drifted = WEB_STORY.replace('<script id="360-player-interface"', '<script  id="360-player-interface"');
+    expect(drifted).not.toBe(WEB_STORY);
+    const pkg = new Map<string, Uint8Array>([['story.html', enc(drifted)]]);
+    expect(() => buildReview360Zip(pkg)).toThrow(/Rise export format changed/);
+  });
 });
 
 describe('buildReview360Zip — story.html byte fidelity', () => {

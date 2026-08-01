@@ -3,7 +3,9 @@ import { IdMap } from './ids';
 import {
   remapIds,
   blankUploadedMediaKeys,
+  blankForeignMediaKeys,
   remapMediaKeys,
+  stripMediaReference,
   findSurvivingSourceKeys,
   findForeignMediaKeys,
   registerClientIds,
@@ -122,6 +124,78 @@ describe('blankUploadedMediaKeys', () => {
     expect(out.cover).toBe(doc.cover);
     expect(out.embed).toBe(doc.embed);
   });
+
+  it('preserves authored HTML text around an embedded image (H10)', () => {
+    const doc = {
+      paragraph:
+        '<p>Intro text <img src="https://articulateusercontent.com/rise/courses/ABC/pic.png" alt="x"> and more text</p>',
+    };
+    const out = blankUploadedMediaKeys(doc) as typeof doc;
+    expect(out.paragraph).toContain('Intro text');
+    expect(out.paragraph).toContain('and more text');
+    expect(out.paragraph).not.toContain('rise/courses/ABC');
+    expect(out.paragraph).not.toContain('<img');
+    // The result must still satisfy the no-foreign-keys assertion.
+    expect(findForeignMediaKeys(out, [])).toEqual([]);
+  });
+
+  it('keeps an embed URL in a string that ALSO carried an uploaded key', () => {
+    const doc = {
+      html: '<p>Watch https://www.youtube.com/watch?v=1 <img src="https://articulateusercontent.com/rise/courses/ABC/a.jpg"></p>',
+    };
+    const out = blankUploadedMediaKeys(doc) as typeof doc;
+    expect(out.html).toContain('youtube.com/watch?v=1');
+    expect(out.html).not.toContain('rise/courses/ABC');
+  });
+});
+
+describe('stripMediaReference', () => {
+  it('blanks a bare key / bare usercontent URL to the empty string', () => {
+    expect(stripMediaReference('rise/courses/ABC/a.jpg', 'rise/courses/ABC/a.jpg')).toBe('');
+    expect(
+      stripMediaReference(
+        'https://articulateusercontent.com/rise/courses/ABC/a.jpg',
+        'rise/courses/ABC/a.jpg',
+      ),
+    ).toBe('');
+  });
+
+  it('strips only the url(...) construct out of inline CSS', () => {
+    const s =
+      'color:red;background-image:url("https://articulateusercontent.com/rise/courses/ABC/bg.jpg");margin:0';
+    const out = stripMediaReference(s, 'rise/courses/ABC/bg.jpg');
+    expect(out).toContain('color:red');
+    expect(out).toContain('margin:0');
+    expect(out).not.toContain('rise/courses/ABC');
+    expect(out).not.toContain('url(');
+  });
+
+  it('leaves strings not containing the key untouched', () => {
+    expect(stripMediaReference('<p>plain</p>', 'rise/courses/ABC/a.jpg')).toBe('<p>plain</p>');
+  });
+});
+
+describe('blankForeignMediaKeys', () => {
+  it('keeps a target-owned img and authored text, strips only the foreign img', () => {
+    const doc = {
+      html:
+        '<p>keep <img src="https://articulateusercontent.com/rise/courses/TGT/ok.jpg"> and ' +
+        '<img src="https://articulateusercontent.com/rise/courses/SRC/bad.jpg"> tail</p>',
+    };
+    const out = blankForeignMediaKeys(doc, ['TGT']) as typeof doc;
+    expect(out.html).toContain('keep');
+    expect(out.html).toContain('tail');
+    expect(out.html).toContain('rise/courses/TGT/ok.jpg');
+    expect(out.html).not.toContain('rise/courses/SRC');
+    expect(findForeignMediaKeys(out, ['TGT'])).toEqual([]);
+  });
+
+  it('blanks a bare foreign value whole, keeps a bare target value', () => {
+    const doc = { a: 'rise/courses/SRC/x.jpg', b: 'rise/courses/TGT/y.jpg' };
+    const out = blankForeignMediaKeys(doc, ['TGT']) as typeof doc;
+    expect(out.a).toBe('');
+    expect(out.b).toBe('rise/courses/TGT/y.jpg');
+  });
 });
 
 describe('remapMediaKeys', () => {
@@ -143,6 +217,38 @@ describe('remapMediaKeys', () => {
       new Map([['rise/courses/OLD/a.png', 'rise/courses/NEW/b.png']]),
     ) as typeof doc;
     expect(out.html).toContain('rise/courses/NEW/b.png');
+    expect(out.html).not.toContain('OLD');
+  });
+
+  it('BLANKS a key mapped to "" instead of leaving the dead source key (C2)', () => {
+    // '' is the blanking convention for orphaned/oversize/unsupported media —
+    // the old truthiness check left the source key verbatim.
+    const doc = {
+      bare: 'rise/courses/OLD/gone.jpg',
+      html: '<p>text <img src="https://articulateusercontent.com/rise/courses/OLD/gone.jpg"> tail</p>',
+    };
+    const out = remapMediaKeys(doc, new Map([['rise/courses/OLD/gone.jpg', '']])) as typeof doc;
+    expect(out.bare).toBe('');
+    expect(out.html).toContain('text');
+    expect(out.html).toContain('tail');
+    expect(out.html).not.toContain('rise/courses/OLD');
+    expect(findForeignMediaKeys(out, [])).toEqual([]);
+  });
+
+  it('mixes a real remap and a blank in one string', () => {
+    const doc = {
+      html:
+        '<img src="https://articulateusercontent.com/rise/courses/OLD/keep.jpg">' +
+        '<img src="https://articulateusercontent.com/rise/courses/OLD/gone.jpg">',
+    };
+    const out = remapMediaKeys(
+      doc,
+      new Map([
+        ['rise/courses/OLD/keep.jpg', 'rise/courses/NEW/kept.jpg'],
+        ['rise/courses/OLD/gone.jpg', ''],
+      ]),
+    ) as typeof doc;
+    expect(out.html).toContain('rise/courses/NEW/kept.jpg');
     expect(out.html).not.toContain('OLD');
   });
 });

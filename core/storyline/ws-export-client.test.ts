@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { awaitExportLocation, wsExportUrlForPlane, type WsLike } from './ws-export-client';
 
 describe('wsExportUrlForPlane', () => {
-  it('maps US to the .com host and EU/unknown to the .eu host', () => {
+  it('maps US to the .com host and EU to the .eu host', () => {
     expect(wsExportUrlForPlane('us')).toBe('wss://ws.articulate.com/');
     expect(wsExportUrlForPlane('eu')).toBe('wss://ws.eu.articulate.com/');
-    expect(wsExportUrlForPlane(null)).toBe('wss://ws.eu.articulate.com/');
+  });
+
+  it('throws loudly on an unknown plane instead of defaulting to EU', () => {
+    expect(() => wsExportUrlForPlane(null)).toThrow(/plane unknown/i);
+    expect(() => wsExportUrlForPlane(undefined)).toThrow(/plane unknown/i);
   });
 });
 
@@ -104,6 +108,22 @@ describe('awaitExportLocation', () => {
     const p = awaitExportLocation({ token: 'JWT', sessionId: 'S', connect: () => ws, timeoutMs: 5, identifyTimeoutMs: 50 });
     ws.fire('open');
     await expect(p).rejects.toThrow(/timed out/);
+  });
+
+  it('fails fast with the server message on a JSON-RPC error to identify', async () => {
+    const ws = new FakeWs();
+    const p = awaitExportLocation({
+      token: 'JWT',
+      connect: () => ws,
+      identifyTimeoutMs: 30_000, // the rpc-error must beat this, not burn it
+      timeoutMs: 100_000,
+    });
+    ws.fire('open');
+    ws.fire('message', {
+      data: '{"id":0,"jsonrpc":"2.0","error":{"code":-32000,"message":"invalid token"}}',
+    });
+    await expect(p).rejects.toThrow(/server error -32000: invalid token.*token likely stale/);
+    expect(ws.closed).toBe(true);
   });
 
   it('fails fast when identify never arrives (stale token)', async () => {

@@ -93,7 +93,16 @@ export type PlanStep =
       summary: string;
     }
   | { kind: 'set-theme'; sourceCourseId: string; summary: string }
-  | { kind: 'set-title'; sourceCourseId: string; title: string; summary: string }
+  | {
+      // Early write carries a `!importing:`-prefixed provisional title so a
+      // hard-crashed partial is unmistakably identifiable in the dashboard; the
+      // `final` write (the plan's LAST step) sets the clean title + description.
+      kind: 'set-title';
+      sourceCourseId: string;
+      title: string;
+      final?: boolean;
+      summary: string;
+    }
   | {
       // Upload + set the course's user-uploaded cover / card / logo image
       // (course-level media, not on a block) via UPDATE_COURSE
@@ -412,16 +421,18 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Create lesson "${lTitle}" (${lType})`,
     });
 
-    // Set the course title right after the FIRST lesson materializes the course
-    // (the bare shell is a title-less catalog row, and Rise rejects titling a
-    // lesson-less course). Early so a partial/stopped import is identifiable in
-    // the dashboard instead of a nameless course.
+    // Set a PROVISIONAL course title right after the FIRST lesson materializes
+    // the course (the bare shell is a title-less catalog row, and Rise rejects
+    // titling a lesson-less course). The `!importing:` prefix makes a
+    // hard-crashed partial unmistakable in the dashboard — the clean title is
+    // written by the final set-title step only when the import completes (a
+    // graceful Stop renames to `!unfinished:` instead).
     if (idx === 0) {
       steps.push({
         kind: 'set-title',
         sourceCourseId,
-        title,
-        summary: `Set course title "${title}"`,
+        title: `!importing: ${title}`,
+        summary: `Set provisional course title "!importing: ${title}"`,
       });
     }
 
@@ -603,14 +614,15 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     // (no unlock — we never locked)
   });
 
-  // Fallback title for a lesson-less course (the per-first-lesson title above
-  // never fired). A confirmed bare shell is a real course, so titling it is safe.
+  // Fallback provisional title for a lesson-less course (the per-first-lesson
+  // title above never fired). A confirmed bare shell is a real course, so
+  // titling it is safe; the final set-title below still writes the clean title.
   if (ordered.length === 0) {
     steps.push({
       kind: 'set-title',
       sourceCourseId,
-      title,
-      summary: `Set course title "${title}"`,
+      title: `!importing: ${title}`,
+      summary: `Set provisional course title "!importing: ${title}"`,
     });
   }
 
@@ -635,8 +647,32 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // all handled keys are marked below so none survives as a source key).
   const headerKey = coverCardImageKey(course.lessonHeaderImage);
   if (coverKey || cardKey || mediaKey || headerKey) {
-    for (const img of [course.coverImage, course.cardImage, course.media, course.lessonHeaderImage]) {
-      for (const ak of collectAssetKeys(img, sourceCourseId)) handledKeys.add(ak.key);
+    // Orphaned course-image keys (deleted at source, no archived bytes) are
+    // flagged BEFORE the set-course-images step, mirroring block/lesson media:
+    // the executor blanks them (keyMap → '') so UPDATE_COURSE ships without the
+    // image and the course still succeeds — with a flag, not a late hard-fail.
+    const flaggedImgKeys = new Set<string>();
+    const courseImages: [unknown, string][] = [
+      [course.coverImage, 'course cover image'],
+      [course.cardImage, 'course card image'],
+      [course.media, 'course logo'],
+      [course.lessonHeaderImage, 'course lesson-header image'],
+    ];
+    for (const [img, where] of courseImages) {
+      for (const ak of collectAssetKeys(img, sourceCourseId)) {
+        handledKeys.add(ak.key);
+        const entry = assetByKey.get(ak.key);
+        if ((entry?.orphaned || (entry && !entry.file)) && !flaggedImgKeys.has(ak.key)) {
+          flaggedImgKeys.add(ak.key);
+          steps.push({
+            kind: 'flag-orphan-media',
+            sourceLessonId: '',
+            sourceBlockId: '',
+            sourceKey: ak.key,
+            summary: `⚠ Orphaned ${where} (deleted at source): ${ak.key}`,
+          });
+        }
+      }
     }
     steps.push({
       kind: 'set-course-images',
@@ -668,6 +704,17 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   for (const [bankId, bank] of input.banksById) {
     flagUnsupported(bank, bankId, `bank ${bankId}`);
   }
+
+  // Final title write — the very LAST step, so anything short of a completed
+  // import (hard crash, mid-run failure, Stop) leaves the provisional
+  // `!importing:` / `!unfinished:` marker instead of a clean-titled duplicate.
+  steps.push({
+    kind: 'set-title',
+    sourceCourseId,
+    title,
+    final: true,
+    summary: `Set course title "${title}"`,
+  });
 
   return steps;
 }

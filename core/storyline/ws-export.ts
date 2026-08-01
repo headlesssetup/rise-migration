@@ -34,6 +34,7 @@ export type WsExportFrame =
   | { kind: 'identified'; id: number | string | null; sessionId: string }
   | { kind: 'package-success'; jobId: string; jobName?: string; location: string }
   | { kind: 'package-error'; jobId?: string; type: string; message?: string }
+  | { kind: 'rpc-error'; id: number | string | null; code?: number; message: string }
   | { kind: 'other'; raw: unknown };
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -47,6 +48,10 @@ function isObject(v: unknown): v is Record<string, unknown> {
  *
  * Recognizes:
  *  - the `identify` result → `identified` (carries `sessionId`),
+ *  - a JSON-RPC error response (`{id, error:{code, message}}`) → `rpc-error` —
+ *    the server REFUSED a request (e.g. `identify` with a stale token), so the
+ *    caller fails fast with the server's message instead of burning the full
+ *    identify timeout,
  *  - `notify` with `payload.type === "package:success"` → `package-success`
  *    (carries the `location` zip URL),
  *  - `notify` with any other `package:*` type → `package-error` (e.g. a failed
@@ -67,6 +72,20 @@ export function parseExportFrame(text: string): WsExportFrame {
       kind: 'identified',
       id: (doc.id as number | string | null) ?? null,
       sessionId: doc.result.sessionId,
+    };
+  }
+
+  // JSON-RPC error response (the server refused a request — e.g. `identify`)
+  if (isObject(doc.error)) {
+    const err = doc.error;
+    return {
+      kind: 'rpc-error',
+      id: (doc.id as number | string | null) ?? null,
+      code: typeof err.code === 'number' ? err.code : undefined,
+      message:
+        typeof err.message === 'string' && err.message !== ''
+          ? err.message
+          : JSON.stringify(err).slice(0, 200),
     };
   }
 

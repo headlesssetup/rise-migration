@@ -1,9 +1,11 @@
 // Phase 3 — import SHARED helpers, split out of import.ts so the course-run
-// orchestrator (runImport) and the A/B operations (import-account, import-banks)
-// share one copy: token refresh, the panel/tab relay (incl. the direct S3 PUT),
-// base64/content-type helpers, source identity + target typefaces, folder
-// recreation, the font reader, and the cross-step id maps persisted under
-// `_import/`. Re-exported from ./import so the public surface is unchanged.
+// orchestrator (runImport) and the A/B/D operations (import-account,
+// import-banks, storyline) share one copy: the run-level TAB PIN (pinTargetTab /
+// pinnedRpc / makePinnedRelay), token refresh, the panel/tab relay (incl. the
+// direct S3 PUT), base64/content-type helpers, source identity + target
+// typefaces, folder recreation, the font reader, and the cross-step id maps
+// persisted under `_import/`. Re-exported from ./import so the public surface is
+// unchanged.
 
 import {
   parseTypefaces,
@@ -21,8 +23,95 @@ import {
 } from '@/core/import';
 import { pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
+import type { BackgroundRequest, BackgroundResponse, TabPin } from '@/shared/messaging';
 import { rpc } from '../rpc';
 import { extractItems, type ProgressEvent } from './shared';
+
+// --- The run-level tab pin (C4) ------------------------------------------------
+//
+// The background re-resolves "the active/last-focused Rise tab" for every
+// UNPINNED request. With both a source-plane and a target-plane Rise tab open,
+// focusing the source tab mid-run therefore routed authoring writes into the
+// SOURCE account (relayed URLs are relative — they resolve against whichever tab
+// executes them). Every panel-side operation that writes resolves ONE tab up
+// front and carries that pin on every request it issues; the background then
+// uses exactly that tab or fails loudly. `undefined` pin ⇒ historical
+// active-tab behavior, kept for export paths and one-off panel reads.
+
+/**
+ * Resolve — ONCE, at operation start — the single Rise tab this run may touch.
+ * `role` only shapes the operator-facing wording ('target' for the import steps,
+ * 'source' for the export-side Storyline build). When `target` carries a plane it
+ * is cross-checked against the pinned tab's: if the two disagree we must not
+ * guess which one the operator meant.
+ */
+export async function pinTargetTab(
+  target: AccountIdentity | undefined,
+  onEvent: (e: ProgressEvent) => void,
+  role: 'target' | 'source' = 'target',
+): Promise<{ pin?: TabPin; blocked?: string }> {
+  let resp;
+  try {
+    resp = await rpc({ type: 'PIN_RISE_TAB' });
+  } catch (e) {
+    return { blocked: `Could not pin the ${role} Rise tab: ${String(e)}` };
+  }
+  if (resp.type !== 'RISE_TAB_PIN' || !resp.result.ok) {
+    const why =
+      resp.type === 'RISE_TAB_PIN' && !resp.result.ok
+        ? resp.result.error
+        : resp.type === 'ERROR'
+          ? resp.error
+          : 'unexpected background response';
+    return { blocked: `Could not pin the ${role} Rise tab: ${why}` };
+  }
+  const { pinnedTabId, expectedPlane } = resp.result.data;
+  if (target?.plane && target.plane !== expectedPlane) {
+    return {
+      blocked: `The Rise tab this run would write to is on the ${expectedPlane.toUpperCase()} plane, but the detected ${role} account is on ${target.plane.toUpperCase()}. Focus the ${role} Rise tab and start the run again.`,
+    };
+  }
+  onEvent({
+    kind: 'log',
+    message: `Pinned to Rise tab ${pinnedTabId} (${expectedPlane.toUpperCase()}) — every write of this run goes there; focusing another Rise tab can no longer redirect it.`,
+  });
+  return { pin: { pinnedTabId, expectedPlane } };
+}
+
+/**
+ * `rpc` bound to a run's pin: every message of a pinned run names the tab it must
+ * run in. Without a pin it is plain `rpc` — byte-identical to the pre-pinning
+ * behavior, so export paths and one-off reads are unaffected.
+ */
+export function pinnedRpc(
+  pin: TabPin | undefined,
+): (req: BackgroundRequest) => Promise<BackgroundResponse> {
+  if (!pin) return rpc;
+  return (req) => rpc({ ...req, pin });
+}
+
+/** The executor Relay, bound to this run's pinned tab. S3 upload PUTs are
+ *  presigned and go DIRECT from the panel (no tab, no bearer), so they delegate
+ *  to the shared relay unchanged. */
+export function makePinnedRelay(pin: TabPin | undefined): Relay {
+  if (!pin) return relayThroughTab;
+  const send = pinnedRpc(pin);
+  return async (spec) => {
+    if (isPresignedPut(spec)) return relayThroughTab(spec);
+    try {
+      const resp = await send({ type: 'RELAY_WRITE', spec });
+      if (resp.type === 'WRITE_RESULT') return resp.result;
+      return {
+        ok: false,
+        status: 0,
+        text: '',
+        error: resp.type === 'ERROR' ? resp.error : 'unexpected background response',
+      };
+    } catch (e) {
+      return { ok: false, status: 0, text: '', error: String(e) };
+    }
+  };
+}
 
 /**
  * Force a fresh bearer before a (possibly long) stretch of writes. The held
@@ -31,14 +120,20 @@ import { extractItems, type ProgressEvent } from './shared';
  * Non-mutating (a session refresh + cookie re-read), so it's safe in dry-run too
  * and makes the dry-run preview reads (FETCH_TYPEFACES) accurate. Best-effort:
  * on failure we still proceed and let the reactive 401/403 retry catch up.
+ *
+ * PINNED runs must pass their pin: the reauth (cookie re-read + course-editor
+ * reload) has to happen on the pinned tab's plane, or we refresh the SOURCE
+ * session and leave the target bearer stale.
  */
 export async function refreshToken(
   onEvent: (e: ProgressEvent) => void,
   label?: string,
+  pin?: TabPin,
 ): Promise<void> {
   const tag = label ? ` (${label})` : '';
+  const where = pin ? ' on the TARGET account' : '';
   try {
-    const resp = await rpc({ type: 'REAUTH' });
+    const resp = await pinnedRpc(pin)({ type: 'REAUTH' });
     if (resp.type === 'REAUTH_RESULT') {
       const exp = resp.identity?.expiresAt
         ? new Date(resp.identity.expiresAt).toLocaleTimeString()
@@ -52,14 +147,17 @@ export async function refreshToken(
       } else {
         onEvent({
           kind: 'log',
-          message: `WARN token refresh failed${tag} — keep a Rise COURSE (editor) tab open, not just the dashboard; that's what refreshes the session. Then retry.`,
+          message: `WARN token refresh failed${tag} — keep a Rise COURSE (editor) tab open${where}, not just the dashboard; that's what refreshes the session. Then retry.`,
         });
       }
     } else {
       onEvent({ kind: 'log', message: `WARN token refresh failed${tag} — using current session cookie` });
     }
-  } catch {
-    onEvent({ kind: 'log', message: `WARN token refresh errored${tag} — using current session cookie` });
+  } catch (e) {
+    onEvent({
+      kind: 'log',
+      message: `WARN token refresh errored${tag} (${String(e)}) — using current session cookie`,
+    });
   }
 }
 
@@ -108,7 +206,11 @@ async function panelS3Put(spec: WriteSpec): Promise<RelayResponse> {
     const body = base64ToBlob(spec.base64Body ?? '', spec.contentType || 'application/octet-stream');
     const res = await fetch(spec.url, {
       method: 'PUT',
-      headers: s3PutHeaders(spec.url, spec.contentType),
+      // Caller-supplied headers WIN and are never dropped: a Review-360 upload PUT
+      // signs `content-md5;host`, so silently sending only the url-derived headers
+      // would 403 SignatureDoesNotMatch. Same precedence as the background's
+      // in-tab fetch (explicit spec.headers override the defaults).
+      headers: { ...s3PutHeaders(spec.url, spec.contentType), ...(spec.headers ?? {}) },
       body,
       credentials: 'omit',
     });
@@ -118,11 +220,20 @@ async function panelS3Put(spec: WriteSpec): Promise<RelayResponse> {
   }
 }
 
+/** A presigned S3 upload PUT — carries its own signature, so it needs no tab, no
+ *  bearer and no cookies, and is therefore the one write that never rides (or
+ *  needs) the run's tab pin. */
+function isPresignedPut(spec: WriteSpec): boolean {
+  return spec.method === 'PUT' && !!spec.noAuth && spec.base64Body !== undefined;
+}
+
 /** The Relay the executor uses. S3 upload PUTs go direct from the panel (no 64MB
  *  message cap); everything else rides one RELAY_WRITE round-trip to the background
- *  (which needs the bearer + first-party cookies in the Rise tab). */
+ *  (which needs the bearer + first-party cookies in the Rise tab). UNPINNED — the
+ *  background resolves the active Rise tab per request. Import runs must use
+ *  `makePinnedRelay(pin)` instead. */
 export const relayThroughTab: Relay = async (spec) => {
-  if (spec.method === 'PUT' && spec.noAuth && spec.base64Body !== undefined) {
+  if (isPresignedPut(spec)) {
     return panelS3Put(spec);
   }
   const resp = await rpc({ type: 'RELAY_WRITE', spec });
@@ -165,10 +276,12 @@ export async function readSourceIdentity(
  *  (the executor then treats all source brand fonts as custom → recreate). */
 export async function fetchTargetTypefaces(
   onEvent: (e: ProgressEvent) => void,
+  pin?: TabPin,
 ): Promise<Map<string, Typeface>> {
+  const send = pinnedRpc(pin);
   let courseId: string | undefined;
   try {
-    const resp = await rpc({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+    const resp = await send({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
     if (resp.type === 'SEARCH_RESULT' && resp.result.ok) {
       courseId = extractItems(resp.result.data)[0]?.id;
     }
@@ -182,7 +295,7 @@ export async function fetchTargetTypefaces(
     });
     return new Map();
   }
-  const resp = await rpc({ type: 'FETCH_TYPEFACES', courseId });
+  const resp = await send({ type: 'FETCH_TYPEFACES', courseId });
   if (resp.type !== 'RAW_RESULT' || !resp.result.ok) {
     onEvent({ kind: 'log', message: 'Could not read target fonts — custom fonts will be recreated' });
     return new Map();
@@ -218,7 +331,12 @@ export async function setupFolders(
   dryRun: boolean,
   pacing: PacingConfig,
   onEvent: (e: ProgressEvent) => void,
+  /** The run's tab pin. Folder creation is a real authoring write, so a pinned
+   *  run must pass it or the creates can follow window focus into the source
+   *  account. Omitted ⇒ unpinned (active-tab) behavior. */
+  pin?: TabPin,
 ): Promise<Map<string, string>> {
+  const relay = makePinnedRelay(pin);
   const map = new Map<string, string>();
   const raw = await storage.readFolders();
   if (!raw) return map;
@@ -239,7 +357,7 @@ export async function setupFolders(
   let roots: { shared?: string; private?: string } = { shared: 'dry-shared', private: 'dry-private' };
   const existing = new Map<string, string>();
   if (!dryRun) {
-    const resp = await relayThroughTab(fetchFolders());
+    const resp = await relay(fetchFolders());
     if (!resp.ok) {
       onEvent({ kind: 'log', message: `Folders skipped: could not read target folders (${resp.status})` });
       return map;
@@ -276,7 +394,7 @@ export async function setupFolders(
     } else {
       await pacedDelay(pacing);
       // Create WITH the owner ACL — never leave a folder owner-less.
-      const r = await relayThroughTab(
+      const r = await relay(
         createFolder({ name: f.name, parentFolderId: parentTarget, permissions: owner }),
       );
       if (!r.ok) {

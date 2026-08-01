@@ -142,6 +142,166 @@ describe('executePlan — reused asset (dedup)', () => {
   });
 });
 
+describe('executePlan — mixed uploadable + orphaned key on one block (C2)', () => {
+  it('patches the block with the new key and BLANKS the orphaned key; survivingKeys is unfiltered', async () => {
+    const GOOD = 'rise/courses/SRC/good.jpg';
+    const GONE = 'rise/courses/SRC/gone.jpg';
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [
+        { key: GOOD, kind: 'media-image', file: 'assets/g.jpg', ext: 'jpg' },
+        { key: GONE, kind: 'media-image', orphaned: true },
+      ],
+      banksById: new Map(),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: [
+              {
+                id: 'cblock00000000000000000000',
+                family: 'gallery',
+                variant: 'grid',
+                items: [
+                  { id: 'ci1aaaaaaaaaaaaaaaaaaaaaa', media: { image: { key: GOOD } } },
+                  { id: 'ci2aaaaaaaaaaaaaaaaaaaaaa', media: { image: { key: GONE } } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    let patched: any = null;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      UPDATE_BLOCK_DEBOUNCE: (body: any) => {
+        patched = body.payload;
+        return { payload: { success: true } };
+      },
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async (k) => (k === GOOD ? { base64: 'AAAA', contentType: 'image/jpeg' } : null),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // The patch carries the NEW key, and the orphaned source key is BLANKED —
+    // not shipped verbatim (the old remap skipped keys mapped to '').
+    expect(patched).toBeTruthy();
+    const json = JSON.stringify(patched);
+    expect(json).toContain('rise/courses/NEWCOURSE/server.jpg');
+    expect(json).not.toContain('rise/courses/SRC');
+    expect(patched.item.items[1].media.image.key).toBe('');
+    // Flagged for the operator…
+    expect(res.flags.some((f) => f.kind === 'orphan-media' && f.sourceKey === GONE)).toBe(true);
+    // …and the final assertion passes UNFILTERED (nothing hidden behind flags).
+    expect(res.survivingKeys).toEqual([]);
+  });
+});
+
+describe('executePlan — orphaned course cover (missing archived bytes)', () => {
+  it('flags + blanks the cover so UPDATE_COURSE ships without it and the course SUCCEEDS', async () => {
+    const COVER = 'rise/courses/SRC/cover.jpg';
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      // Manifest says the file exists — the bytes are missing only at runtime.
+      assets: [{ key: COVER, kind: 'media-image', file: 'assets/c.jpg', ext: 'jpg' }],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          coverImage: { media: { image: { key: COVER } } },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    const updateCoursePayloads: any[] = [];
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      if (spec.label.endsWith('/UPDATE_COURSE')) { updateCoursePayloads.push(JSON.parse(spec.body!).payload); return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null, // bytes gone
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    // The course succeeds WITH a flag — no late hard-fail after all writes.
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    expect(res.flags.some((f) => f.kind === 'orphan-media' && f.sourceKey === COVER)).toBe(true);
+    // UPDATE_COURSE never shipped the source cover key (or any cover at all).
+    expect(JSON.stringify(updateCoursePayloads)).not.toContain('rise/courses/SRC');
+    expect(updateCoursePayloads.some((p) => p.coverImage)).toBe(false);
+  });
+});
+
+describe('executePlan — course image key dedup via keyMap', () => {
+  it('a key shared by coverImage and cardImage uploads ONCE (8c)', async () => {
+    const K = 'rise/courses/SRC/shared.jpg';
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [{ key: K, kind: 'media-image', file: 'assets/s.jpg', ext: 'jpg' }],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          coverImage: { media: { image: { key: K } } },
+          cardImage: { media: { image: { key: K } } },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    let yurlN = 0;
+    let imgPayload: any = null;
+    const relay: Relay = async (spec) => {
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      if (spec.label.includes('GET_YURL')) return { ok: true, status: 200, text: JSON.stringify({ payload: { key: `rise/courses/NEWCOURSE/srv${yurlN++}.jpg`, url: 'https://s3/c', type: 'image/jpeg' } }) };
+      if (spec.label.endsWith('/UPDATE_COURSE')) { const p = JSON.parse(spec.body!).payload; if (p.coverImage || p.cardImage) imgPayload = p; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) { const id = JSON.parse(spec.body!).payload.blocks[0].id; return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) }; }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]);
+    // One upload for the shared key (one GET_YURL, one S3 PUT)…
+    expect(yurlN).toBe(1);
+    expect(res.envelopes.filter((e) => e.label === 'S3 PUT (cover)').length).toBe(1);
+    // …and both images point at the SAME new key.
+    expect(imgPayload.coverImage.media.image.key).toBe('rise/courses/NEWCOURSE/srv0.jpg');
+    expect(imgPayload.cardImage.media.image.key).toBe('rise/courses/NEWCOURSE/srv0.jpg');
+  });
+});
+
 describe('executePlan — course with a cover image', () => {
   it('flags course-level media (no captured write path) without false-failing', async () => {
     const input: PlanInput = {

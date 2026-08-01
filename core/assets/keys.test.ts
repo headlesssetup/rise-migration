@@ -95,6 +95,34 @@ describe('extractUploadedKeys', () => {
       '<p>a <img src="https://articulateusercontent.com/rise/courses/c1/a.gif"> b</p>';
     expect(extractUploadedKeys(html)).toEqual(['rise/courses/c1/a.gif']);
   });
+
+  // The boundary classes mirror scan.ts's widened RE_RISE_KEY (`(`,`=`,`,`,`>`,`;`
+  // delimiters) so keys the census scanner now classifies also extract cleanly.
+  it('splits comma-separated keys (srcset-style) instead of fusing them', () => {
+    expect(
+      extractUploadedKeys('x rise/courses/c1/a.jpg,rise/courses/c1/b.jpg y'),
+    ).toEqual(['rise/courses/c1/a.jpg', 'rise/courses/c1/b.jpg']);
+    expect(
+      extractUploadedKeys(
+        'srcset https://articulateusercontent.com/rise/courses/c1/a.jpg,https://articulateusercontent.com/rise/courses/c1/b.jpg end',
+      ),
+    ).toEqual(['rise/courses/c1/a.jpg', 'rise/courses/c1/b.jpg']);
+  });
+
+  it('recognizes = ; and ( as embedded delimiters around a key', () => {
+    expect(extractUploadedKeys('blob src=rise/courses/c1/a.png;x=1')).toEqual([
+      'rise/courses/c1/a.png',
+    ]);
+    expect(extractUploadedKeys('style url(rise/courses/c1/bg.jpg) more')).toEqual([
+      'rise/courses/c1/bg.jpg',
+    ]);
+  });
+
+  it('does not shed a bogus key out of a non-rise path like enterprise/courses/…', () => {
+    expect(
+      extractUploadedKeys('see enterprise/courses/c1/a.png for details'),
+    ).toEqual([]);
+  });
 });
 
 describe('extFromKey / extFromContentType', () => {

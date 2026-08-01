@@ -20,16 +20,18 @@ function asObjArray(v: unknown): Record<string, unknown>[] {
   return [];
 }
 
-/** Find the first array reachable under `key` anywhere in the tree. */
+/** Find the first array reachable under `key` anywhere in the tree — BFS in
+ *  document order, so the shallowest match wins and a `key` field nested inside
+ *  question data can never shadow the top-level one. */
 function findArrayByKey(root: unknown, key: string): unknown[] | null {
-  const stack: unknown[] = [root];
-  while (stack.length) {
-    const node = stack.pop();
+  const queue: unknown[] = [root];
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i];
     if (Array.isArray(node)) {
-      for (const c of node) stack.push(c);
+      queue.push(...node);
     } else if (isObj(node)) {
       if (Array.isArray(node[key])) return node[key] as unknown[];
-      for (const v of Object.values(node)) stack.push(v);
+      queue.push(...Object.values(node));
     }
   }
   return null;

@@ -81,8 +81,10 @@ const RE_EMBED = /(?:youtube\.com|youtu\.be|vimeo\.com)/i;
 // Uploaded-media keys live under rise/courses/{id}/… (course assets) and
 // rise/questionBanks/{id}/… (question-bank assets) — both are re-uploaded on
 // migration. (`assets/rise/…` / `rise/assets/…` are CDN/built-in theme assets,
-// kept as-is, so not matched here.)
-const RE_RISE_KEY = /(?:^|[/"'\s])rise\/(?:courses|questionBanks)\/[^/\s"']+\//i;
+// kept as-is, so not matched here.) The leading boundary class must cover every
+// way a key gets embedded in rich text: `(` (CSS url()), `=` (unquoted attr),
+// `,`/`>` (lists, markup), `;` (entity-escaped quote &quot;).
+const RE_RISE_KEY = /(?:^|[/"'\s(=,>;])rise\/(?:courses|questionBanks)\/[^/\s"']+\//i;
 
 const RE_IMG = /\.(?:jpe?g|png|gif|svg|webp|bmp|avif|tiff?)(?:[?#]|$)/i;
 const RE_VID = /\.(?:mp4|webm|mov|m4v|ogv|avi|mkv)(?:[?#]|$)/i;
@@ -103,11 +105,14 @@ function mediaSubtype(path: string, value: string): RefKind {
  * `path` (the JSON location) lets uploaded media be split into image/video/etc.
  */
 export function classifyString(value: string, path = ''): RefKind | null {
-  if (RE_EMBED.test(value)) return 'embed';
   // Uploaded media is the key PATH (any host: US/EU usercontent, an images.* transform
-  // URL, or a bare key). Check this BEFORE the host rules so a real upload on the
-  // usercontent host is media, while a built-in on the same host falls through to cdn.
+  // URL, or a bare key). Check this FIRST: a rich-text string can mix an embed URL
+  // (YouTube/Vimeo) with an uploaded key, and if embed won the key would be invisible
+  // to download/remap/blank/verify — a silent key survival with no backstop. Same
+  // precedence over the host rules: a real upload on the usercontent host is media,
+  // while a built-in on the same host falls through to cdn.
   if (RE_RISE_KEY.test(value)) return mediaSubtype(path, value);
+  if (RE_EMBED.test(value)) return 'embed';
   // cdn.articulate.com / cdn.eu.articulate.com, or a usercontent host serving a
   // built-in shared asset (/assets/rise/… theme covers, default block media) → kept.
   if (RE_CDN.test(value) || RE_USERCONTENT.test(value)) return 'cdn';
@@ -195,14 +200,17 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     typeof doc?.course?.version === 'number'
       ? doc.course.version
       : undefined;
+  // Fallback `version` fields compete by depth (shallowest wins); an explicit
+  // course.version always wins (depth -1 blocks every fallback).
+  let versionDepth = versionSignal !== undefined ? -1 : Infinity;
 
   // Walk for blocks / shapes / question types / version (refs done by scanRefs).
-  const walk = (node: unknown, path: string): void => {
+  const walk = (node: unknown, path: string, depth: number): void => {
     if (node === null || node === undefined) return;
     if (typeof node !== 'object') return;
 
     if (Array.isArray(node)) {
-      node.forEach((child, i) => walk(child, `${path}[${i}]`));
+      node.forEach((child, i) => walk(child, `${path}[${i}]`, depth + 1));
       return;
     }
 
@@ -248,16 +256,18 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     for (const [k, v] of Object.entries(obj)) {
       const childPath = `${path}.${k}`;
 
-      // Version signal fallback (shallowest wins).
+      // Version signal fallback (shallowest wins — depth-tracked, since the
+      // walk itself is depth-first and would otherwise take the first found).
       if (
-        versionSignal === undefined &&
         k === 'version' &&
+        depth + 1 < versionDepth &&
         (typeof v === 'string' || typeof v === 'number')
       ) {
         versionSignal = v;
+        versionDepth = depth + 1;
       }
 
-      walk(v, childPath);
+      walk(v, childPath, depth + 1);
     }
   };
 
@@ -269,7 +279,7 @@ export function scanCourse(doc: GetCourseDocument): CourseScan {
     }
   }
 
-  walk(doc, '$');
+  walk(doc, '$', 0);
 
   return {
     courseId,

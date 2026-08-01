@@ -51,6 +51,30 @@ describe('classifyString', () => {
     expect(classifyString('<p>Hello</p>')).toBeNull();
     expect(classifyString('Module header')).toBeNull();
   });
+
+  it('a string mixing an embed URL and an uploaded key classifies as MEDIA (key wins)', () => {
+    // Regression (C3): with embed checked first, the uploaded key was invisible
+    // to download/remap/blank/verify — a silent key survival with no backstop.
+    // (The media SUBTYPE of an embedded key is incidental — media-ness is what
+    // keeps it visible to the pipeline.)
+    const isMedia = (v: string): boolean => classifyString(v)?.startsWith('media-') ?? false;
+    expect(
+      isMedia(
+        '<p>Watch https://www.youtube.com/watch?v=1 and see <img src="https://articulateusercontent.com/rise/courses/abc/x.jpg"></p>',
+      ),
+    ).toBe(true);
+    expect(isMedia('https://vimeo.com/123 rise/courses/abc/clip.mp3')).toBe(true);
+  });
+
+  it('recognizes keys behind (, =, ",", >, ; boundaries (CSS url(), unquoted attrs, entities)', () => {
+    // Regression (H8): the leading boundary class missed these embeddings.
+    const isMedia = (v: string): boolean => classifyString(v)?.startsWith('media-') ?? false;
+    expect(isMedia('background-image:url(rise/courses/abc/bg.png)')).toBe(true);
+    expect(isMedia('<img src=rise/courses/abc/x.jpg>')).toBe(true);
+    expect(isMedia('a.jpg,rise/courses/abc/b.jpg')).toBe(true);
+    expect(isMedia('<br>rise/courses/abc/x.jpg')).toBe(true);
+    expect(isMedia('&quot;rise/courses/abc/x.jpg&quot;')).toBe(true);
+  });
 });
 
 describe('scanCourse', () => {
@@ -93,5 +117,26 @@ describe('scanCourse', () => {
     for (const ref of scan.refs) {
       expect(ref.path.startsWith('$')).toBe(true);
     }
+  });
+
+  it('versionSignal fallback picks the SHALLOWEST version field, not the first in DFS order', () => {
+    const doc = {
+      course: { id: 'c1' },
+      lessons: [],
+      // DFS visits `a.b.version` (depth 3) before the top-level `version`
+      // (depth 1) — shallowest must still win.
+      a: { b: { version: 'deep' } },
+      version: 'shallow',
+    } as unknown as GetCourseDocument;
+    expect(scanCourse(doc).versionSignal).toBe('shallow');
+  });
+
+  it('an explicit course.version beats any fallback version field', () => {
+    const doc = {
+      course: { id: 'c1', version: '2025.2' },
+      lessons: [],
+      version: 'shallow',
+    } as unknown as GetCourseDocument;
+    expect(scanCourse(doc).versionSignal).toBe('2025.2');
   });
 });

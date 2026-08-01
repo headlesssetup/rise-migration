@@ -11,6 +11,7 @@ import {
   MAX_PAGES,
   describeShape,
   extractItems,
+  pageCapWarning,
   unwrap,
   type ProgressEvent,
 } from './shared';
@@ -38,13 +39,24 @@ export async function listAllCourses(
 ): Promise<SearchResultItem[]> {
   const all: SearchResultItem[] = [];
   let total = Infinity;
+  // Every exit below is a real end-of-list / cap / error; only running the loop
+  // to exhaustion means MAX_PAGES truncated the library, which must be loud.
+  let exhausted = true;
   for (let page = 0; page < MAX_PAGES; page++) {
     if (page > 0) await pacedDelay(pacing); // pace between pages
     onEvent({ kind: 'log', message: `Fetching course list — page ${page}…` });
 
     const resp = await rpc({ type: 'SEARCH_COURSES', page, pageSize });
-    if (resp.type !== 'SEARCH_RESULT') break;
+    if (resp.type !== 'SEARCH_RESULT') {
+      exhausted = false;
+      onEvent({
+        kind: 'log',
+        message: `List error: ${resp.type === 'ERROR' ? resp.error : 'unexpected background response'}`,
+      });
+      break;
+    }
     if (!resp.result.ok) {
+      exhausted = false;
       onEvent({ kind: 'log', message: `List error: ${resp.result.error}` });
       break;
     }
@@ -62,9 +74,16 @@ export async function listAllCourses(
     }
     all.push(...items);
     onEvent({ kind: 'page', page, total: all.length });
-    if (items.length === 0) break; // safety: nothing more to read
-    if (all.length >= Math.min(limit, total)) break; // reached cap / library end
+    if (items.length === 0) {
+      exhausted = false; // nothing more to read — the library really ended
+      break;
+    }
+    if (all.length >= Math.min(limit, total)) {
+      exhausted = false; // reached the caller's cap / the library end
+      break;
+    }
   }
+  if (exhausted) onEvent(pageCapWarning(all.length));
   return all.slice(0, limit);
 }
 
@@ -110,7 +129,9 @@ export async function exportCourses(
       const err =
         resp.type === 'COURSE_RESULT' && !resp.result.ok
           ? resp.result.error
-          : 'unexpected response';
+          : resp.type === 'ERROR'
+            ? resp.error
+            : 'unexpected response';
       failed.push(c.id);
       onEvent({ kind: 'log', message: `Failed ${c.id}: ${err}` });
       continue;

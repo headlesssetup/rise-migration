@@ -91,19 +91,62 @@ export function remapIds<T extends Json>(doc: T, ids: IdMap): T {
   return transform(doc) as T;
 }
 
-/** Replace uploaded-media key strings with `""` (used for the CREATE_BLOCKS
- *  payload — the block is created with empty media, then patched with the real
- *  new key after re-upload, mirroring the capture's create-then-attach order).
- *  CDN URLs and embeds are kept verbatim (not uploaded). Storyline keys are
- *  blanked too: Storyline/Mighty blocks are recreated as EMPTY placeholders (the
- *  bundle is added out of band), and a dead source key must never survive in the
- *  target (it would point at the source course + trip the no-survivors invariant). */
+// A string value that IS one bare key / usercontent-URL key (no surrounding
+// authored text) — blanking such a value empties the whole slot.
+const RE_WHOLE_MEDIA_VALUE =
+  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?rise\/(?:courses|questionBanks)\/\S+$/i;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Remove ONE media reference from a string without destroying authored text
+ * around it. A bare key/URL value blanks to `''`; a key embedded in a larger
+ * string (rich-text HTML, CSS) loses only its enclosing media construct — the
+ * containing tag (`<img …>`, `<source …>`), a `url(…)` construct, or, failing
+ * that, the URL/key occurrence itself. Post-condition: `key` no longer appears
+ * (a final split/join backstops the invariant over fidelity).
+ */
+export function stripMediaReference(s: string, key: string): string {
+  if (!s.includes(key)) return s;
+  if (RE_WHOLE_MEDIA_VALUE.test(s.trim())) return '';
+  const esc = escapeRegExp(key);
+  let out = s.replace(new RegExp(`<[a-zA-Z][^<>]*${esc}[^<>]*>`, 'g'), '');
+  out = out.replace(
+    new RegExp(`url\\(\\s*(?:['"]|&quot;)?[^()]*${esc}[^()]*(?:['"]|&quot;)?\\s*\\)`, 'g'),
+    '',
+  );
+  out = out.replace(new RegExp(`(?:https?:\\/\\/)?[^\\s"'<>()]*${esc}[^\\s"'<>()]*`, 'g'), '');
+  if (out.includes(key)) out = out.split(key).join('');
+  return out;
+}
+
+/** Blank the given keys out of one string value: bare key/URL → `''`, embedded
+ *  keys → surgically stripped (authored text survives). A media-shaped string
+ *  whose keys can't be extracted blanks whole — no source key may survive. */
+function blankKeysInString(s: string, keys: string[]): string {
+  if (keys.length === 0) return '';
+  let out = s;
+  for (const key of keys) out = stripMediaReference(out, key);
+  return out;
+}
+
+/** Blank uploaded-media keys (used for the CREATE_BLOCKS payload — the block is
+ *  created with empty media, then patched with the real new key after re-upload,
+ *  mirroring the capture's create-then-attach order). A bare key value blanks to
+ *  `''`; a key embedded in authored HTML is stripped surgically so the text
+ *  survives. CDN URLs and embeds are kept verbatim (not uploaded). Storyline
+ *  keys are blanked too: Storyline/Mighty blocks are recreated as EMPTY
+ *  placeholders (the bundle is added out of band), and a dead source key must
+ *  never survive in the target (it would point at the source course + trip the
+ *  no-survivors invariant). */
 export function blankUploadedMediaKeys<T extends Json>(doc: T): T {
   const transform = (node: Json): Json => {
     if (typeof node === 'string') {
       const kind = classifyString(node);
       if (kind && kind.startsWith('media-')) {
-        return '';
+        return blankKeysInString(node, extractUploadedKeys(node));
       }
       return node;
     }
@@ -121,6 +164,9 @@ export function blankUploadedMediaKeys<T extends Json>(doc: T): T {
  * applied after re-upload to build the UPDATE_BLOCK_DEBOUNCE patch payload.
  * A string node may be a bare key, a usercontent URL, or HTML embedding keys —
  * each contained source key present in the map is swapped (host preserved).
+ * A key mapped to `''` is the BLANKING convention (orphaned / oversize /
+ * unsupported media): its reference is stripped, never left verbatim — a dead
+ * source key must not survive just because it has no replacement.
  */
 export function remapMediaKeys<T extends Json>(
   doc: T,
@@ -133,7 +179,8 @@ export function remapMediaKeys<T extends Json>(
       let s = node;
       for (const key of extractUploadedKeys(node)) {
         const next = keyMap.get(key);
-        if (next) s = s.split(key).join(next);
+        if (next === undefined) continue;
+        s = next === '' ? stripMediaReference(s, key) : s.split(key).join(next);
       }
       return s;
     }
@@ -146,11 +193,13 @@ export function remapMediaKeys<T extends Json>(
   return transform(doc) as T;
 }
 
-/** Blank uploaded-media key strings whose owner is NOT a target owner — keeps
+/** Blank uploaded-media keys whose owner is NOT a target owner — keeps
  *  already-remapped (target-owned) keys, blanks leftover SOURCE keys. Used for the
  *  lesson payload after a header/media upload: `remapMediaKeys` swaps the uploaded
  *  key to its new (target) key, then this blanks any media that wasn't uploaded so
- *  a dead source key never survives. CDN/embed strings are left untouched. */
+ *  a dead source key never survives. Foreign keys embedded in authored HTML are
+ *  stripped surgically (the text survives); a bare foreign value blanks to `''`.
+ *  CDN/embed strings are left untouched. */
 export function blankForeignMediaKeys<T extends Json>(
   doc: T,
   targetOwnerIds: Iterable<string>,
@@ -161,8 +210,10 @@ export function blankForeignMediaKeys<T extends Json>(
       const kind = classifyString(node);
       if (!kind || !kind.startsWith('media-')) return node; // cdn/embed/non-media kept
       const keys = extractUploadedKeys(node);
-      const keep = keys.length > 0 && keys.every((k) => targets.has(k.split('/')[2] ?? ''));
-      return keep ? node : '';
+      if (keys.length === 0) return ''; // media-shaped but unextractable → blank whole
+      const foreign = keys.filter((k) => !targets.has(k.split('/')[2] ?? ''));
+      if (foreign.length === 0) return node;
+      return blankKeysInString(node, foreign);
     }
     if (Array.isArray(node)) return node.map(transform);
     if (!isObject(node)) return node;

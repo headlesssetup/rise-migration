@@ -4,7 +4,22 @@
 
 import type { GetCourseDocument, SearchResultItem } from '@/shared/types/rise';
 
+// Pagination safety valve: with pageSize=16 this caps a listing at ~3200
+// courses. Hitting it means the library was TRUNCATED — the listing loop must
+// emit `pageCapWarning` so the operator knows the run didn't see everything.
 export const MAX_PAGES = 200;
+
+/** Loud, unmissable event for when a listing loop exhausts MAX_PAGES without
+ *  reaching the library end — courses beyond the cap were silently invisible
+ *  before this warning existed. */
+export function pageCapWarning(itemsListed: number): Extract<ProgressEvent, { kind: 'log' }> {
+  return {
+    kind: 'log',
+    message:
+      `⚠ Page cap hit: stopped after ${MAX_PAGES} pages with ${itemsListed} item(s) listed — ` +
+      'the library likely has MORE content that was NOT listed. Raise MAX_PAGES to cover it.',
+  };
+}
 
 export type ProgressEvent =
   | { kind: 'log'; message: string }

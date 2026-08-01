@@ -4,11 +4,35 @@
 
 import type { Identity } from '@/core/auth/jwt';
 import type { WriteSpec } from '@/core/import/envelopes';
-import type { GetCourseDocument, SearchResponse } from '@/shared/types/rise';
+import type { SearchResponse } from '@/shared/types/rise';
 
 export type FetchResult<T> =
   | { ok: true; status: number; data: T }
   | { ok: false; status?: number; error: string };
+
+/** Rise plane of a tab URL — null for anything that is not a Rise tab (so a tab
+ *  navigated away from Rise never silently reads as 'us'). */
+export function risePlaneFromUrl(url: string | undefined | null): 'us' | 'eu' | null {
+  if (!url) return null;
+  if (url.startsWith('https://rise.eu.articulate.com/')) return 'eu';
+  if (url.startsWith('https://rise.articulate.com/')) return 'us';
+  return null;
+}
+
+/**
+ * Pin of an import run to ONE resolved target tab. Without it the background
+ * re-resolves "the active Rise tab" per request, so focusing the SOURCE tab
+ * mid-import would route authoring writes into the source account. The panel
+ * resolves the pin once at run start (PIN_RISE_TAB) and passes it on every
+ * relayed request of the run; the background then uses exactly that tab and
+ * fails LOUDLY (no silent re-resolution) if the tab is gone or has left
+ * `expectedPlane`. Requests without a pin keep the active-tab behavior
+ * (export paths).
+ */
+export interface TabPin {
+  pinnedTabId: number;
+  expectedPlane: 'us' | 'eu';
+}
 
 export interface SessionState {
   hasToken: boolean;
@@ -24,9 +48,14 @@ export interface SessionState {
   userId: string | null;
 }
 
-/** Requests the panel sends to the background. */
-export type BackgroundRequest =
+/** Requests the panel sends to the background. EVERY request may carry a `pin`
+ *  (see `BackgroundRequest` below) — the background then runs it in exactly that
+ *  tab or fails loudly. */
+type BackgroundRequestBody =
   | { type: 'GET_SESSION_STATE' }
+  // Resolve the Rise tab a whole run should be pinned to (C4). Called ONCE at run
+  // start; the returned TabPin is then attached to every request of that run.
+  | { type: 'PIN_RISE_TAB' }
   | { type: 'SEARCH_COURSES'; page: number; pageSize?: number }
   | { type: 'GET_COURSE'; courseId: string }
   | { type: 'LIST_FOLDERS' }
@@ -61,6 +90,16 @@ export type BackgroundRequest =
       md5Hex: string;
     };
 
+/**
+ * A request, optionally PINNED to one resolved Rise tab. `pin` is the whole C4
+ * contract: present ⇒ the background uses exactly `pin.pinnedTabId` and verifies
+ * it is still on `pin.expectedPlane`, failing loudly otherwise (and using that
+ * plane's bearer, never another plane's); absent ⇒ historical behavior (the
+ * active/last-focused Rise tab). Import runs pin every message; export paths and
+ * one-off panel reads leave it unset.
+ */
+export type BackgroundRequest = BackgroundRequestBody & { pin?: TabPin };
+
 /** Account-level raw exports that share a {raw, doc} result shape. */
 export type RawKind = 'blockTemplates' | 'typefaces';
 
@@ -73,11 +112,12 @@ export type ContentMessage =
 /** Responses the background returns. */
 export type BackgroundResponse =
   | { type: 'SESSION_STATE'; state: SessionState }
+  | { type: 'RISE_TAB_PIN'; result: FetchResult<TabPin & { url: string }> }
   | { type: 'SEARCH_RESULT'; result: FetchResult<SearchResponse> }
-  | {
-      type: 'COURSE_RESULT';
-      result: FetchResult<{ raw: string; doc: GetCourseDocument }>;
-    }
+  // Only the RAW body: a course document can approach the 64MB message cap, and
+  // shipping a parsed copy alongside it doubled the payload for no gain (the
+  // panel persists `raw` verbatim and unwraps it locally when it needs the doc).
+  | { type: 'COURSE_RESULT'; result: FetchResult<{ raw: string }> }
   | { type: 'FOLDERS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
   | { type: 'BANKS_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
   | { type: 'BANK_RESULT'; result: FetchResult<{ raw: string; doc: unknown }> }
@@ -106,7 +146,10 @@ export type BackgroundResponse =
       // runtime diagnosis: 'tab-reload' (Rise SPA native refresh on reload),
       // 'cookie' (already-rotated cookie re-read), or 'none'.
       via?: 'tab-reload' | 'cookie' | 'none';
-    };
+    }
+  // Last-resort answer when a handler throws outside its own try — the panel must
+  // always get A response, or it awaits a dead port forever.
+  | { type: 'ERROR'; error: string };
 
 /** Raw outcome of a single relayed write (the executor's Relay consumes this). */
 export interface WriteRelayResult {

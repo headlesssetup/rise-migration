@@ -1,12 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
+import { io } from 'socket.io-client';
 import {
+  assertAckOk,
   awaitContentPrefix,
+  connectReviewSocket,
   emitAck,
   parseItemId,
   reviewSocketBaseForPlane,
   uploadStorylinePackage,
   type AckSocket,
 } from './review-socket-client';
+
+vi.mock('socket.io-client', () => ({ io: vi.fn() }));
 
 // A fake socket.io socket: routes each emit to a canned ack, recording calls.
 class FakeSocket implements AckSocket {
@@ -31,7 +36,109 @@ describe('reviewSocketBaseForPlane', () => {
   it('maps plane to the review-sockets host (US drops .eu)', () => {
     expect(reviewSocketBaseForPlane('us')).toBe('https://360-review-sockets.articulate.com');
     expect(reviewSocketBaseForPlane('eu')).toBe('https://360-review-sockets.eu.articulate.com');
-    expect(reviewSocketBaseForPlane(null)).toBe('https://360-review-sockets.eu.articulate.com');
+  });
+
+  it('throws loudly on an unknown plane instead of defaulting to EU', () => {
+    expect(() => reviewSocketBaseForPlane(null)).toThrow(/plane unknown/i);
+    expect(() => reviewSocketBaseForPlane(undefined)).toThrow(/plane unknown/i);
+  });
+});
+
+// A fake socket.io-client Socket for connectReviewSocket (on/off/emit/disconnect).
+class FakeIoSocket {
+  private handlers = new Map<string, Set<(...a: unknown[]) => void>>();
+  emitted: Array<{ event: string; args: unknown[] }> = [];
+  disconnected = false;
+  on(event: string, cb: (...a: unknown[]) => void): this {
+    if (!this.handlers.has(event)) this.handlers.set(event, new Set());
+    this.handlers.get(event)!.add(cb);
+    return this;
+  }
+  off(event: string, cb: (...a: unknown[]) => void): this {
+    this.handlers.get(event)?.delete(cb);
+    return this;
+  }
+  emit(event: string, ...args: unknown[]): this {
+    this.emitted.push({ event, args });
+    return this;
+  }
+  disconnect(): this {
+    this.disconnected = true;
+    return this;
+  }
+  fire(event: string, ...args: unknown[]): void {
+    for (const cb of [...(this.handlers.get(event) ?? [])]) cb(...args);
+  }
+  listenerCount(event: string): number {
+    return this.handlers.get(event)?.size ?? 0;
+  }
+}
+
+describe('connectReviewSocket', () => {
+  const connect = (sock: FakeIoSocket) => {
+    (io as unknown as Mock).mockReturnValue(sock);
+    return connectReviewSocket({ userId: 'auth0|u1', token: 'JWT', base: 'https://base' });
+  };
+
+  it('disables auto-reconnect (one-shot upload semantics) and keeps the raw namespace', () => {
+    const sock = new FakeIoSocket();
+    void connect(sock);
+    const [ns, opts] = (io as unknown as Mock).mock.lastCall as [string, Record<string, unknown>];
+    expect(ns).toBe('https://base/user/auth0|u1'); // literal pipe — never percent-encoded
+    expect(opts).toMatchObject({ reconnection: false, forceNew: true, auth: { token: 'JWT' } });
+    sock.fire('connect'); // settle so no timer leaks into other tests
+  });
+
+  it('resolves on connect, emits auth:login, and removes its handshake listeners', async () => {
+    const sock = new FakeIoSocket();
+    const p = connect(sock);
+    sock.fire('connect');
+    await expect(p).resolves.toBe(sock);
+    expect(sock.emitted).toEqual([{ event: 'auth:login', args: ['JWT'] }]);
+    // the resolved socket's connect/connect_error listeners are gone — they can
+    // never fire again spuriously
+    expect(sock.listenerCount('connect')).toBe(0);
+    expect(sock.listenerCount('connect_error')).toBe(0);
+    expect(sock.disconnected).toBe(false);
+  });
+
+  it('disconnects the socket on connect_error (no lingering manager in the SW)', async () => {
+    const sock = new FakeIoSocket();
+    const p = connect(sock);
+    sock.fire('connect_error', new Error('websocket error'));
+    await expect(p).rejects.toThrow(/connect_error: websocket error/);
+    expect(sock.disconnected).toBe(true);
+    expect(sock.listenerCount('connect')).toBe(0);
+    expect(sock.listenerCount('connect_error')).toBe(0);
+  });
+
+  it('disconnects the socket on connect timeout', async () => {
+    const sock = new FakeIoSocket();
+    (io as unknown as Mock).mockReturnValue(sock);
+    const p = connectReviewSocket({ userId: 'u', token: 'T', base: 'https://b', timeoutMs: 5 });
+    await expect(p).rejects.toThrow(/connect timed out/);
+    expect(sock.disconnected).toBe(true);
+  });
+});
+
+describe('assertAckOk', () => {
+  it('passes success/primitive/error-less acks', () => {
+    expect(() => assertAckOk('items:update', { success: true })).not.toThrow();
+    expect(() => assertAckOk('items:update', 'ok')).not.toThrow();
+    expect(() => assertAckOk('items:update', undefined)).not.toThrow();
+    expect(() => assertAckOk('items:update', { value: {} })).not.toThrow();
+  });
+
+  it('throws with the server message on an error ack', () => {
+    expect(() => assertAckOk('items:update', { success: false, error: 'md5 mismatch' })).toThrow(
+      /items:update failed: md5 mismatch/,
+    );
+    expect(() => assertAckOk('items:upload', { ok: false, message: 'nope' })).toThrow(
+      /items:upload failed: nope/,
+    );
+    expect(() => assertAckOk('yurl:get', { error: 'denied' })).toThrow(/yurl:get failed: denied/);
+    // no message field at all — still loud, dumps the ack
+    expect(() => assertAckOk('items:get', { success: false })).toThrow(/"success":false/);
   });
 });
 
@@ -56,6 +163,14 @@ describe('awaitContentPrefix', () => {
     await expect(
       awaitContentPrefix(sock, 'item-1', { pollMs: 1, timeoutMs: 5, sleep: async () => {}, now: () => (t += 10) }),
     ).rejects.toThrow(/not ready/);
+  });
+
+  it('fails fast with the server message on an items:get error ack (no 180s poll grind)', async () => {
+    const sock = new FakeSocket(() => ({ success: false, error: 'item deleted' }));
+    await expect(
+      awaitContentPrefix(sock, 'item-1', { pollMs: 0, sleep: async () => {} }),
+    ).rejects.toThrow(/items:get failed: item deleted/);
+    expect(sock.calls).toHaveLength(1); // no retry loop on a refused read
   });
 });
 
@@ -136,6 +251,48 @@ describe('uploadStorylinePackage', () => {
 
     // yurl:get arg is the encoded query string with our base64 md5
     expect(sock.calls.find((c) => c.event === 'yurl:get')!.args[0]).toContain('md5=MD5B64%3D%3D');
+  });
+
+  it('fails fast with the server message on an items:update error ack (no items:upload)', async () => {
+    const sock = new FakeSocket((e) => {
+      if (e === 'items:create') return { id: 'item-1' };
+      if (e === 'yurl:get') return PRESIGNED;
+      if (e === 'items:update') return { success: false, error: 'md5 mismatch' };
+      return { success: true };
+    });
+    await expect(
+      uploadStorylinePackage({
+        socket: sock,
+        userId: 'u',
+        fileName: 'f.zip',
+        zipBytes: new Uint8Array([1]),
+        md5Base64: 'b',
+        md5Hex: 'h',
+        putBytes: async () => {},
+      }),
+    ).rejects.toThrow(/items:update failed: md5 mismatch/);
+    // the error ack STOPS the sequence — items:upload is never emitted
+    expect(sock.calls.map((c) => c.event)).toEqual(['items:create', 'yurl:get', 'items:update']);
+  });
+
+  it('fails fast on an items:upload error ack', async () => {
+    const sock = new FakeSocket((e) => {
+      if (e === 'items:create') return { id: 'item-1' };
+      if (e === 'yurl:get') return PRESIGNED;
+      if (e === 'items:upload') return { success: false, message: 'unzip refused' };
+      return { success: true };
+    });
+    await expect(
+      uploadStorylinePackage({
+        socket: sock,
+        userId: 'u',
+        fileName: 'f.zip',
+        zipBytes: new Uint8Array([1]),
+        md5Base64: 'b',
+        md5Hex: 'h',
+        putBytes: async () => {},
+      }),
+    ).rejects.toThrow(/items:upload failed: unzip refused/);
   });
 
   it('aborts if the S3 PUT fails (no items:update/upload)', async () => {

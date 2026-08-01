@@ -113,6 +113,10 @@ export async function fetchAccountExtras(
           cdnDownload,
           undefined,
           'account/assets/',
+          {
+            label: 'fonts',
+            onProgress: (message) => onEvent({ kind: 'log', message }),
+          },
         );
         summary.fonts = { written: res.written, deduped: res.deduped, failed: res.failed.length };
         // Persist the font key→archive-file map so the import can re-upload

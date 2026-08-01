@@ -6,11 +6,9 @@
 // (EU) — with no per-host code. Endpoints come from docs/rise-api-reference.md
 // §3 — never inferred.
 
-/** id.articulate.com session refresh (best-effort on 401 — see API ref §2/§10).
- *  Note: the EU plane may use a different auth host; refresh is best-effort and
- *  secondary now that calls ride the tab's first-party cookies. */
-export const REFRESH_URL =
-  'https://id.articulate.com/api/v1/sessions/me/lifecycle/refresh';
+// Token refresh does NOT live here: `lifecycle/refresh` is only a 204 SSO
+// keep-alive and never rotates the bearer. The background refreshes by reloading
+// a Rise course-editor tab and re-reading the rotated cookie (docs §2/§12).
 
 export interface RequestSpec {
   /** Relative path (resolved against the active Rise tab's origin), or an

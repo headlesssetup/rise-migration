@@ -22,16 +22,34 @@ const entryA: AssetManifestEntry = {
 };
 
 describe('buildAssetManifest', () => {
-  it('marks complete only when there are no failures', () => {
+  it('marks complete only when there are no retryable failures', () => {
     const ok = buildAssetManifest('course', 'c1', collected, [entryA], []);
     expect(ok.complete).toBe(true);
     expect(ok.keyCount).toBe(2);
+    expect(ok.orphanCount).toBe(0);
 
+    // No status recorded (network error) → retryable, blocks completeness.
     const bad = buildAssetManifest('course', 'c1', collected, [entryA], [
       { key: 'rise/courses/c1/b.mp4', error: 'HTTP 404' },
     ]);
     expect(bad.complete).toBe(false);
     expect(bad.failed).toHaveLength(1);
+  });
+
+  it('orphans (403/404) are counted separately and do not block completeness', () => {
+    const m = buildAssetManifest('course', 'c1', collected, [entryA], [
+      { key: 'rise/courses/c1/b.mp4', error: 'HTTP 403', status: 403 },
+    ]);
+    expect(m.orphanCount).toBe(1);
+    expect(m.complete).toBe(true); // complete w.r.t. downloadable keys
+    expect(m.failed).toHaveLength(1); // …but the orphan stays visible in failed
+
+    const mixed = buildAssetManifest('course', 'c1', collected, [], [
+      { key: 'rise/courses/c1/a.jpg', error: 'HTTP 500', status: 500 },
+      { key: 'rise/courses/c1/b.mp4', error: 'HTTP 404', status: 404 },
+    ]);
+    expect(mixed.orphanCount).toBe(1);
+    expect(mixed.complete).toBe(false); // the 500 is retryable
   });
 });
 

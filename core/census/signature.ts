@@ -5,7 +5,11 @@
 // compares against the block catalog (PRD §8).
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const RE_CUID = /^c[a-z0-9]{24}$/i; // cuid v1 (25 chars)
+// cuid v1 (25 chars) — the only client-id format seen in captures/fixtures to
+// date (e.g. `cmqjv8g0g002i3b7oabdf4pav`); uuid/long-hex cover the rest. If an
+// id-keyed map with another format surfaces, novelty review will flag the
+// uncollapsed signature — widen then, not speculatively.
+const RE_CUID = /^c[a-z0-9]{24}$/i;
 const RE_HEX = /^[0-9a-f]{24,}$/i;
 
 // Collapse obvious id-shaped object keys (id-keyed maps) so signatures don't
