@@ -14,6 +14,9 @@ export interface KeyLocation {
   family?: string;
   variant?: string;
   blockId?: string;
+  /** Set when the key lives inside a multi-language stack's translation table
+   *  (`$.l10n.translations.<locale>.<l10nId>…`) — the locale code. */
+  translationLocale?: string;
 }
 
 /** Parse a `$.a.b[0].c` path into its segment keys/indices. */
@@ -44,6 +47,11 @@ export function locateKey(doc: unknown, path: string): KeyLocation {
   let node: unknown = doc;
   let prevSeg: string | number | undefined;
   const segs = parsePath(path);
+  // Stack translation-table cell: $.l10n.translations.<locale>.<l10nId>… —
+  // record the locale so the location isn't a useless `? › block`.
+  if (segs[0] === 'l10n' && segs[1] === 'translations' && typeof segs[2] === 'string') {
+    loc.translationLocale = segs[2];
+  }
   for (let i = 0; i < segs.length; i++) {
     let seg = segs[i]!;
     if (Array.isArray(node) && typeof seg === 'number') {
@@ -87,8 +95,13 @@ export function locateKey(doc: unknown, path: string): KeyLocation {
   return loc;
 }
 
-/** A compact one-line location, e.g. `Chapter 2 › image/hero`. */
+/** A compact one-line location, e.g. `Chapter 2 › image/hero` or
+ *  `translations (ru) › media`. */
 export function formatLocation(loc: KeyLocation): string {
+  if (loc.translationLocale && !loc.lessonTitle && !loc.lessonType) {
+    const right = loc.family && loc.variant ? `${loc.family}/${loc.variant}` : 'media';
+    return `translations (${loc.translationLocale}) › ${right}`;
+  }
   const left = loc.lessonTitle ?? loc.lessonType ?? '?';
   const right =
     loc.family && loc.variant ? `${loc.family}/${loc.variant}` : 'block';

@@ -3,9 +3,16 @@
 // the next starts, with a ~2s + jitter gap. No parallelism anywhere.
 
 import { scanCourse, type CourseScan } from '@/core/census/scan';
+import {
+  archiveIsStaleForLocales,
+  formatLocales,
+  isLocalizedStack,
+  listingLocales,
+  materializeLocale,
+} from '@/core/l10n';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
-import type { SearchResultItem } from '@/shared/types/rise';
+import type { GetCourseDocument, SearchResultItem } from '@/shared/types/rise';
 import { rpc } from '../rpc';
 import {
   MAX_PAGES,
@@ -110,15 +117,37 @@ export async function exportCourses(
 
   for (const [i, c] of courses.entries()) {
     onEvent({ kind: 'course', index: i, total: courses.length, courseId: c.id });
+    const pfx = `[${i + 1}/${courses.length}]`;
+    // Multi-language suffix straight from the listing (empty for monolingual).
+    const langs = formatLocales(listingLocales(c));
+    const mlNote = langs ? ` — multi-language (${langs})` : '';
 
-    // Resume: already on disk → skip the network (no pacing gap).
+    // Resume: already on disk → skip the network (no pacing gap) — UNLESS the
+    // listing shows languages the archived copy predates (a course exported
+    // before its stack conversion / before a language was added would keep a
+    // frozen, l10n-less archive forever). Staleness check is disk-only.
     if (await storage.hasCourse(c.id)) {
-      skipped += 1;
+      let stale = false;
+      if (langs) {
+        try {
+          const raw = await storage.readCourse(c.id);
+          stale = !!raw && archiveIsStaleForLocales(c, unwrap(raw));
+        } catch {
+          stale = false; // unreadable archive is reported by the census scan
+        }
+      }
+      if (!stale) {
+        skipped += 1;
+        onEvent({
+          kind: 'log',
+          message: `${pfx} Skipped (already saved): ${c.title ?? c.id}${mlNote}`,
+        });
+        continue;
+      }
       onEvent({
         kind: 'log',
-        message: `Skipped (already saved): ${c.title ?? c.id}`,
+        message: `${pfx} Archive is missing language(s) shown by the listing — re-fetching: ${c.title ?? c.id}${mlNote}`,
       });
-      continue;
     }
 
     if (didNetwork) await pacedDelay(pacing); // human-paced gap between fetches
@@ -133,13 +162,13 @@ export async function exportCourses(
             ? resp.error
             : 'unexpected response';
       failed.push(c.id);
-      onEvent({ kind: 'log', message: `Failed ${c.id}: ${err}` });
+      onEvent({ kind: 'log', message: `${pfx} Failed ${c.id}: ${err}` });
       continue;
     }
 
     await storage.writeCourse(c.id, resp.result.data.raw);
     saved += 1;
-    onEvent({ kind: 'log', message: `Saved: ${c.title ?? c.id}` });
+    onEvent({ kind: 'log', message: `${pfx} Saved: ${c.title ?? c.id}${mlNote}` });
   }
 
   return { saved, skipped, failed };
@@ -159,7 +188,23 @@ export async function scanSavedCourses(
     const raw = await storage.readCourse(id);
     if (!raw) continue;
     try {
-      scans.push(scanCourse(unwrap(raw)));
+      let doc = unwrap(raw) as GetCourseDocument;
+      // Stacks are scanned as their MATERIALIZED default locale: block shapes
+      // profile on real values instead of {l10nId} refs (which would flood the
+      // novelty report with `*.l10nId` field noise). Asset discovery is
+      // unaffected — it scans the RAW doc (core/assets), whose generic walk
+      // already covers the per-locale translation tables.
+      if (isLocalizedStack(doc)) {
+        const m = materializeLocale(doc);
+        if (m.unresolved.length > 0) {
+          onEvent({
+            kind: 'log',
+            message: `WARN ${id}: ${m.unresolved.length} l10n ref(s) have no value in any language (kept as refs)`,
+          });
+        }
+        doc = m.doc;
+      }
+      scans.push(scanCourse(doc));
     } catch {
       onEvent({ kind: 'log', message: `Skipped unreadable course: ${id}` });
     }

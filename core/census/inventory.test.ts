@@ -45,9 +45,35 @@ describe('inventory', () => {
     const csv = inventoryToCsv(rows);
     const lines = csv.split('\n');
     expect(lines[0]).toBe(
-      'id,title,type,lessonCount,owner,ownerEmail,folderId,folderPath,shareId,createdAt,updatedAt,ready,deleted',
+      'id,title,type,lessonCount,multi_language,owner,ownerEmail,folderId,folderPath,shareId,createdAt,updatedAt,ready,deleted',
     );
     expect(csv).toContain('"Course, with comma"');
+  });
+
+  describe('multi_language column', () => {
+    it('lists a stack\'s locales, default first; blank for monolingual', () => {
+      const stack: SearchResultItem = {
+        id: 'stk',
+        title: 'Stack',
+        defaultLocaleId: 'row-de',
+        locales: [
+          { id: 'row-ar', locale: 'ar' },
+          { id: 'row-de', locale: 'de' },
+        ],
+      };
+      const [stackRow, plainRow] = buildInventory([stack, items[0]!]);
+      expect(stackRow!.multi_language).toBe('de | ar');
+      expect(plainRow!.multi_language).toBe('');
+    });
+
+    it('CSV serializes rows merged from pre-0.6.0 inventories (field absent)', () => {
+      const legacy = buildInventory(items).map((r) => {
+        const { multi_language: _drop, ...rest } = r;
+        return rest as InventoryRow;
+      });
+      const csv = inventoryToCsv(legacy);
+      expect(csv.split('\n')[1]).toContain('abc');
+    });
   });
 
   describe('folderPath (the operator-facing "location")', () => {

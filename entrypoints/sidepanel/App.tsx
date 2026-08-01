@@ -471,6 +471,9 @@ export function App() {
         );
         await storage.writeManifest({
           generatedAt: new Date().toISOString(),
+          // Tool version that produced this archive (multilang capture needs
+          // ≥0.6.0 — earlier exporters froze pre-conversion snapshots).
+          toolVersion: browser.runtime.getManifest().version,
           // Source account identity — the import side's Source ≠ Target guard reads
           // this to refuse writing back into the account the archive came from.
           sourceAccount: {

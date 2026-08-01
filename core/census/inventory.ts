@@ -3,6 +3,7 @@
 // the listing already exposes — produced as soon as courses are listed.
 
 import { toCsv } from '@/core/util/csv';
+import { formatLocales, listingLocales } from '@/core/l10n/stack';
 import type { SearchResultItem } from '@/shared/types/rise';
 
 export interface InventoryRow {
@@ -10,6 +11,9 @@ export interface InventoryRow {
   title: string;
   type: string;
   lessonCount: number | '';
+  /** Multi-language stack: locale codes, default first ("en-us | ar | bs").
+   *  Blank for monolingual courses. Straight from the search listing. */
+  multi_language: string;
   owner: string;
   ownerEmail: string;
   folderId: string;
@@ -30,6 +34,7 @@ const INVENTORY_COLUMNS: (keyof InventoryRow)[] = [
   'title',
   'type',
   'lessonCount',
+  'multi_language',
   'owner',
   'ownerEmail',
   'folderId',
@@ -58,6 +63,7 @@ export function buildInventory(
       // Courses come back with type:null in the listing — label them COURSE.
       type: str(it.type) || 'COURSE',
       lessonCount: typeof it.lessonCount === 'number' ? it.lessonCount : '',
+      multi_language: formatLocales(listingLocales(it)),
       owner,
       ownerEmail: str(profile.email),
       folderId: str(it.folderId),

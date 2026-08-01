@@ -59,4 +59,24 @@ describe('locateKey', () => {
     ).toBe('Chapter 2 › image/hero');
     expect(formatLocation({})).toBe('? › block');
   });
+
+  it('locates keys inside a stack translation table by locale', () => {
+    const doc = {
+      l10n: {
+        translations: {
+          ru: {
+            '9f7bfeff-e373-43ba-8a2c-f9527e4e6b7c': {
+              image: { key: 'rise/courses/c1/heroRU.jpg', translationOverride: true },
+            },
+          },
+        },
+      },
+    };
+    const loc = locateKey(
+      doc,
+      '$.l10n.translations.ru.9f7bfeff-e373-43ba-8a2c-f9527e4e6b7c.image.key',
+    );
+    expect(loc.translationLocale).toBe('ru');
+    expect(formatLocation(loc)).toBe('translations (ru) › media');
+  });
 });

@@ -1,0 +1,206 @@
+{
+  "course": {
+    "id": "stackCourse000000000000000000000",
+    "title": { "l10nId": "aaaa1111-0000-4000-8000-000000000001" },
+    "description": { "l10nId": "aaaa1111-0000-4000-8000-000000000002" },
+    "media": { "l10nId": "aaaa1111-0000-4000-8000-000000000003" },
+    "coverImage": { "media": { "l10nId": "aaaa1111-0000-4000-8000-000000000004" } },
+    "defaultLocaleId": "loc-row-en-us",
+    "localizationMetadata": { "isLocalized": true, "localizedAt": "2026-08-01T14:24:31.735Z" },
+    "labelSetId": "customSetSrc0000000000mm",
+    "lessons": ["lessonA-0000000000000000000000", "lessonB-0000000000000000000000"],
+    "type": null,
+    "theme": { "themeId": "classic" }
+  },
+  "lessons": [
+    {
+      "id": "lessonA-0000000000000000000000",
+      "courseId": "stackCourse000000000000000000000",
+      "type": null,
+      "position": 1,
+      "title": { "l10nId": "bbbb2222-0000-4000-8000-000000000001" },
+      "description": "",
+      "items": [
+        {
+          "id": "cblock0000000000000000001",
+          "family": "text",
+          "type": "text",
+          "variant": "heading paragraph",
+          "items": [
+            {
+              "id": "cblock0000000000000000002",
+              "heading": { "l10nId": "cccc3333-0000-4000-8000-000000000001" },
+              "paragraph": { "l10nId": "cccc3333-0000-4000-8000-000000000002" }
+            }
+          ],
+          "settings": { "paddingTop": 3, "paddingBottom": 3 }
+        },
+        {
+          "id": "cblock0000000000000000003",
+          "family": "image",
+          "type": "image",
+          "variant": "hero",
+          "items": [
+            {
+              "id": "cblock0000000000000000004",
+              "paragraph": "",
+              "caption": { "l10nId": "cccc3333-0000-4000-8000-000000000003" },
+              "media": { "l10nId": "cccc3333-0000-4000-8000-000000000004" }
+            }
+          ],
+          "settings": { "zoomOnClick": true }
+        },
+        {
+          "id": "cblock0000000000000000005",
+          "family": "attachment",
+          "type": "attachment",
+          "variant": "attachment",
+          "items": [
+            {
+              "id": "cblock0000000000000000006",
+              "media": {
+                "attachment": {
+                  "key": "rise/courses/stackCourse000000000000000000000/attach0000000000.pdf",
+                  "type": "attachment"
+                }
+              }
+            }
+          ],
+          "settings": {}
+        }
+      ]
+    },
+    {
+      "id": "lessonB-0000000000000000000000",
+      "courseId": "stackCourse000000000000000000000",
+      "type": null,
+      "position": 2,
+      "title": { "l10nId": "bbbb2222-0000-4000-8000-000000000002" },
+      "description": "",
+      "items": [
+        {
+          "id": "cblock0000000000000000007",
+          "family": "text",
+          "type": "text",
+          "variant": "paragraph",
+          "items": [
+            {
+              "id": "cblock0000000000000000008",
+              "paragraph": { "l10nId": "cccc3333-0000-4000-8000-000000000005" }
+            }
+          ],
+          "settings": {}
+        }
+      ]
+    }
+  ],
+  "l10n": {
+    "defaultLocale": "en-us",
+    "showLocaleSelector": true,
+    "locales": [
+      {
+        "id": "loc-row-en-us",
+        "courseId": "stackCourse000000000000000000000",
+        "locale": "en-us",
+        "labelSetId": "customSetSrc0000000000mm",
+        "rightToLeft": false,
+        "formality": null,
+        "glossaryId": null,
+        "glossaryGroupId": null,
+        "deletedAt": null
+      },
+      {
+        "id": "loc-row-ru",
+        "courseId": "stackCourse000000000000000000000",
+        "locale": "ru",
+        "labelSetId": "customSetRu00000000000mm",
+        "rightToLeft": false,
+        "formality": "less",
+        "glossaryId": null,
+        "glossaryGroupId": null,
+        "deletedAt": null
+      },
+      {
+        "id": "loc-row-ar",
+        "courseId": "stackCourse000000000000000000000",
+        "locale": "ar",
+        "labelSetId": null,
+        "rightToLeft": true,
+        "formality": "more",
+        "glossaryId": null,
+        "glossaryGroupId": null,
+        "deletedAt": null
+      }
+    ],
+    "translations": {
+      "en-us": {
+        "aaaa1111-0000-4000-8000-000000000001": "Fixture Stack Course",
+        "aaaa1111-0000-4000-8000-000000000002": "<div data-editor-id=\"e1\"><p>Course description EN</p></div>",
+        "aaaa1111-0000-4000-8000-000000000003": {
+          "image": {
+            "key": "rise/courses/stackCourse000000000000000000000/logoEN0000000000.png",
+            "type": "image",
+            "crushedKey": "rise/courses/stackCourse000000000000000000000/logoENcrush00000.png"
+          }
+        },
+        "aaaa1111-0000-4000-8000-000000000004": {
+          "image": {
+            "key": "rise/courses/stackCourse000000000000000000000/coverEN000000000.jpg",
+            "type": "image"
+          }
+        },
+        "bbbb2222-0000-4000-8000-000000000001": "Lesson One",
+        "bbbb2222-0000-4000-8000-000000000002": "Lesson Two",
+        "cccc3333-0000-4000-8000-000000000001": "<strong>Heading EN</strong>",
+        "cccc3333-0000-4000-8000-000000000002": "<p>Paragraph EN</p>",
+        "cccc3333-0000-4000-8000-000000000003": "<div data-editor-id=\"e2\"><p>caption EN</p></div>",
+        "cccc3333-0000-4000-8000-000000000004": {
+          "image": {
+            "key": "rise/courses/stackCourse000000000000000000000/heroEN0000000000.jpg",
+            "type": "image",
+            "sourcedFrom": "USER",
+            "dimensions": { "originalWidth": 1080, "originalHeight": 810 }
+          }
+        }
+      },
+      "ru": {
+        "aaaa1111-0000-4000-8000-000000000001": "Курс-стек (фикстура)",
+        "aaaa1111-0000-4000-8000-000000000002": "<div data-editor-id=\"e1\"><p>Описание курса RU</p></div>",
+        "bbbb2222-0000-4000-8000-000000000001": "Урок один",
+        "bbbb2222-0000-4000-8000-000000000002": "Урок два",
+        "cccc3333-0000-4000-8000-000000000001": "<strong>Заголовок RU</strong>",
+        "cccc3333-0000-4000-8000-000000000002": "<p>Абзац RU</p>",
+        "cccc3333-0000-4000-8000-000000000004": {
+          "image": {
+            "key": "rise/courses/stackCourse000000000000000000000/heroRU0000000000.jpg",
+            "type": "image",
+            "sourcedFrom": "USER",
+            "translationOverride": true,
+            "dimensions": { "originalWidth": 1680, "originalHeight": 2982 }
+          }
+        },
+        "cccc3333-0000-4000-8000-000000000005": "<p>Только по-русски</p>"
+      },
+      "ar": {
+        "aaaa1111-0000-4000-8000-000000000001": "دورة مكدسة (عينة)",
+        "bbbb2222-0000-4000-8000-000000000001": "الدرس الأول",
+        "cccc3333-0000-4000-8000-000000000001": "<strong>عنوان AR</strong>",
+        "cccc3333-0000-4000-8000-000000000002": "<p>فقرة AR</p>"
+      }
+    },
+    "languageCodeMetadata": {
+      "en-us": { "displayName": "English (US)", "rightToLeft": false },
+      "ru": { "displayName": "Russian", "rightToLeft": false },
+      "ar": { "displayName": "Arabic", "rightToLeft": true }
+    }
+  },
+  "translationUpdates": {
+    "updateCount": 0,
+    "localeUpdateCounts": {},
+    "courseUpdates": [],
+    "lessonItemUpdates": {},
+    "mondrianUpdates": { "count": 0, "locales": [] },
+    "aiScenarioUpdates": { "count": 0, "locales": [] },
+    "inProgress": false
+  }
+}
