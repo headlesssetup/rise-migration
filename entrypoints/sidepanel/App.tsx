@@ -24,17 +24,26 @@ import {
   buildInventory,
   inventoryToCsv,
   inventoryToJson,
+  withFolderPaths,
+  type InventoryRow,
 } from '@/core/census/inventory';
 import { FileSystemStorage } from '@/core/storage/fs';
 import type { Storage } from '@/core/storage/storage';
 import type { SessionState } from '@/shared/messaging';
 import type { SearchResultItem } from '@/shared/types/rise';
+import {
+  mergeById,
+  parseIdRows,
+  parseManifestCourses,
+} from './archive-merge';
 import { AssetsView } from './components/AssetsView';
 import { BanksView } from './components/BanksView';
 import { CensusView } from './components/CensusView';
 import { ImportView } from './components/ImportView';
+import { LogLines } from './components/LogLines';
 import { NoveltyView } from './components/NoveltyView';
 import { SessionView } from './components/SessionView';
+import { appendLogLines } from './log-lines';
 import {
   clearDirHandle,
   loadDirHandle,
@@ -71,16 +80,15 @@ type Mode = 'export' | 'import';
 
 const PAGE = 16;
 
-/** Classify a log line for colorization (CSS in style.css). */
-function logLineClass(line: string): string {
-  // Operation/course headers are emitted with a leading ▶ marker — render bold.
-  if (/^\s*▶/.test(line)) return 'log-line log-head';
-  if (/^\s*(FAILED|BLOCKED|✗)|\berror\b|Unauthorized|HTTP [45]\d\d/i.test(line))
-    return 'log-line log-error';
-  if (/^\s*(\[\d+\/\d+\]\s*)?WARN|⚠/i.test(line)) return 'log-line log-warn';
-  if (/\bOK\b|✓|Imported|Planned|done\b/i.test(line)) return 'log-line log-ok';
-  if (/^\s*(\[\d+\/\d+\]\s*)?DRY\b/i.test(line)) return 'log-line log-dry';
-  return 'log-line';
+// The header course count is fetched once a Rise tab + token exist, but the very
+// first attempt can still lose the race (or hit a transient 403). Retry on a
+// bounded, human-paced backoff — never a tight loop, and after the last attempt
+// the operator's Refresh is the only trigger.
+const COUNT_RETRY_MS = [0, 4_000, 15_000, 45_000];
+
+/** Message out of an unknown throw (Error, DOMException, string, …). */
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /** Format a remaining-duration (ms) as HH:MM:SS for the log-header countdown. */
@@ -96,6 +104,7 @@ export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [mode, setMode] = useState<Mode>('export');
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [countAttempt, setCountAttempt] = useState(0);
   const [storage, setStorage] = useState<Storage | null>(null);
   const [folderName, setFolderName] = useState<string | null>(null);
   const [pendingHandle, setPendingHandle] =
@@ -106,6 +115,11 @@ export function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  // A live import run. Owned HERE, not inside ImportView: a mode-tab click must
+  // not be able to unmount a running import into a detached closure (no Stop
+  // button, no outcome table) while every export button goes clickable and can
+  // interleave a second paced job through the same Rise tab.
+  const [importRunning, setImportRunning] = useState(false);
   // Live import status for the log-header countdown (set via ImportView).
   const [importStatus, setImportStatus] = useState<
     { label: string; finishAt: number | null; done: boolean } | null
@@ -141,17 +155,18 @@ export function App() {
   }, [log]);
 
   const addLog = useCallback((message: string) => {
-    setLog((l) => [...l, message]);
+    setLog((l) => appendLogLines(l, [message]));
   }, []);
 
   // Visually separate each new user-launched operation in the log: drop a blank
   // line before it (never as the very first line), then an optional bold ▶ header.
   const logBreak = useCallback((label?: string) => {
-    setLog((l) => {
-      const next = l.length === 0 ? [...l] : [...l, ''];
-      if (label) next.push(`▶ ${label}`);
-      return next;
-    });
+    setLog((l) =>
+      appendLogLines(l, [
+        ...(l.length === 0 ? [] : ['']),
+        ...(label ? [`▶ ${label}`] : []),
+      ]),
+    );
   }, []);
 
   const clearLog = useCallback(() => setLog([]), []);
@@ -217,21 +232,38 @@ export function App() {
   const accountName = session?.accountName ?? null;
   useEffect(() => {
     setTotalCount(null);
+    setCountAttempt(0);
   }, [accountName]);
 
-  // Auto-fetch the total course count once a Rise tab is present.
+  /** Ask for the course count again (header affordance + after a failed run). */
+  const refreshCount = useCallback(() => {
+    setTotalCount(null);
+    setCountAttempt(0);
+  }, []);
+
+  // Auto-fetch the total course count once a Rise tab AND a token are present.
+  // A null answer used to wedge the header at "Courses: —" forever: the effect
+  // could fire before the token was captured, and its deps never changed again.
   const risePresent = session?.risePresent ?? false;
+  const hasToken = session?.hasToken ?? false;
   useEffect(() => {
+    if (!risePresent || !hasToken || totalCount !== null) return;
+    const delay = COUNT_RETRY_MS[countAttempt];
+    if (delay === undefined) return; // attempts spent — Refresh is the retry
     let alive = true;
-    if (!risePresent || totalCount !== null) return;
-    void (async () => {
-      const n = await countCourses();
-      if (alive && n !== null) setTotalCount(n);
-    })();
+    const timer = setTimeout(() => {
+      void (async () => {
+        const n = await countCourses().catch(() => null);
+        if (!alive) return;
+        if (n !== null) setTotalCount(n);
+        else setCountAttempt((a) => a + 1);
+      })();
+    }, delay);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
-  }, [risePresent, totalCount]);
+  }, [risePresent, hasToken, totalCount, countAttempt]);
 
   useEffect(() => {
     if (stickToBottomRef.current) {
@@ -294,28 +326,89 @@ export function App() {
     addLog('Folder forgotten.');
   }, [addLog]);
 
-  const list = useCallback(async () => {
-    logBreak('List courses');
-    setPhase('listing');
-    setCourses([]);
-    const result = await listAllCourses(onEvent, listLimit);
-    setCourses(result);
-    setSelected(new Set(result.map((c) => c.id)));
-    setPhase('listed');
-    addLog(`Found ${result.length} courses.`);
+  // Every export handler runs inside this guard. Without it a single rejection
+  // (relay error, FS write, JSON throw) left `phase` latched at listing/exporting
+  // → `busy` true forever, every button disabled, and NOT ONE line in the log.
+  const guarded = useCallback(
+    async (label: string, fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (e) {
+        addLog(`FAILED — ${label}: ${errText(e)}`);
+      } finally {
+        // Success paths have already moved on to 'listed'/'done'; this only
+        // releases a run that died while still latched busy.
+        setPhase((p) => (p === 'listing' || p === 'exporting' ? 'idle' : p));
+      }
+    },
+    [addLog],
+  );
 
-    // List-level inventory: a customer-ready catalog, no GET_COURSE needed.
-    const rows = buildInventory(result);
-    if (storage) {
-      await storage.writeInventory(inventoryToJson(rows), inventoryToCsv(rows));
-      addLog(`Inventory written (${rows.length} rows) → inventory.csv/json.`);
-      // (Folder tree is exported under Account Data, not here.)
-    } else {
-      addLog(
-        `Inventory built (${rows.length} rows) — connect a folder to save it.`,
-      );
-    }
-  }, [onEvent, addLog, logBreak, listLimit, storage]);
+  const list = useCallback(
+    () =>
+      guarded('List courses', async () => {
+        logBreak('List courses');
+        setPhase('listing');
+        setCourses([]);
+        const result = await listAllCourses(onEvent, listLimit);
+        setCourses(result);
+        setSelected(new Set(result.map((c) => c.id)));
+        setPhase('listed');
+        addLog(`Found ${result.length} courses.`);
+
+        // List-level inventory: a customer-ready catalog, no GET_COURSE needed.
+        if (storage) {
+          // The `location` column: resolve each course's folderId to a name-path.
+          // The listing only carries the id, so we need the folder tree — and we
+          // REFETCH it every listing (one paced read). A saved folders.json goes
+          // stale the moment the operator adds a folder in Rise, and trusting it
+          // left every course in a new folder permanently location-less, with a
+          // re-list unable to fix it.
+          addLog('Fetching the folder tree (for the inventory location column)…');
+          await fetchFolders(storage, onEvent);
+          const pathByFolderId = new Map<string, string>();
+          for (const f of await buildFolders(storage)) {
+            if (f.source === 'course') pathByFolderId.set(f.id, f.path);
+          }
+          if (!pathByFolderId.size) {
+            addLog('No folder tree available — inventory location will be blank.');
+          }
+          const unresolved = new Set(
+            result
+              .map((c) => String(c.folderId ?? ''))
+              .filter((id) => id && !pathByFolderId.has(id)),
+          );
+          if (unresolved.size) {
+            addLog(
+              `⚠ ${unresolved.size} folder id(s) are absent from the folder tree — those courses get a blank location (ids: ${[...unresolved].join(', ')}).`,
+            );
+          }
+          const rows = buildInventory(result, pathByFolderId);
+          // MERGE with what's on disk: this listing may be a partial page range,
+          // and the import side reads inventory.json for folder placement of
+          // EVERY archived course — overwriting it hid earlier batches. Paths are
+          // backfilled across the whole merged set, so rows from an earlier
+          // listing (possibly written before any folder export) get a location too.
+          const merged = withFolderPaths(
+            mergeById(parseIdRows<InventoryRow>(await storage.readInventory()), rows),
+            pathByFolderId,
+          );
+          await storage.writeInventory(
+            inventoryToJson(merged),
+            inventoryToCsv(merged),
+          );
+          addLog(
+            `Inventory written (${merged.length} rows total, ${rows.length} from this listing) → inventory.csv/json.`,
+          );
+        } else {
+          const rows = buildInventory(result);
+          addLog(
+            `Inventory built (${rows.length} rows) — connect a folder to save it.`,
+          );
+        }
+      }),
+    [guarded, onEvent, addLog, logBreak, listLimit, storage],
+  );
 
   const toggle = useCallback((id: string) => {
     setSelected((s) => {
@@ -338,193 +431,240 @@ export function App() {
     [courses, selected],
   );
 
-  const runExport = useCallback(async () => {
-    if (!storage) return;
-    logBreak('Fetch courses');
-    setPhase('exporting');
-    setCensus(null);
-    setNovelty(null);
-    setProgress({ done: 0, total: selectedCourses.length });
+  const runExport = useCallback(
+    () =>
+      guarded('Fetch courses', async () => {
+        if (!storage) return;
+        logBreak('Fetch courses');
+        setPhase('exporting');
+        setCensus(null);
+        setNovelty(null);
+        setProgress({ done: 0, total: selectedCourses.length });
 
-    const { saved, skipped, failed } = await exportCourses(
-      selectedCourses,
-      storage,
-      onEvent,
-    );
+        // Read the archive's current course list BEFORE overwriting the manifest.
+        const priorCourses = parseManifestCourses(await storage.readManifest());
 
-    // Build the report from EVERY saved course in the folder (not just this
-    // run's selection) — so partial / multi-attempt scrapes stay complete.
-    const scans = await scanSavedCourses(storage, onEvent);
-    const built = buildCensus(scans);
-    await storage.writeCensus(censusToJson(built), censusToCsv(built));
+        const { saved, skipped, failed } = await exportCourses(
+          selectedCourses,
+          storage,
+          onEvent,
+        );
 
-    // Per-variant field profiles (the catalog knowledge base) + Tier-2 novelty.
-    const profiles = buildProfiles(scans);
-    await storage.writeCatalog(profileToJson(profiles), profileToCsv(profiles));
-    const nov = buildNovelty(profiles);
-    await storage.writeNovelty(noveltyToJson(nov), noveltyToCsv(nov));
+        // Build the report from EVERY saved course in the folder (not just this
+        // run's selection) — so partial / multi-attempt scrapes stay complete.
+        const scans = await scanSavedCourses(storage, onEvent);
+        const built = buildCensus(scans);
+        await storage.writeCensus(censusToJson(built), censusToCsv(built));
 
-    await storage.writeManifest({
-      generatedAt: new Date().toISOString(),
-      // Source account identity — the import side's Source ≠ Target guard reads
-      // this to refuse writing back into the account the archive came from.
-      sourceAccount: {
-        name: session?.accountName ?? session?.identity?.name ?? null,
-        sub: session?.identity?.sub ?? null,
-        email: session?.identity?.email ?? null,
-        plane: session?.plane ?? null,
-      },
-      courseCount: scans.length,
-      saved,
-      skipped,
-      failed,
-      variantCount: nov.variantCount,
-      newVariants: nov.newVariants.map((v) => v.key),
-      newFields: nov.newFields.length,
-      courses: selectedCourses.map((c) => ({ id: c.id, title: c.title })),
-    });
-    setCensus(built);
-    setNovelty(nov);
-    setPhase('done');
-    addLog(
-      `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
-    );
-    addLog(
-      `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s).`,
-    );
-  }, [storage, selectedCourses, onEvent, addLog, logBreak, session]);
+        // Per-variant field profiles (the catalog knowledge base) + Tier-2 novelty.
+        const profiles = buildProfiles(scans);
+        await storage.writeCatalog(profileToJson(profiles), profileToCsv(profiles));
+        const nov = buildNovelty(profiles);
+        await storage.writeNovelty(noveltyToJson(nov), noveltyToCsv(nov));
 
-  const runBanks = useCallback(async () => {
-    if (!storage) return;
-    logBreak('Fetch question banks');
-    setPhase('exporting');
-    setBanks(null);
-    setProgress(null);
-    const res = await fetchQuestionBanks(storage, onEvent);
-    const saved = await scanSavedBanks(storage, onEvent);
-    const cat = buildBankCatalog(saved);
-    await storage.writeBankCatalog(bankCatalogToJson(cat), bankCatalogToCsv(cat));
+        // The course list ACCUMULATES across export batches — the import picker
+        // reads it as the archive's contents, so it must not shrink to just this
+        // run's selection while the earlier batches' JSON sits on disk.
+        const courseList = mergeById(
+          priorCourses,
+          selectedCourses.map((c) => ({ id: c.id, title: c.title })),
+        );
+        await storage.writeManifest({
+          generatedAt: new Date().toISOString(),
+          // Source account identity — the import side's Source ≠ Target guard reads
+          // this to refuse writing back into the account the archive came from.
+          sourceAccount: {
+            name: session?.accountName ?? session?.identity?.name ?? null,
+            sub: session?.identity?.sub ?? null,
+            email: session?.identity?.email ?? null,
+            plane: session?.plane ?? null,
+          },
+          courseCount: scans.length,
+          saved,
+          skipped,
+          failed,
+          variantCount: nov.variantCount,
+          newVariants: nov.newVariants.map((v) => v.key),
+          newFields: nov.newFields.length,
+          courses: courseList,
+        });
+        setCensus(built);
+        setNovelty(nov);
+        setPhase('done');
+        addLog(
+          `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
+        );
+        addLog(
+          `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s). Manifest lists ${courseList.length} course(s).`,
+        );
+      }),
+    [guarded, storage, selectedCourses, onEvent, addLog, logBreak, session],
+  );
 
-    // Per-bank inventory (decision table: size, folder, usage, owner, status).
-    const inv = await buildBankInventoryRows(storage, saved);
-    await storage.writeBankInventory(
-      bankInventoryToJson(inv),
-      bankInventoryToCsv(inv),
-    );
-    addLog(
-      `Bank inventory: ${inv.length} bank(s) → question-banks-inventory.csv/json.`,
-    );
+  const runBanks = useCallback(
+    () =>
+      guarded('Fetch question banks', async () => {
+        if (!storage) return;
+        logBreak('Fetch question banks');
+        setPhase('exporting');
+        setBanks(null);
+        setProgress(null);
+        const res = await fetchQuestionBanks(storage, onEvent);
+        const saved = await scanSavedBanks(storage, onEvent);
+        const cat = buildBankCatalog(saved);
+        await storage.writeBankCatalog(
+          bankCatalogToJson(cat),
+          bankCatalogToCsv(cat),
+        );
 
-    setBanks(cat);
-    setPhase('done');
-    if (res.failed.length) {
-      addLog(`Question banks: ${res.failed.length} failed to fetch.`);
-    }
-    addLog(
-      `Question banks: ${cat.bankCount} bank(s), ${cat.questionCount} question(s); types: ${
-        cat.byType.map((t) => `${t.type}:${t.count}`).join(', ') || 'none'
-      }. → question-banks-catalog.csv/json.`,
-    );
-    if (cat.mediaRefs.length) {
-      addLog(
-        `Bank media: ${cat.mediaRefs.map((m) => `${m.kind}:${m.count}`).join(', ')}.`,
-      );
-    }
-    // Merge bank folders (from the saved index) into the folder inventory.
-    const folders = await buildFolders(storage);
-    if (folders.length) {
-      addLog(`Folders updated: ${folders.length} total (incl. bank folders).`);
-    }
-  }, [storage, onEvent, addLog, logBreak]);
+        // Per-bank inventory (decision table: size, folder, usage, owner, status).
+        const inv = await buildBankInventoryRows(storage, saved);
+        await storage.writeBankInventory(
+          bankInventoryToJson(inv),
+          bankInventoryToCsv(inv),
+        );
+        addLog(
+          `Bank inventory: ${inv.length} bank(s) → question-banks-inventory.csv/json.`,
+        );
 
-  const runAssets = useCallback(async () => {
-    if (!storage) return;
-    logBreak('Download assets');
-    setPhase('exporting');
-    setAssets(null);
-    setProgress(null);
-    // Plane-aware CDN host: prefer the account plane recorded in the archive
-    // manifest (the account the media belongs to), else the live tab's plane,
-    // else try both (US then EU).
-    let plane: 'us' | 'eu' | null = session?.plane ?? null;
-    try {
-      const m = await storage.readManifest();
-      const recorded = m ? (JSON.parse(m).sourceAccount?.plane as typeof plane) : null;
-      if (recorded === 'us' || recorded === 'eu') plane = recorded;
-    } catch {
-      /* fall back to the live session plane / both */
-    }
-    const bases = cdnBasesForPlane(plane);
-    addLog(`Downloading assets from ${bases.join(' / ')} (parallel)…`);
-    const summary = await downloadAllAssets(storage, onEvent, makeCdnDownloader(bases));
-    setAssets(summary);
-    setPhase('done');
-    const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
-    addLog(
-      `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
-        summary.skipped ? ` (${summary.skipped} already done)` : ''
-      }. → assets/, *.assets.json, assets-summary.json.`,
-    );
-    if (orphan) {
-      addLog(
-        `${orphan} asset(s) missing at source (403/404 — likely deleted); flagged in assets-summary.json, not blocking.`,
-      );
-    }
-    if (!summary.complete) {
-      const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
-      addLog(`⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`);
-    }
-  }, [storage, onEvent, addLog, logBreak, session]);
+        setBanks(cat);
+        setPhase('done');
+        if (res.failed.length) {
+          addLog(`Question banks: ${res.failed.length} failed to fetch.`);
+        }
+        addLog(
+          `Question banks: ${cat.bankCount} bank(s), ${cat.questionCount} question(s); types: ${
+            cat.byType.map((t) => `${t.type}:${t.count}`).join(', ') || 'none'
+          }. → question-banks-catalog.csv/json.`,
+        );
+        if (cat.mediaRefs.length) {
+          addLog(
+            `Bank media: ${cat.mediaRefs.map((m) => `${m.kind}:${m.count}`).join(', ')}.`,
+          );
+        }
+        // Merge bank folders (from the saved index) into the folder inventory.
+        const folders = await buildFolders(storage);
+        if (folders.length) {
+          addLog(`Folders updated: ${folders.length} total (incl. bank folders).`);
+        }
+      }),
+    [guarded, storage, onEvent, addLog, logBreak],
+  );
 
-  const runStoryline = useCallback(async () => {
-    if (!storage) return;
-    logBreak('Export storyline packages');
-    setPhase('exporting');
-    setStoryline(null);
-    setProgress(null);
-    // Scope to the currently SELECTED courses so the operator can test 1-2 of
-    // hundreds; if nothing is selected, fall back to all saved courses.
-    const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
-    addLog(
-      onlyCourseIds
-        ? `Exporting Storyline packages for ${onlyCourseIds.size} selected course(s)…`
-        : 'Scanning ALL saved courses for Storyline blocks, then exporting + repackaging each (Review-360 form)…',
-    );
-    const summary = await exportStorylinePackages(storage, onEvent, { onlyCourseIds });
-    setStoryline(summary);
-    setPhase('done');
-    addLog(
-      `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks. → storyline/<courseId>/<leaf>.zip + manifest.`,
-    );
-    if (summary.failed) {
-      for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
-    }
-  }, [storage, onEvent, addLog, logBreak, selected]);
+  const runAssets = useCallback(
+    () =>
+      guarded('Download assets', async () => {
+        if (!storage) return;
+        logBreak('Download assets');
+        setPhase('exporting');
+        setAssets(null);
+        setProgress(null);
+        // Plane-aware CDN host: prefer the account plane recorded in the archive
+        // manifest (the account the media belongs to), else the live tab's plane,
+        // else try both (US then EU).
+        let plane: 'us' | 'eu' | null = session?.plane ?? null;
+        try {
+          const m = await storage.readManifest();
+          const recorded = m
+            ? (JSON.parse(m).sourceAccount?.plane as typeof plane)
+            : null;
+          if (recorded === 'us' || recorded === 'eu') plane = recorded;
+        } catch {
+          /* fall back to the live session plane / both */
+        }
+        const bases = cdnBasesForPlane(plane);
+        addLog(`Downloading assets from ${bases.join(' / ')} (parallel)…`);
+        const summary = await downloadAllAssets(
+          storage,
+          onEvent,
+          makeCdnDownloader(bases),
+        );
+        setAssets(summary);
+        setPhase('done');
+        const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
+        addLog(
+          `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
+            summary.skipped ? ` (${summary.skipped} already done)` : ''
+          }. → assets/, *.assets.json, assets-summary.json.`,
+        );
+        if (orphan) {
+          addLog(
+            `${orphan} asset(s) missing at source (403/404 — likely deleted); flagged in assets-summary.json, not blocking.`,
+          );
+        }
+        if (!summary.complete) {
+          const n = summary.undownloaded.reduce((s, o) => s + o.keys.length, 0);
+          addLog(
+            `⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`,
+          );
+        }
+      }),
+    [guarded, storage, onEvent, addLog, logBreak, session],
+  );
 
-  const runAccount = useCallback(async () => {
-    if (!storage) return;
-    logBreak('Export account data');
-    setPhase('exporting');
-    setProgress(null);
-    addLog('Exporting account data (folders, block templates, typefaces)…');
+  const runStoryline = useCallback(
+    () =>
+      guarded('Export storyline packages', async () => {
+        if (!storage) return;
+        logBreak('Export storyline packages');
+        setPhase('exporting');
+        setStoryline(null);
+        setProgress(null);
+        // Scope to the currently SELECTED courses so the operator can test 1-2 of
+        // hundreds; if nothing is selected, fall back to all saved courses.
+        const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
+        addLog(
+          onlyCourseIds
+            ? `Exporting Storyline packages for ${onlyCourseIds.size} selected course(s)…`
+            : 'Scanning ALL saved courses for Storyline blocks, then exporting + repackaging each (Review-360 form)…',
+        );
+        const summary = await exportStorylinePackages(storage, onEvent, {
+          onlyCourseIds,
+        });
+        setStoryline(summary);
+        setPhase('done');
+        addLog(
+          `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks. → storyline/<courseId>/<leaf>.zip + manifest.`,
+        );
+        if (summary.failed) {
+          for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
+        }
+      }),
+    [guarded, storage, onEvent, addLog, logBreak, selected],
+  );
 
-    // Folder tree — account-level data, independent of the course listing.
-    await fetchFolders(storage, onEvent);
-    const folders = await buildFolders(storage);
-    if (folders.length) {
-      const course = folders.filter((f) => f.source === 'course').length;
-      const bank = folders.filter((f) => f.source === 'bank').length;
-      addLog(`Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`);
-    }
+  const runAccount = useCallback(
+    () =>
+      guarded('Export account data', async () => {
+        if (!storage) return;
+        logBreak('Export account data');
+        setPhase('exporting');
+        setProgress(null);
+        addLog('Exporting account data (folders, block templates, typefaces)…');
 
-    const s = await fetchAccountExtras(storage, onEvent);
-    setPhase('done');
-    addLog(
-      `Account data: ${folders.length} folder(s), ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
-    );
-  }, [storage, onEvent, addLog, logBreak]);
+        // Folder tree — account-level data, independent of the course listing.
+        await fetchFolders(storage, onEvent);
+        const folders = await buildFolders(storage);
+        if (folders.length) {
+          const course = folders.filter((f) => f.source === 'course').length;
+          const bank = folders.filter((f) => f.source === 'bank').length;
+          addLog(
+            `Folders: ${folders.length} (${course} course, ${bank} bank) → folders-inventory.csv/json.`,
+          );
+        }
 
-  const busy = phase === 'listing' || phase === 'exporting';
+        const s = await fetchAccountExtras(storage, onEvent);
+        setPhase('done');
+        addLog(
+          `Account data: ${folders.length} folder(s), ${s.blockTemplates} block template(s), ${s.typefaces} typeface(s) + ${s.fonts.written} font file(s).`,
+        );
+      }),
+    [guarded, storage, onEvent, addLog, logBreak],
+  );
+
+  // `busy` gates EVERY mode tab + export action. A live import counts: leaving
+  // it out let one click detach the run and start a second paced job alongside it.
+  const busy = phase === 'listing' || phase === 'exporting' || importRunning;
   const atAll = totalCount !== null && listLimit >= totalCount;
 
   // Setup gate: a Rise tab, a destination folder, and a captured token.
@@ -561,10 +701,21 @@ export function App() {
           Import (write)
         </button>
       </div>
+      {importRunning && (
+        <p className="hint">
+          An import is running — press <b>Stop</b> in the import panel before
+          switching modes (leaving now would detach the run).
+        </p>
+      )}
 
       <section className="card">
         <h2>Setup</h2>
-        <SessionView session={session} totalCount={totalCount} />
+        <SessionView
+          session={session}
+          totalCount={totalCount}
+          onRefreshCount={refreshCount}
+          refreshDisabled={busy}
+        />
         <div className="row" style={{ marginTop: 6 }}>
           <button onClick={pickFolder} disabled={busy}>
             {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
@@ -593,6 +744,8 @@ export function App() {
           addLog={addLog}
           logBreak={logBreak}
           onStatus={onImportStatus}
+          running={importRunning}
+          setRunning={setImportRunning}
         />
       )}
 
@@ -827,15 +980,7 @@ export function App() {
           </span>
         </div>
         <div className="log" ref={logRef} onScroll={onLogScroll}>
-          {log.map((line, i) =>
-            line === '' ? (
-              <div key={i} className="log-line log-gap" />
-            ) : (
-              <div key={i} className={logLineClass(line)}>
-                {line}
-              </div>
-            ),
-          )}
+          <LogLines lines={log} />
         </div>
       </section>
     </div>

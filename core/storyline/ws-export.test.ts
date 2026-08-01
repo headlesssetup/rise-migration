@@ -47,6 +47,17 @@ describe('parseExportFrame', () => {
     expect(f).toEqual({ kind: 'package-error', jobId: '8797', type: 'package:error', message: 'boom' });
   });
 
+  it('classifies a JSON-RPC error response as rpc-error with the server message', () => {
+    const f = parseExportFrame(
+      '{"id":0,"jsonrpc":"2.0","error":{"code":-32000,"message":"invalid token"}}',
+    );
+    expect(f).toEqual({ kind: 'rpc-error', id: 0, code: -32000, message: 'invalid token' });
+    // message-less error object still yields a non-empty message
+    const g = parseExportFrame('{"id":1,"jsonrpc":"2.0","error":{"code":7}}');
+    expect(g.kind).toBe('rpc-error');
+    expect((g as { message: string }).message).toContain('7');
+  });
+
   it('returns other for unparseable, unrelated, or location-less frames', () => {
     expect(parseExportFrame('not json').kind).toBe('other');
     expect(parseExportFrame('{"method":"ping"}').kind).toBe('other');

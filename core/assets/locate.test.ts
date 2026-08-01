@@ -29,6 +29,30 @@ describe('locateKey', () => {
     expect(loc.family).toBeUndefined();
   });
 
+  it('resolves through a JSON key containing a dot (path segments rejoined)', () => {
+    const doc = {
+      lessons: [
+        {
+          title: 'Ch 1',
+          type: 'blocks',
+          items: [
+            {
+              family: 'image',
+              variant: 'hero',
+              id: 'blk-1',
+              'media.custom': { image: { key: 'rise/courses/c1/x.jpg' } },
+            },
+          ],
+        },
+      ],
+    };
+    // The scanner joins with a bare '.', so the dotted key splits into two segs.
+    const loc = locateKey(doc, '$.lessons[0].items[0].media.custom.image.key');
+    expect(loc.lessonTitle).toBe('Ch 1');
+    expect(loc.family).toBe('image');
+    expect(loc.blockId).toBe('blk-1');
+  });
+
   it('formats a compact one-line location', () => {
     expect(
       formatLocation({ lessonTitle: 'Chapter 2', family: 'image', variant: 'hero' }),

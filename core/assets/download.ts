@@ -10,6 +10,7 @@
 import { collectAssetKeys, extFromContentType, extFromKey } from './keys';
 import {
   buildAssetManifest,
+  isOrphanStatus,
   type AssetFailure,
   type AssetManifest,
   type AssetManifestEntry,
@@ -95,8 +96,10 @@ export interface DownloadStats {
   deduped: number;
   /** Keys carried over from a prior manifest without re-fetching (resume). */
   reused: number;
-  /** Keys that failed to download. */
+  /** Keys that failed for retryable (transient/network) reasons. */
   failed: number;
+  /** Keys missing at source (403/404 — terminal, never re-fetched). */
+  orphaned: number;
 }
 
 export interface DownloadResult {
@@ -132,9 +135,44 @@ export interface KeyDownloadResult {
   deduped: number;
 }
 
+/** Content-addressed write-once wrapper over a sink. Two pool lanes can fetch
+ *  identical bytes concurrently; the synchronous `claimed` check makes exactly
+ *  one of them the writer, so written/deduped counters stay truthful. */
+function makeStoreOnce(sink: AssetSink): (name: string, bytes: Uint8Array) => Promise<boolean> {
+  const claimed = new Set<string>();
+  return async (name, bytes) => {
+    if (claimed.has(name)) return false;
+    claimed.add(name);
+    if (await sink.hasAsset(name)) return false;
+    await sink.writeAsset(name, bytes);
+    return true;
+  };
+}
+
+/** `[i/N label] …` progress emitter counting COMPLETIONS (pool lanes finish out
+ *  of input order, so the counter is the only meaningful i). */
+function makeItemProgress(
+  total: number,
+  label: string,
+  onProgress?: (message: string) => void,
+): (message: string) => void {
+  let done = 0;
+  return (message) => {
+    done += 1;
+    onProgress?.(`[${done}/${total} ${label}] ${message}`);
+  };
+}
+
+/** Last path segment of a key/file — the human-readable bit for progress logs. */
+function baseName(keyOrFile: string): string {
+  return keyOrFile.split('/').pop() || keyOrFile;
+}
+
 /**
  * Download a flat list of CDN keys (e.g. typeface fonts under rise/fonts/…) and
  * store them content-addressed via the sink. Parallel pool; dedup by content.
+ * A worker exception (e.g. disk quota on write) is recorded as that key's
+ * failure — it never aborts the other lanes.
  */
 export async function downloadKeyList(
   keys: string[],
@@ -144,21 +182,37 @@ export async function downloadKeyList(
   /** Path prefix recorded in each entry's `file` (where the sink stores it).
    *  Account fonts use `account/assets/`; course media uses `assets/`. */
   filePrefix = 'assets/',
+  opts: {
+    /** Per-item `[i/N label] …` progress line (CLAUDE.md loop convention). */
+    onProgress?: (message: string) => void;
+    /** Unit label in the progress line, e.g. `fonts`. */
+    label?: string;
+  } = {},
 ): Promise<KeyDownloadResult> {
+  const storeOnce = makeStoreOnce(sink);
+  const progress = makeItemProgress(keys.length, opts.label ?? 'keys', opts.onProgress);
+
   const results = await runPool(keys, concurrency, async (key): Promise<PerKeyResult> => {
-    const res = await downloader(key);
-    if (!res.ok || !res.bytes) {
-      return { failure: { key, error: res.error ?? `HTTP ${res.status ?? 0}`, status: res.status } };
+    try {
+      const res = await downloader(key);
+      if (!res.ok || !res.bytes) {
+        const error = res.error ?? `HTTP ${res.status ?? 0}`;
+        progress(`FAILED ${baseName(key)}: ${error}`);
+        return { failure: { key, error, status: res.status } };
+      }
+      const hash = await sha256Hex(res.bytes);
+      const ext = extFromKey(key) || extFromContentType(res.contentType) || 'bin';
+      const name = `${hash}.${ext}`;
+      const wrote = await storeOnce(name, res.bytes);
+      progress(`OK ${baseName(key)} (${wrote ? 'new' : 'deduped'})`);
+      return {
+        wrote,
+        entry: { key, kind: 'media-other', hash, ext, file: `${filePrefix}${name}`, size: res.bytes.byteLength },
+      };
+    } catch (e) {
+      progress(`FAILED ${baseName(key)}: ${String(e)}`);
+      return { failure: { key, error: String(e) } };
     }
-    const hash = await sha256Hex(res.bytes);
-    const ext = extFromKey(key) || extFromContentType(res.contentType) || 'bin';
-    const name = `${hash}.${ext}`;
-    const existed = await sink.hasAsset(name);
-    if (!existed) await sink.writeAsset(name, res.bytes);
-    return {
-      wrote: !existed,
-      entry: { key, kind: 'media-other', hash, ext, file: `${filePrefix}${name}`, size: res.bytes.byteLength },
-    };
   });
 
   const out: KeyDownloadResult = { files: {}, failed: [], written: 0, deduped: 0 };
@@ -196,6 +250,11 @@ interface PerKeyResult {
  *
  * `opts.priorAssets` (from a previous manifest) are reused without re-fetching —
  * this drives cheap resume: a re-run only fetches keys that are new or failed.
+ * A prior entry is trusted ONLY if its blob is still in the sink; a lost blob
+ * is re-downloaded rather than re-declared complete. `opts.priorOrphans`
+ * (403/404 at source — terminal) are carried into `failed` without re-fetching.
+ * A worker exception (e.g. disk quota) is recorded as that key's failure and
+ * never aborts the other lanes.
  */
 export async function downloadAssetsFor(
   ownerType: OwnerType,
@@ -207,47 +266,73 @@ export async function downloadAssetsFor(
     concurrency?: number;
     generatedAt?: string;
     priorAssets?: AssetManifestEntry[];
+    /** Prior orphan failures (isOrphanStatus) — kept, never re-attempted. */
+    priorOrphans?: AssetFailure[];
+    /** Per-item `[i/N assets] …` progress line (CLAUDE.md loop convention). */
+    onProgress?: (message: string) => void;
   } = {},
 ): Promise<DownloadResult> {
   const collected = collectAssetKeys(doc, ownerId);
   const reuse = new Map((opts.priorAssets ?? []).map((e) => [e.key, e]));
+  const knownOrphans = new Map((opts.priorOrphans ?? []).map((f) => [f.key, f]));
+  const storeOnce = makeStoreOnce(sink);
+  const progress = makeItemProgress(collected.length, 'assets', opts.onProgress);
 
   const perKey = await runPool(
     collected,
     opts.concurrency ?? DEFAULT_CONCURRENCY,
     async (ak): Promise<PerKeyResult> => {
-      const prior = reuse.get(ak.key);
-      if (prior) return { entry: prior, reused: true };
+      try {
+        const orphan = knownOrphans.get(ak.key);
+        if (orphan) {
+          progress(`ORPHAN ${baseName(ak.key)} (missing at source, not retried)`);
+          return { failure: { ...orphan, paths: ak.paths } };
+        }
 
-      const res = await downloader(ak.key);
-      if (!res.ok || !res.bytes) {
+        const prior = reuse.get(ak.key);
+        if (prior && (await sink.hasAsset(baseName(prior.file)))) {
+          progress(`OK ${baseName(ak.key)} (reused)`);
+          return { entry: prior, reused: true };
+        }
+        // No prior entry — or its blob vanished from the store — so download.
+
+        const res = await downloader(ak.key);
+        if (!res.ok || !res.bytes) {
+          const error = res.error ?? `HTTP ${res.status ?? 0}`;
+          progress(
+            `${isOrphanStatus(res.status) ? 'ORPHAN' : 'FAILED'} ${baseName(ak.key)}: ${error}`,
+          );
+          return {
+            failure: {
+              key: ak.key,
+              error,
+              status: res.status,
+              urlTried: res.urlTried,
+              paths: ak.paths,
+            },
+          };
+        }
+        const bytes = res.bytes;
+        const hash = await sha256Hex(bytes);
+        const ext = extFromKey(ak.key) || extFromContentType(res.contentType) || 'bin';
+        const name = `${hash}.${ext}`;
+        const wrote = await storeOnce(name, bytes);
+        progress(`OK ${baseName(ak.key)} (${wrote ? 'new' : 'deduped'})`);
         return {
-          failure: {
+          wrote,
+          entry: {
             key: ak.key,
-            error: res.error ?? `HTTP ${res.status ?? 0}`,
-            status: res.status,
-            urlTried: res.urlTried,
-            paths: ak.paths,
+            kind: ak.kind,
+            hash,
+            ext,
+            file: `assets/${name}`,
+            size: bytes.byteLength,
           },
         };
+      } catch (e) {
+        progress(`FAILED ${baseName(ak.key)}: ${String(e)}`);
+        return { failure: { key: ak.key, error: String(e), paths: ak.paths } };
       }
-      const bytes = res.bytes;
-      const hash = await sha256Hex(bytes);
-      const ext = extFromKey(ak.key) || extFromContentType(res.contentType) || 'bin';
-      const name = `${hash}.${ext}`;
-      const existed = await sink.hasAsset(name);
-      if (!existed) await sink.writeAsset(name, bytes);
-      return {
-        wrote: !existed,
-        entry: {
-          key: ak.key,
-          kind: ak.kind,
-          hash,
-          ext,
-          file: `assets/${name}`,
-          size: bytes.byteLength,
-        },
-      };
     },
   );
 
@@ -256,6 +341,7 @@ export async function downloadAssetsFor(
   let written = 0;
   let deduped = 0;
   let reused = 0;
+  let orphaned = 0;
   for (const r of perKey) {
     if (r.entry) {
       assets.push(r.entry);
@@ -264,6 +350,7 @@ export async function downloadAssetsFor(
       else deduped += 1;
     } else if (r.failure) {
       failed.push(r.failure);
+      if (isOrphanStatus(r.failure.status)) orphaned += 1;
     }
   }
 
@@ -281,7 +368,8 @@ export async function downloadAssetsFor(
       written,
       deduped,
       reused,
-      failed: failed.length,
+      failed: failed.length - orphaned,
+      orphaned,
     },
   };
 }

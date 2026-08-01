@@ -18,8 +18,16 @@ export const WS_EXPORT_URL = 'wss://ws.eu.articulate.com/';
 /** Plane-aware ws.eu/ws completion host. The export job runs on whichever plane
  *  the source Rise tab is on, and `package:success` is pushed to THAT plane's
  *  socket — so a US export must listen on `wss://ws.articulate.com/`, not the EU
- *  host. (US drops the `.eu` infix, mirroring every other Articulate host.) */
+ *  host. (US drops the `.eu` infix, mirroring every other Articulate host.)
+ *  An unknown plane is a LOUD error, not a default: it means we couldn't read
+ *  the Rise tab's URL, and defaulting to EU would silently wait the full export
+ *  budget on the wrong host. */
 export function wsExportUrlForPlane(plane: 'us' | 'eu' | null | undefined): string {
+  if (plane !== 'us' && plane !== 'eu') {
+    throw new Error(
+      'Rise plane unknown (no Rise tab URL) — cannot pick the export completion host. Open a logged-in Rise tab (US or EU) and retry.',
+    );
+  }
   return plane === 'us' ? 'wss://ws.articulate.com/' : 'wss://ws.eu.articulate.com/';
 }
 
@@ -157,8 +165,18 @@ export function awaitExportLocation(opts: AwaitExportOpts): Promise<ExportLocati
         done(() =>
           reject(new Error(`Rise export socket: package error (${frame.type})${frame.message ? `: ${frame.message}` : ''}`)),
         );
+      } else if (frame.kind === 'rpc-error') {
+        // The server refused a request (in practice: `identify` on a bad/stale
+        // token). Fail fast with ITS message — don't burn the identify timeout.
+        done(() =>
+          reject(
+            new Error(
+              `Rise export socket: server error${frame.code !== undefined ? ` ${frame.code}` : ''}: ${frame.message}${identified ? '' : ' (identify refused — token likely stale)'}`,
+            ),
+          ),
+        );
       }
-      // 'identified' / 'other' — keep waiting.
+      // 'other' (and a repeat 'identified') — keep waiting.
     });
 
     ws.addEventListener('error', () => {

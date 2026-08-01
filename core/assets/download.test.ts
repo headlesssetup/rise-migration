@@ -59,6 +59,30 @@ describe('downloadKeyList', () => {
     expect(res.files['rise/fonts/u/a-Bold.woff']).toBe(`assets/${hash}.woff`);
     expect(sink.files.size).toBe(1);
   });
+
+  it('emits labeled [i/N] progress and records worker exceptions as failures', async () => {
+    const sink = memSink();
+    const lines: string[] = [];
+    const dl: Downloader = async (key) => {
+      if (key.endsWith('boom.woff')) throw new Error('quota');
+      return { ok: true, status: 200, bytes: enc('F') };
+    };
+    const res = await downloadKeyList(
+      ['rise/fonts/u/ok.woff', 'rise/fonts/u/boom.woff'],
+      sink,
+      dl,
+      undefined,
+      'account/assets/',
+      { label: 'fonts', onProgress: (m) => lines.push(m) },
+    );
+    expect(res.written).toBe(1);
+    expect(res.failed).toEqual([
+      { key: 'rise/fonts/u/boom.woff', error: 'Error: quota' },
+    ]);
+    expect(lines[0]).toMatch(/^\[1\/2 fonts\] /);
+    expect(lines[1]).toMatch(/^\[2\/2 fonts\] /);
+    expect(lines.some((l) => l.includes('FAILED boom.woff'))).toBe(true);
+  });
 });
 
 describe('keyPathCandidates', () => {
@@ -157,11 +181,12 @@ describe('downloadAssetsFor', () => {
       fakeDownloader({
         'rise/courses/c1/one.jpg': enc('A'),
         'rise/courses/c1/two.jpg': enc('B'),
-        // clip.mp4 omitted → 404
+        // clip.mp4 omitted → 404 → terminal orphan (missing at source)
       }),
     );
 
-    expect(manifest.complete).toBe(false);
+    expect(manifest.complete).toBe(true); // complete w.r.t. DOWNLOADABLE keys
+    expect(manifest.orphanCount).toBe(1);
     expect(manifest.failed.map((f) => f.key)).toEqual(['rise/courses/c1/clip.mp4']);
 
     const collected = [
@@ -194,6 +219,7 @@ describe('downloadAssetsFor', () => {
 
   it('reuses prior manifest entries without re-fetching (resume)', async () => {
     const sink = memSink();
+    sink.files.set('deadbeef.jpg', enc('OLD')); // the prior blob is still stored
     // Downloader serves only clip.mp4; one.jpg would 404 if it were fetched.
     const dl = fakeDownloader({ 'rise/courses/c1/clip.mp4': enc('VID') });
     const prior = [
@@ -223,5 +249,159 @@ describe('downloadAssetsFor', () => {
     expect(
       manifest.assets.find((a) => a.key.endsWith('one.jpg'))?.hash,
     ).toBe('deadbeef');
+  });
+
+  it('re-downloads a prior entry whose blob vanished from the store (no blind trust)', async () => {
+    const sink = memSink(); // empty: the prior blob was lost/deleted
+    const bytes = enc('FRESH');
+    const dl = fakeDownloader({ 'rise/courses/c1/one.jpg': bytes });
+    const prior = [
+      {
+        key: 'rise/courses/c1/one.jpg',
+        kind: 'media-image' as const,
+        hash: 'deadbeef',
+        ext: 'jpg',
+        file: 'assets/deadbeef.jpg',
+        size: 3,
+      },
+    ];
+    const { manifest, stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      { a: { media: { image: { key: 'rise/courses/c1/one.jpg' } } } },
+      sink,
+      dl,
+      { priorAssets: prior },
+    );
+    expect(stats.reused).toBe(0);
+    expect(stats.written).toBe(1); // fetched again, bytes really stored
+    expect(sink.files.size).toBe(1);
+    expect(manifest.complete).toBe(true);
+    expect(manifest.assets[0]?.hash).toBe(await sha256Hex(bytes));
+  });
+
+  it('records a pool-worker exception as that key\'s failure without aborting the run', async () => {
+    const sink = memSink();
+    const ok = enc('OK');
+    const dl: Downloader = async (key) => {
+      if (key.endsWith('boom.jpg')) throw new Error('disk quota exceeded');
+      return { ok: true, status: 200, bytes: ok };
+    };
+    const { manifest, stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      {
+        a: { media: { image: { key: 'rise/courses/c1/boom.jpg' } } },
+        b: { media: { image: { key: 'rise/courses/c1/fine.jpg' } } },
+      },
+      sink,
+      dl,
+    );
+    expect(stats.written).toBe(1); // the healthy key still landed
+    expect(stats.failed).toBe(1);
+    const failure = manifest.failed[0];
+    expect(failure?.key).toBe('rise/courses/c1/boom.jpg');
+    expect(failure?.error).toContain('disk quota exceeded');
+    expect(manifest.complete).toBe(false); // an exception is retryable, not orphaned
+  });
+
+  it('carries prior orphans forward without re-fetching; manifest stays complete', async () => {
+    const sink = memSink();
+    const fetched: string[] = [];
+    const dl: Downloader = async (key) => {
+      fetched.push(key);
+      return { ok: true, status: 200, bytes: enc('OK') };
+    };
+    const { manifest, stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      {
+        a: { media: { image: { key: 'rise/courses/c1/gone.jpg' } } },
+        b: { media: { image: { key: 'rise/courses/c1/fine.jpg' } } },
+      },
+      sink,
+      dl,
+      {
+        priorOrphans: [
+          { key: 'rise/courses/c1/gone.jpg', error: 'HTTP 403', status: 403 },
+        ],
+      },
+    );
+    expect(fetched).toEqual(['rise/courses/c1/fine.jpg']); // orphan never retried
+    expect(stats.orphaned).toBe(1);
+    expect(stats.failed).toBe(0); // orphans are counted apart from retryable failures
+    expect(manifest.orphanCount).toBe(1);
+    expect(manifest.failed.map((f) => f.key)).toEqual(['rise/courses/c1/gone.jpg']);
+    expect(manifest.complete).toBe(true); // complete w.r.t. downloadable keys
+  });
+
+  it('counts a fresh 403/404 as orphaned, still complete w.r.t. downloadable keys', async () => {
+    const sink = memSink();
+    const { manifest, stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      { a: { media: { image: { key: 'rise/courses/c1/gone.jpg' } } } },
+      sink,
+      fakeDownloader({}), // every key 404s
+    );
+    expect(stats.orphaned).toBe(1);
+    expect(stats.failed).toBe(0);
+    expect(manifest.complete).toBe(true);
+    expect(manifest.orphanCount).toBe(1);
+  });
+
+  it('emits [i/N assets] progress for every key, in completion order', async () => {
+    const sink = memSink();
+    const lines: string[] = [];
+    await downloadAssetsFor(
+      'course',
+      'c1',
+      {
+        a: { media: { image: { key: 'rise/courses/c1/one.jpg' } } },
+        c: { media: { video: { key: 'rise/courses/c1/clip.mp4' } } },
+      },
+      sink,
+      fakeDownloader({ 'rise/courses/c1/one.jpg': enc('A') }), // clip 404s
+      { onProgress: (m) => lines.push(m) },
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^\[1\/2 assets\] /);
+    expect(lines[1]).toMatch(/^\[2\/2 assets\] /);
+    expect(lines.some((l) => l.includes('OK one.jpg'))).toBe(true);
+    expect(lines.some((l) => l.includes('ORPHAN clip.mp4'))).toBe(true); // 404 → orphan
+  });
+
+  it('counts written/deduped truthfully when two lanes race on identical bytes', async () => {
+    const bytes = enc('SAME-BYTES');
+    const files = new Map<string, Uint8Array>();
+    const tick = () => new Promise((r) => setTimeout(r, 2));
+    // A slow sink forces both lanes past hasAsset() before either write lands.
+    const slowSink: AssetSink = {
+      async hasAsset(name) {
+        await tick();
+        return files.has(name);
+      },
+      async writeAsset(name, b) {
+        await tick();
+        files.set(name, b);
+      },
+    };
+    const { stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      {
+        a: { media: { image: { key: 'rise/courses/c1/a.jpg' } } },
+        b: { media: { image: { key: 'rise/courses/c1/b.jpg' } } },
+      },
+      slowSink,
+      fakeDownloader({
+        'rise/courses/c1/a.jpg': bytes,
+        'rise/courses/c1/b.jpg': bytes,
+      }),
+      { concurrency: 2 },
+    );
+    expect(files.size).toBe(1);
+    expect(stats.written).toBe(1); // exactly one lane is the writer
+    expect(stats.deduped).toBe(1);
   });
 });

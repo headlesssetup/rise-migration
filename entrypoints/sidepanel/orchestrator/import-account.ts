@@ -15,11 +15,12 @@ import {
   s3Put,
   createTypeface,
   type AccountIdentity,
+  type Relay,
   type Typeface,
 } from '@/core/import';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
-import { rpc } from '../rpc';
+import type { TabPin } from '@/shared/messaging';
 import { extractItems, type ProgressEvent } from './shared';
 import {
   readSourceIdentity,
@@ -27,9 +28,11 @@ import {
   setupFolders,
   fetchTargetTypefaces,
   makeFontReader,
+  makePinnedRelay,
+  pinnedRpc,
+  pinTargetTab,
   readFontManifest,
   writeAccountIdMap,
-  relayThroughTab,
   safeJson,
 } from './import-shared';
 
@@ -44,10 +47,12 @@ function payloadOf(text: string): Record<string, unknown> {
 }
 
 /** A course id valid on the LIVE target account — the context GET_YURL/CREATE_*
- *  need (a just-created course 404s). Page-0 of the target library. */
-async function liveTargetCourseId(): Promise<string | undefined> {
+ *  need (a just-created course 404s). Page-0 of the target library. Pinned with
+ *  the run: read unpinned it could return a SOURCE course id, and every font
+ *  upload anchored to it would then be issued against the wrong account. */
+async function liveTargetCourseId(pin?: TabPin): Promise<string | undefined> {
   try {
-    const resp = await rpc({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+    const resp = await pinnedRpc(pin)({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
     if (resp.type === 'SEARCH_RESULT' && resp.result.ok) {
       return extractItems(resp.result.data)[0]?.id;
     }
@@ -145,16 +150,27 @@ export async function importAccountSettings(
     message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} account settings → ${target?.name ?? 'unknown target'}`,
   });
 
+  // Pin this operation to ONE target tab before anything touches the network:
+  // folder creation and the font GET_YURL/CREATE_TYPEFACE writes below would
+  // otherwise follow window focus into the source account. A live run that can't
+  // be pinned is BLOCKED; a dry run only reads, so it proceeds with a warning.
+  const { pin, blocked } = await pinTargetTab(target, onEvent);
+  if (blocked && !opts.dryRun) {
+    onEvent({ kind: 'log', message: `BLOCKED: ${blocked}` });
+    return { blocked };
+  }
+  if (blocked) onEvent({ kind: 'log', message: `WARN ${blocked} — dry run continues (reads only)` });
+
   // Start on a fresh bearer (idle panels lapse the ~15 min token).
-  await refreshToken(onEvent, 'run start');
+  await refreshToken(onEvent, 'run start', pin);
 
   // Folders (always included in this step).
-  const folderIdMap = await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
+  const folderIdMap = await setupFolders(storage, target, opts.dryRun, pacing, onEvent, pin);
 
   // Custom fonts (uploaded once, account-level).
   const tfRaw = await storage.readTypefaces();
   const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map<string, Typeface>();
-  const targetTypefaces = await fetchTargetTypefaces(onEvent);
+  const targetTypefaces = await fetchTargetTypefaces(onEvent, pin);
   const readFontBytes = makeFontReader(storage, await readFontManifest(storage));
   const fonts = await importAccountFonts({
     sourceTypefaces,
@@ -163,6 +179,8 @@ export async function importAccountSettings(
     dryRun: opts.dryRun,
     pacing,
     onEvent,
+    pin,
+    relay: makePinnedRelay(pin),
   });
 
   // Persist for B/C (and re-runs).
@@ -188,8 +206,13 @@ async function importAccountFonts(args: {
   dryRun: boolean;
   pacing: PacingConfig;
   onEvent: (e: ProgressEvent) => void;
+  /** The run's tab pin (see pinTargetTab) — every write below must carry it. */
+  pin?: TabPin;
+  /** Relay bound to `pin`; the caller builds it so there is ONE pinned relay per run. */
+  relay: Relay;
 }): Promise<{ idMap: Map<string, string>; matched: number; created: number; unresolved: number }> {
-  const { sourceTypefaces, targetTypefaces, readFontBytes, dryRun, pacing, onEvent } = args;
+  const { sourceTypefaces, targetTypefaces, readFontBytes, dryRun, pacing, onEvent, pin, relay } =
+    args;
   const allIds = [...sourceTypefaces.keys()];
   const { idMap, toRecreate, unresolved } = resolveTypefaces(
     allIds,
@@ -214,7 +237,7 @@ async function importAccountFonts(args: {
   }
 
   onEvent({ kind: 'log', message: `Creating ${total} custom typeface(s)…` });
-  const courseId = await liveTargetCourseId();
+  const courseId = await liveTargetCourseId(pin);
   if (!courseId) {
     onEvent({ kind: 'log', message: 'WARN no live target course to anchor font uploads — skipping font creation' });
     return { idMap, matched, created: 0, unresolved: unresolved.length };
@@ -226,7 +249,7 @@ async function importAccountFonts(args: {
     for (const f of tf.fonts) {
       const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
       await pacedDelay(pacing);
-      const yresp = await relayThroughTab(getYurl({ courseId, filename, assetPath: 'fonts/' }));
+      const yresp = await relay(getYurl({ courseId, filename, assetPath: 'fonts/' }));
       onEvent({ kind: 'log', message: `${pfx} ${yresp.ok ? 'OK' : 'FAIL'} POST rise/uploads/GET_YURL` });
       if (!yresp.ok) {
         onEvent({ kind: 'log', message: `${pfx} WARN GET_YURL failed for "${tf.name}" (HTTP ${yresp.status}) — skipping this file` });
@@ -241,7 +264,7 @@ async function importAccountFonts(args: {
         onEvent({ kind: 'log', message: `${pfx} WARN missing archived font bytes for ${f.key} (skipping)` });
         continue;
       }
-      const put = await relayThroughTab(s3Put({ url, base64Body: bytes.base64, contentType: type }));
+      const put = await relay(s3Put({ url, base64Body: bytes.base64, contentType: type }));
       onEvent({ kind: 'log', message: `${pfx} ${put.ok ? 'OK' : 'FAIL'} PUT S3 (font bytes)` });
       if (!put.ok) {
         onEvent({ kind: 'log', message: `${pfx} WARN font S3 PUT failed for "${tf.name}" (HTTP ${put.status})` });
@@ -255,7 +278,7 @@ async function importAccountFonts(args: {
     }
     await pacedDelay(pacing);
     const cresp = payloadOf(
-      (await relayThroughTab(createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }))).text,
+      (await relay(createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }))).text,
     );
     const newId = String(cresp.id ?? '');
     if (newId) {

@@ -43,6 +43,8 @@ export function ImportView({
   addLog,
   logBreak,
   onStatus,
+  running,
+  setRunning,
 }: {
   storage: Storage | null;
   session: SessionState | null;
@@ -51,11 +53,18 @@ export function ImportView({
   logBreak: (label?: string) => void;
   /** Live import status for the log-header countdown. */
   onStatus?: (e: Extract<ProgressEvent, { kind: 'import-status' }>) => void;
+  /** A run is in flight. Owned by App (not this component) so an accidental
+   *  mode-tab click can't unmount a live run into a detached closure — App gates
+   *  the mode tabs and every export action on it. */
+  running: boolean;
+  setRunning: (b: boolean) => void;
 }) {
   const [source, setSource] = useState<AccountIdentity | undefined>(undefined);
   const [confirmTarget, setConfirmTarget] = useState(false);
   const [override, setOverride] = useState(false);
-  const [running, setRunning] = useState(false);
+  // Course selection lives here, not in CoursesSection: step D scopes the
+  // Review-360 upload to the same courses the operator picked for import.
+  const [courseSelection, setCourseSelection] = useState<Set<string>>(new Set());
 
   // Graceful Stop: a ref (read synchronously by the orchestrator's shouldStop)
   // plus a state mirror so the Stop button can show "Stopping…". `reset()` is
@@ -205,6 +214,8 @@ export function ImportView({
         onEvent={onEvent}
         logBreak={logBreak}
         stop={stop}
+        selected={courseSelection}
+        setSelected={setCourseSelection}
       />
       <StorylineUploadSection
         storage={storage}
@@ -213,6 +224,7 @@ export function ImportView({
         setRunning={setRunning}
         onEvent={onEvent}
         logBreak={logBreak}
+        selected={courseSelection}
       />
     </section>
   );
@@ -315,6 +327,11 @@ function AccountSettingsSection({
           onEvent,
         );
         if (res.summary) setSummary(res.summary);
+      } catch (e) {
+        onEvent({
+          kind: 'log',
+          message: `FAILED — account settings: ${e instanceof Error ? e.message : String(e)}`,
+        });
       } finally {
         setRunning(false);
       }
@@ -407,6 +424,11 @@ function BanksSection({
           onEvent,
         );
         setOutcomes(res.outcomes);
+      } catch (e) {
+        onEvent({
+          kind: 'log',
+          message: `FAILED — question banks: ${e instanceof Error ? e.message : String(e)}`,
+        });
       } finally {
         setRunning(false);
       }
@@ -487,9 +509,13 @@ function CoursesSection({
   onEvent,
   stop,
   logBreak,
-}: SectionProps) {
+  selected,
+  setSelected,
+}: SectionProps & {
+  selected: Set<string>;
+  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>;
+}) {
   const [courses, setCourses] = useState<ArchiveCourse[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
   const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -545,6 +571,11 @@ function CoursesSection({
         );
         if (res.blocked) setBlocked(res.blocked);
         setOutcomes(res.outcomes);
+      } catch (e) {
+        onEvent({
+          kind: 'log',
+          message: `FAILED — course import: ${e instanceof Error ? e.message : String(e)}`,
+        });
       } finally {
         setRunning(false);
       }
@@ -618,6 +649,7 @@ function StorylineUploadSection({
   setRunning,
   onEvent,
   logBreak,
+  selected,
 }: {
   storage: Storage | null;
   liveOk: boolean;
@@ -625,33 +657,48 @@ function StorylineUploadSection({
   setRunning: (b: boolean) => void;
   onEvent: (e: ProgressEvent) => void;
   logBreak: (label?: string) => void;
+  /** The step-C course selection — scopes this upload the same way. */
+  selected: Set<string>;
 }) {
   const go = useCallback(async () => {
     if (!storage) return;
     logBreak('Upload storyline packages → Review 360');
     setRunning(true);
     try {
-      const s = await uploadStorylineToReview360(storage, onEvent);
+      // Scope to the courses picked in C so the operator can test 1-2 of many;
+      // with nothing selected this stays the previous "every staged manifest".
+      const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
+      const s = await uploadStorylineToReview360(storage, onEvent, { onlyCourseIds });
       onEvent({
         kind: 'log',
         message: `Done: ${s.uploaded} uploaded, ${s.skipped} skipped, ${s.failed} failed${s.notAttempted ? `, ${s.notAttempted} not attempted` : ''}.`,
       });
+    } catch (e) {
+      onEvent({
+        kind: 'log',
+        message: `FAILED — storyline upload: ${e instanceof Error ? e.message : String(e)}`,
+      });
     } finally {
       setRunning(false);
     }
-  }, [storage, onEvent, logBreak, setRunning]);
+  }, [storage, onEvent, logBreak, setRunning, selected]);
 
   return (
     <CollapsibleStep title="D · Storyline → Review 360" defaultOpen={false}>
       <p className="hint">
-        Uploads every staged package (storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip) to the
+        Uploads the staged packages (storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip) for the
+        courses <b>selected in C</b> — or every staged package if none are selected — to the
         <b> target</b> account's Review 360 over socket.io, then records each
         review/items/&lt;leaf&gt; prefix back into the course manifest — the join key the course
         import uses to attach Storyline blocks. Run on the target tab. Resumable (skips packages
         already uploaded).
       </p>
       <button onClick={go} disabled={!liveOk || running}>
-        {running ? 'Uploading…' : 'Upload staged packages'}
+        {running
+          ? 'Uploading…'
+          : selected.size > 0
+            ? `Upload staged packages (${selected.size} selected)`
+            : 'Upload staged packages (ALL staged)'}
       </button>
     </CollapsibleStep>
   );

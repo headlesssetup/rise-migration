@@ -57,13 +57,30 @@ export async function fetchQuestionBanks(
   let saved = 0;
   let didNetwork = false;
 
+  let skipped = 0;
+
   for (const [i, b] of banks.entries()) {
     onEvent({ kind: 'course', index: i, total: banks.length, courseId: b.id });
+
+    // Resume: already on disk → don't touch the archived file again (mirrors
+    // the courses hasCourse skip; the source account is frozen mid-migration).
+    if (await storage.hasQuestionBank(b.id)) {
+      skipped += 1;
+      onEvent({
+        kind: 'log',
+        message: `[${i + 1}/${banks.length} banks] Skipped (already saved): ${b.title ?? b.id}`,
+      });
+      continue;
+    }
 
     // The list already carries questions inline — save directly, no fetch.
     if (hasInlineQuestions(b.doc)) {
       await storage.writeQuestionBank(b.id, JSON.stringify(b.doc));
       saved += 1;
+      onEvent({
+        kind: 'log',
+        message: `[${i + 1}/${banks.length} banks] Saved bank: ${b.title ?? b.id}`,
+      });
       continue;
     }
 
@@ -73,14 +90,20 @@ export async function fetchQuestionBanks(
     const resp = await rpc({ type: 'GET_QUESTION_BANK', bankId: b.id });
     if (resp.type !== 'BANK_RESULT' || !resp.result.ok) {
       failed.push(b.id);
-      onEvent({ kind: 'log', message: `Failed bank ${b.id}` });
+      onEvent({
+        kind: 'log',
+        message: `[${i + 1}/${banks.length} banks] Failed bank ${b.id}`,
+      });
       continue;
     }
     await storage.writeQuestionBank(b.id, resp.result.data.raw);
     saved += 1;
-    onEvent({ kind: 'log', message: `Saved bank: ${b.title ?? b.id}` });
+    onEvent({
+      kind: 'log',
+      message: `[${i + 1}/${banks.length} banks] Saved bank: ${b.title ?? b.id}`,
+    });
   }
-  return { bankCount: banks.length, saved, skipped: 0, failed };
+  return { bankCount: banks.length, saved, skipped, failed };
 }
 
 /** Load every saved question bank from disk for profiling. */

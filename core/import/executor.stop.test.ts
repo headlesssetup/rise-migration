@@ -51,6 +51,34 @@ describe('executePlan — graceful stop marks the partial course title', () => {
     expect(titleSet).toBe('!unfinished: My Course');
   });
 
+  it('paces the stop-path title write like any other authoring write (8a)', async () => {
+    const input = simpleCourse();
+    const steps = buildPlan(input);
+    // Record the interleaving of paced gaps and relayed writes.
+    const events: string[] = [];
+    const { relay } = mockRelay(happyHandlers);
+    const tracingRelay: typeof relay = async (spec) => {
+      events.push(`relay:${spec.label}`);
+      return relay(spec);
+    };
+    let checks = 0;
+    const res = await executePlan(steps, {
+      input,
+      relay: tracingRelay,
+      readAsset: async () => ({ base64: '', contentType: '' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+      pace: async () => {
+        events.push('pace');
+      },
+      shouldStop: () => ++checks > 1, // stop right after the course shell exists
+    });
+    expect(res.stopped).toBe(true);
+    const titleIdx = events.findIndex((e) => e.includes('UPDATE_COURSE_FIELD_THROTTLE'));
+    expect(titleIdx).toBeGreaterThan(0);
+    expect(events[titleIdx - 1]).toBe('pace'); // the write was paced, not fired raw
+  });
+
   it('does not amend when no course was created yet (stop at step 1)', async () => {
     const input = simpleCourse();
     const steps = buildPlan(input);

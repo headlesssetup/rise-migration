@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { etaStatus } from './shared';
+import { MAX_PAGES, etaStatus, pageCapWarning } from './shared';
 
 describe('etaStatus', () => {
   it('returns null ETA until there is signal (>2% done AND >3s elapsed)', () => {
@@ -18,5 +18,16 @@ describe('etaStatus', () => {
 
   it('clamps the fraction to [0,1]', () => {
     expect(etaStatus({ label: 'x', doneFraction: 1.5, runStartMs: 0, nowMs: 10_000 }).etaSeconds).toBe(0);
+  });
+});
+
+describe('pageCapWarning', () => {
+  it('is a loud log event naming the cap and the truncation risk', () => {
+    const e = pageCapWarning(3200);
+    expect(e.kind).toBe('log');
+    expect(e.message).toContain('⚠');
+    expect(e.message).toContain(String(MAX_PAGES));
+    expect(e.message).toContain('3200');
+    expect(e.message).toMatch(/NOT listed/);
   });
 });

@@ -34,6 +34,36 @@ describe('webStoryHtmlToReview360', () => {
   it('preserves CRLF line endings', () => {
     expect(webStoryHtmlToReview360(WEB)).toContain('\r\n');
   });
+
+  // Loud-failure guard (M14): the transform is two exact-string replaces, so a
+  // new player version with slightly different markup would silently no-op both
+  // and we'd upload a story.html still pointing at ../../lib/player-interface.js.
+  it('throws loudly when the player script markup drifted (replace no-ops)', () => {
+    // attribute order changed → the exact-string replace no longer matches
+    const drifted = WEB.replace(
+      '<script id="360-player-interface" type="text/javascript" src="../../lib/player-interface.js"></script>',
+      '<script type="text/javascript" id="360-player-interface" src="../../lib/player-interface.js"></script>',
+    );
+    expect(drifted).not.toBe(WEB); // fixture sanity: the drift actually applied
+    expect(() => webStoryHtmlToReview360(drifted)).toThrow(/Rise export format changed/);
+    expect(() => webStoryHtmlToReview360(drifted)).toThrow(/player marker is missing/);
+  });
+
+  it('throws loudly when the robots meta drifted (survives the exact replace)', () => {
+    const drifted = WEB.replace(
+      '<meta name="robots" content="noindex, nofollow">',
+      '<meta content="noindex, nofollow" name="robots">',
+    );
+    expect(drifted).not.toBe(WEB);
+    expect(() => webStoryHtmlToReview360(drifted)).toThrow(/Rise export format changed/);
+    expect(() => webStoryHtmlToReview360(drifted)).toThrow(/robots meta tag survived/);
+  });
+
+  it('throws on markup that is neither web-export nor Review-360 form', () => {
+    expect(() => webStoryHtmlToReview360('<html><head></head></html>')).toThrow(
+      /Rise export format changed/,
+    );
+  });
 });
 
 describe('isReview360StoryHtml', () => {

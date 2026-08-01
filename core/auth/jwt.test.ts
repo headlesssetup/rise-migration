@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeJwt, identityFromToken, isExpired } from './jwt';
+import { decodeJwt, identityFromToken } from './jwt';
 
 // Build a fake JWT: header.payload.signature (base64url, unsigned — decode only).
 function makeJwt(claims: Record<string, unknown>): string {
@@ -53,10 +53,10 @@ describe('jwt', () => {
     expect(id?.sub).toBe('auth0|xyz');
   });
 
-  it('detects expiry', () => {
-    const id = identityFromToken(makeJwt({ exp: 1000 }));
-    expect(isExpired(id, 2000 * 1000)).toBe(true);
-    expect(isExpired(id, 0)).toBe(false);
-    expect(isExpired(null)).toBe(false);
+  // Expiry decisions live where the bearer does (the background keys them per
+  // plane and treats "no token" as expiring), so Identity only carries the ms-epoch.
+  it('exposes expiry as ms-epoch for the caller to judge', () => {
+    expect(identityFromToken(makeJwt({ exp: 1000 }))?.expiresAt).toBe(1_000_000);
+    expect(identityFromToken(makeJwt({ sub: 'u' }))?.expiresAt).toBeUndefined();
   });
 });

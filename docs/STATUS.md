@@ -1,10 +1,112 @@
 # Project Status
 
-_Last updated: 2026-06-20 (Phase 3 import core landed on a branch). Keep this current at each phase boundary._
+_Last updated: 2026-07-31 (Storyline Stage D built; full-codebase audit fixed). Keep this current at each phase boundary._
 
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
 `docs/rise-question-banks.md`, `docs/rise-folders.md`.
+
+> **Reading note.** The per-phase sections below are a HISTORICAL record, written
+> at each phase boundary and largely left as-is. Where a later phase or the audit
+> changed a behavior they describe, this top section wins. Current: **v0.4.0**,
+> **468 Vitest tests**, `compile` / `test` green.
+
+## Phase 5 — Storyline/Mighty end-to-end (Stage D): BUILT, needs live verification
+
+**This supersedes the old "placeholders only / never touch Review 360" policy**
+(CLAUDE.md is updated). Storyline + Mighty blocks now migrate for real:
+
+- **Export-D** (`core/storyline/{detect,ws-export,ws-export-client,package-zip,repackage,md5}.ts`,
+  `orchestrator/storyline.ts`) — detect storyline blocks → Rise **web export**
+  over the plane's ws-distributor (`identify` → `build` → `package:success`
+  carries the zip location) → download → extract each block's
+  `content/assets/{leaf}/` subtree → convert `story.html` from web-export to
+  Review-360 manual-upload form → stage a per-leaf zip + manifest.
+- **Import-D** (`core/storyline/{review-protocol,review-socket-client}.ts`) —
+  upload each staged zip to the **TARGET** Review 360 over socket.io
+  (`items:create` → `yurl:get` presigned S3 PUT → `items:update` →
+  `items:upload`) then poll `items:get` for `contentPrefix`; the executor
+  attaches it with `copy_review_item` + a `media.storyline` patch. Items are only
+  ever CREATED in the target; the source account's Review 360 is never written.
+- Plane-aware throughout (a **null plane is a loud error**, never an EU default).
+  A block whose bundle can't be obtained stays a copy-faithful **placeholder**.
+
+**Known ceiling:** the upload rides the zip through a base64 `runtime.sendMessage`
+hop, so a package over **48 MB** fails a loud pre-flight check
+(`MAX_UPLOAD_ZIP_BYTES`, `orchestrator/storyline.ts`). Investigated and confirmed
+fixable: the `yurl:get` URL is a plain presigned S3 PUT (`noAuth`, no cookies) and
+the zip is immutable after `items:create` (the server signs against the md5 sent
+before any bytes move), so the panel can PUT it directly like course assets do —
+lifting the ceiling to the ~350 MB memory bound. Needs a begin/commit split of
+`STORYLINE_UPLOAD` (SW holds the socket + returns the presigned URL, panel PUTs,
+SW finishes update/upload/poll); `createdAt` must be threaded through, since
+`items:create` and `items:update` require the identical value. See `TODO(H5)`.
+
+**Follow-up (memory):** `unzipToMap` inflates EVERY entry of the web export
+(the whole course's media) to use one leaf subtree. fflate's `unzipSync` `filter`
+option would inflate only the wanted leaves + `runtime-data.js`; a side-effecting
+filter can still record the full inventory for the mismatch diagnostic.
+
+## Full-codebase audit (2026-07-31): findings fixed
+
+Five parallel subsystem reviews (auth/background, import, export/census/assets,
+storyline, side panel). Baseline was green but hid **five critical** defects. All
+fixed on this branch, each with regression tests (344 → 468 tests). The ones that
+change operator-visible behavior:
+
+- **Writes could land in the SOURCE account.** The background re-resolved "the
+  active Rise tab" per request, so focusing the source tab mid-import redirected
+  authoring writes (both planes' tabs are open in a US→EU run; relayed URLs are
+  relative). Now a run **pins one tab** (`TabPin` in `shared/messaging.ts`,
+  `resolveTarget` in `background.ts`): the background verifies tab + plane on
+  every write and fails loudly, bearers are keyed **per plane** (a source-tab
+  session refresh can no longer clobber the target token), and steps A/B/C/D each
+  BLOCK a live run they cannot pin. Export-D warns and continues (it only
+  triggers a build naming a source course id).
+- **Dead source media keys shipped to the target, masked by the assertion.**
+  Blanking (`keyMap.set(key,'')`) was skipped by a falsy check, orphaned keys were
+  never blanked at all, and the final surviving-keys check **excluded flagged
+  keys** — reporting "surviving: 0" while a `rise/courses/<SRC>/…` key was written.
+  Fixed; the assertion now runs **unfiltered**, and the real gate is a **read-back**
+  `findForeignMediaKeys` over the actual `GET_COURSE` (survivors ⇒ `partial`,
+  never `imported`).
+- **A string holding an embed URL *and* an uploaded key was invisible.**
+  `classifyString` tested embeds first, so such a string was classified `embed`:
+  never downloaded, never remapped, never scanned. Media now wins; the key regex
+  boundary also gained `(`, `=`, `,`, `>`, `;` (CSS `url()`, unquoted attrs,
+  entity-escaped quotes). Both had no backstop — every guard shares that classifier.
+- **Whole-string blanking destroyed authored text** (an HTML paragraph embedding
+  one `<img>` became `''`). Now only the media reference is stripped.
+- **"Resumable" was false.** Re-running duplicated courses. Resume is now
+  per-run at COURSE granularity (already-imported courses are skipped); a
+  failed/stopped course is re-imported as a NEW course, so partials are titled
+  `!importing:` / `!unfinished:` and must be deleted by hand.
+- **Transient asset failures were reported as "deleted at source"** and silently
+  dropped the media. Only 403/404 are orphans now; anything else aborts that
+  course before any write.
+- **The panel could brick or hang.** Export handlers had no try/finally (a throw
+  froze `busy` forever with no error line), the background message listener had no
+  rejection path (`sendResponse` never fired ⇒ the panel awaited forever), and
+  `rpc` had no timeout. All fixed; switching to the Export tab mid-import can no
+  longer detach a live run.
+- Storyline hardening: the Review-360 socket no longer leaks an
+  infinitely-reconnecting manager on `connect_error` (auto-reconnect off — uploads
+  are one-shot and the md5 is committed before bytes move), every ack is inspected
+  (a refusal used to surface 180s later as a bogus "item not ready" timeout), and
+  the `story.html` transform **asserts its own output** so a Rise markup change
+  aborts loudly instead of uploading a broken package.
+- Assets: resume verifies blobs still exist and that the key scan is covered by
+  the manifest (so this audit's regex fix reaches already-"complete" owners), one
+  worker's crash no longer kills the run, CDN fetches have timeouts, and orphan
+  bookkeeping is consistent between summary and manifest.
+
+**Deferred by operator decision** (documented, not bugs-in-waiting): the
+`*.amazonaws.com` host permission stays broad (an Articulate bucket in a new
+region would otherwise silently break uploads); Stop coverage stays partial
+(fonts / step D / export loops are not stoppable); no purge-job-data action (the
+archive is a folder the operator manages); the H5 panel-direct upload above; and
+`awaitContentPrefix` still accepts the first prefix-shaped value without gating on
+version readiness (unobserved; revisit only if attaches turn flaky).
 
 ## Where we are
 
@@ -44,8 +146,8 @@ all captured into a self-sufficient archive. **Mighty** content is treated as
 Storyline (reference only): the review-items inventory flags `mighty` bundles
 (empty Review packages); bundle bytes are intentionally not grabbed yet.
 
-Stats: 101 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
-Phase 0 validated against a live 579-course account + mitm captures.
+Stats (at the time): 101 Vitest tests. Phase 0 validated against a live
+579-course account + mitm captures. (Current: 468 tests — see the top section.)
 
 ## Known schema (captured)
 
@@ -85,7 +187,10 @@ from the public CDN and stored content-addressed.
 
 **Resume:** re-running "Download assets" skips owners whose manifest is already
 complete, reuses successful keys for incomplete ones, and retries only the
-failures — so a re-run is cheap and self-healing. (An early full-library run hit
+failures — so a re-run is cheap and self-healing. (Audit-hardened: a `complete`
+skip is honored only if the current key scan is fully covered by the manifest AND
+every stored blob still exists — otherwise the owner re-runs, reusing prior keys.
+That is what lets a key-detection fix reach already-"complete" owners.) (An early full-library run hit
 1,498 failures from a `)`-truncation + double-encoding bug, since fixed; the
 ~500 residual were all **403/AccessDenied = deleted at source** — S3 returns 403
 for absent keys on a bucket without public `ListBucket` — now classified as
@@ -103,18 +208,18 @@ human-pacing (CDN is public-read, outside the authoring-API pacing invariant);
 Storyline bundles, `cdn.articulate.com`, and YouTube/Vimeo embeds kept as
 references (not downloaded). Downloads run panel-side (extension page +
 `articulateusercontent.com` host permission), so no Rise tab / background relay
-is needed. Owners with an existing `*.assets.json` are resume-skipped (delete to
-force re-download).
+is needed. Owners with an existing `*.assets.json` are resume-skipped **after a
+coverage + blob check** (delete to force re-download).
 
-Stats: 75 Vitest tests; `corepack pnpm test` / `compile` / `build` all green.
+Stats (at the time): 75 Vitest tests.
 
 The full export side (Phases 0/0.1/2 incl. account extras) is **merged to
-`master`** (PRs #1–#3); extension version `0.2.4`.
+`master`** (PRs #1–#3); extension version was `0.2.4` (now `0.4.0`).
 
-## Phase 3 — import / recreation (the write side): IN PROGRESS (branch)
+## Phase 3 — import / recreation (the write side): BUILT (merged to `master`)
 
-Rebuild an exported archive into a *different* Rise account (US → EU). **First
-PR landed on a feature branch** (not yet merged). What's built:
+Rebuild an exported archive into a *different* Rise account (US → EU). Since
+merged to `master` (and audit-hardened — see the top section). What's built:
 
 **Decisions settled at kickoff:** packaging = **one extension, two modes**
 (Export read-only / Import write) — not two build targets; first target =

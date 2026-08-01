@@ -190,12 +190,13 @@ export async function executePlan(
         result.idMap = ids.toJSON();
         // Mark the partial course so it's identifiable in the dashboard (an
         // unfinished import otherwise leaves a hard-to-spot course). Best-effort,
-        // and only once the course exists. A re-run's early set-title restores the
+        // and only once the course exists. A re-run's FINAL set-title restores the
         // clean title when the import resumes + completes.
         if (!dryRun && newCourseId) {
           const srcTitle =
             typeof deps.input.course.course?.title === 'string' ? deps.input.course.course.title : '';
           try {
+            await pace(); // an authoring write like any other — keep it human-paced
             await deps.relay(env.updateCourseTitle(newCourseId, `!unfinished: ${srcTitle}`));
             log(`Marked partial course title "!unfinished: ${srcTitle}"`);
           } catch {
@@ -357,13 +358,13 @@ export async function executePlan(
             if (keys.size === 0) return undefined;
             const km = new Map<string, string>();
             for (const k of keys) {
-              const nk = await uploadImageAsset(k);
-              if (nk) {
-                km.set(k, nk);
-                keyMap.set(k, nk);
-              }
+              // null = no archived bytes → flagged + blanked (keyMap → '') by
+              // uploadImageAsset, so the payload strips the dead source key.
+              km.set(k, (await uploadImageAsset(k)) ?? '');
             }
-            if (km.size === 0) return undefined;
+            // Every key orphaned → ship the course without this image entirely
+            // (flagged), not an image object full of empty keys.
+            if (![...km.values()].some(Boolean)) return undefined;
             return remapMediaKeys(img, km);
           };
           const coverImage = step.hasCover ? await build(course.coverImage) : undefined;
@@ -388,8 +389,10 @@ export async function executePlan(
           // title/description (confirmed envelope, but flag if it doesn't take).
           try {
             await send(env.updateCourseTitle(newCourseId, step.title), step.kind);
+            // The description rides only with the FINAL title write (the early
+            // write is the provisional `!importing:` marker — see plan.ts).
             const desc = deps.input.course.course?.description;
-            if (typeof desc === 'string' && desc) {
+            if (step.final && typeof desc === 'string' && desc) {
               await send(
                 env.updateCourseFieldThrottle(newCourseId, 'description', desc),
                 step.kind,
@@ -658,8 +661,12 @@ export async function executePlan(
             kind: 'orphan-media',
             sourceBlockId: step.sourceBlockId,
             sourceKey: step.sourceKey,
-            detail: 'Media is 403/deleted at source — block shipped without it',
+            detail: 'Media is 403/deleted at source — imported with the media slot blanked',
           });
+          // Blank the key so every later payload built via remapMediaKeys (block
+          // patch / lesson update / course images / the final rebuild assertion)
+          // strips the dead source key instead of shipping it verbatim.
+          keyMap.set(step.sourceKey, '');
           log(`${pfx()} ⚠ FLAG orphan-media — ${step.sourceKey} (deleted at source)`);
           break;
         }
@@ -695,8 +702,10 @@ export async function executePlan(
 
     // Final invariant (protocol §8/§12): every uploaded media key in the rebuilt
     // course must belong to a TARGET owner (new course id / new bank ids) — any
-    // other is a source/foreign key that wasn't remapped. Flagged keys (orphan /
-    // unsupported-location) are intentionally shipped without media, so excluded.
+    // other is a source/foreign key that wasn't remapped. Runs UNFILTERED: every
+    // flagged key (orphan / oversize / unsupported-location) was BLANKED via the
+    // keyMap, so a hit here is a real failure — including in a dry run, whose
+    // prediction must not be silently discarded.
     const targetOwners = new Set<string>();
     if (newCourseId) targetOwners.add(newCourseId);
     for (const bankId of deps.input.banksById.keys()) {
@@ -704,16 +713,11 @@ export async function executePlan(
       if (nb) targetOwners.add(nb);
     }
     const rebuilt = remapMediaKeys(deps.input.course, keyMap);
-    const flagged = new Set(
-      result.flags.map((f) => f.sourceKey).filter((k): k is string => !!k),
-    );
-    result.survivingKeys = findForeignMediaKeys(rebuilt, targetOwners).filter(
-      (k) => !flagged.has(k),
-    );
+    result.survivingKeys = findForeignMediaKeys(rebuilt, targetOwners);
 
-    result.ok = dryRun || result.survivingKeys.length === 0;
+    result.ok = result.survivingKeys.length === 0;
     if (!result.ok) {
-      result.error = `Source media keys survived: ${result.survivingKeys.slice(0, 5).join(', ')}`;
+      result.error = `Source media keys ${dryRun ? 'would survive (dry-run prediction)' : 'survived'}: ${result.survivingKeys.slice(0, 5).join(', ')}`;
     }
     result.idMap = ids.toJSON();
     return result;
@@ -796,28 +800,48 @@ export async function executePlan(
     return idMap;
   }
 
-  // Faithful upload of a single cover/card key (GET_YURL → S3 PUT of the exact
-  // exported bytes). No CRUSH — the source already carries both `key` and
-  // `crushedKey`, and each is uploaded + remapped on its own, verbatim.
+  // Faithful upload of a single course-image key — cover/card/logo/lesson-header
+  // (GET_YURL → S3 PUT of the exact exported bytes). No CRUSH — the source
+  // already carries both `key` and `crushedKey`, and each is uploaded + remapped
+  // on its own, verbatim. Dedups through the global keyMap (a key shared by
+  // coverImage and cardImage uploads once). Missing archived bytes are handled
+  // like block media: flag + blank (keyMap → ''), so UPDATE_COURSE ships without
+  // the image and the course succeeds with a flag instead of hard-failing the
+  // final assertion after all writes.
   async function uploadImageAsset(sourceKey: string): Promise<string | null> {
+    const cached = keyMap.get(sourceKey);
+    if (cached !== undefined) {
+      log(`${pfx()} reuse ${sourceKey} (already ${cached ? 'uploaded' : 'blanked'})`);
+      return cached || null;
+    }
+    let bytes: AssetBytes | null = null;
+    if (!dryRun) {
+      bytes = await deps.readAsset(sourceKey);
+      if (!bytes) {
+        log(`${pfx()} WARN missing archived bytes for course image ${sourceKey} — flagged, image blanked`);
+        result.flags.push({
+          kind: 'orphan-media',
+          sourceKey,
+          detail: 'Course image has no archived bytes (deleted at source) — imported with the image blanked',
+        });
+        keyMap.set(sourceKey, '');
+        return null;
+      }
+    }
     const filename = sourceKey.split('/').pop() ?? 'image.jpg';
     const yurl = payloadOf(await send(env.getYurl({ courseId: newCourseId, filename }), 'set-course-images'));
     const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}.jpg` : String(yurl.key ?? '');
     const url = String(yurl.url ?? '');
     const ctype = String(yurl.type ?? 'image/jpeg');
-    if (!dryRun) {
+    if (!dryRun && bytes) {
       if (!newKey || !url) throw new WriteError('GET_YURL returned no key/url (cover)', 'set-course-images', JSON.stringify(yurl));
-      const bytes = await deps.readAsset(sourceKey);
-      if (!bytes) {
-        log(`WARN missing archived bytes for cover/card ${sourceKey} (skipping)`);
-        return null;
-      }
       const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }));
       result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
       if (!put.ok) throw new WriteError(`Cover S3 PUT failed (HTTP ${put.status})`, 'set-course-images', put.text);
     } else {
       result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
     }
+    keyMap.set(sourceKey, newKey);
     return newKey;
   }
 }

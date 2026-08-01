@@ -25,26 +25,31 @@ import {
   summarizeFlags,
   parseTypefaces,
   moveCourseToFolder,
+  findForeignMediaKeys,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
   type AccountIdentity,
+  type ExecResult,
   type FidelityReport,
+  type ManualWorkItem,
   type ParityReport,
   type RunCsvCourse,
 } from '@/core/import';
+import { isOrphanStatus } from '@/core/assets';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
-import { rpc } from '../rpc';
-import { unwrap, type ProgressEvent } from './shared';
+import { etaStatus, unwrap, type ProgressEvent } from './shared';
 import {
   refreshToken,
-  relayThroughTab,
   bytesToBase64,
   contentTypeForExt,
   safeJson,
   makeFontReader,
+  makePinnedRelay,
+  pinnedRpc,
+  pinTargetTab,
   readFontManifest,
   fetchTargetTypefaces,
   readAccountIdMap,
@@ -71,33 +76,62 @@ export {
   type BankImportOptions,
 } from './import-banks';
 
+/**
+ * Split a manifest's `failed` list into the two states the import must treat
+ * differently. ONLY 403/404 means "deleted at the source" — a terminal orphan the
+ * import may drop (blanked key + manual flag). Anything else (500, network, 0) is
+ * an UNKNOWN state: the asset probably still exists and the export simply didn't
+ * get it, so calling it orphaned would silently discard live media.
+ */
+export function classifyAssetFailures(
+  failed: { key: string; status?: number; error?: string }[] | undefined,
+): {
+  orphans: { key: string; status?: number }[];
+  unresolved: { key: string; status?: number; error?: string }[];
+} {
+  const orphans: { key: string; status?: number }[] = [];
+  const unresolved: { key: string; status?: number; error?: string }[] = [];
+  for (const f of failed ?? []) {
+    if (isOrphanStatus(f.status)) orphans.push({ key: f.key, status: f.status });
+    else unresolved.push({ key: f.key, status: f.status, error: f.error });
+  }
+  return { orphans, unresolved };
+}
+
 /** Map a course's saved asset manifest → plan AssetEntry[] (downloaded + orphan).
- *  `byKey` also yields the archive filename so we can read bytes for upload. */
+ *  `fileByKey` also yields the archive filename so we can read bytes for upload.
+ *  `unresolved` lists keys whose bytes are missing for a NON-terminal reason. */
 async function readCourseAssets(
   storage: Storage,
   courseId: string,
-): Promise<{ entries: AssetEntry[]; fileByKey: Map<string, string> }> {
+): Promise<{
+  entries: AssetEntry[];
+  fileByKey: Map<string, string>;
+  unresolved: { key: string; status?: number; error?: string }[];
+}> {
   const raw = await storage.readAssetManifest('courses', courseId);
   const entries: AssetEntry[] = [];
   const fileByKey = new Map<string, string>();
-  if (!raw) return { entries, fileByKey };
+  const unresolved: { key: string; status?: number; error?: string }[] = [];
+  if (!raw) return { entries, fileByKey, unresolved };
   try {
     const m = JSON.parse(raw) as {
       assets?: { key: string; kind: string; file: string; ext: string; size?: number }[];
-      failed?: { key: string; status?: number }[];
+      failed?: { key: string; status?: number; error?: string }[];
     };
     for (const a of m.assets ?? []) {
       entries.push({ key: a.key, kind: a.kind, file: a.file, ext: a.ext, size: a.size });
       fileByKey.set(a.key, a.file);
     }
-    for (const f of m.failed ?? []) {
-      // 403/404 ⇒ orphaned (deleted at source); other failures still block-less.
-      entries.push({ key: f.key, kind: 'media-other', orphaned: true });
-    }
+    // Terminal orphans are imported as block-less (flagged) keys; anything else
+    // aborts the course in runImport rather than dropping media as "deleted".
+    const split = classifyAssetFailures(m.failed);
+    for (const f of split.orphans) entries.push({ key: f.key, kind: 'media-other', orphaned: true });
+    unresolved.push(...split.unresolved);
   } catch {
     /* tolerate a malformed manifest — treat as no assets */
   }
-  return { entries, fileByKey };
+  return { entries, fileByKey, unresolved };
 }
 
 /** Build the storyline attach map for a source course from its storyline
@@ -203,6 +237,43 @@ export interface ImportRunResult {
   notStarted?: string[];
 }
 
+/** A course we refuse to start (missing media of unknown state, …): a real
+ *  failed outcome, never a silent skip. */
+function abortedResult(error: string): ExecResult {
+  return { ok: false, dryRun: false, envelopes: [], flags: [], idMap: {}, survivingKeys: [], error };
+}
+
+/** What a persisted `<courseId>.report.json` tells us on a re-run. */
+interface PriorCourseReport {
+  report: FidelityReport;
+  parity?: ParityReport;
+  manual: ManualWorkItem[];
+  idMap?: Record<string, string>;
+  /** A FINISHED live import: ok, not stopped, with a real target course id. */
+  completed: boolean;
+}
+
+function parsePriorReport(raw: string | null | undefined): PriorCourseReport | null {
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as FidelityReport & {
+      parity?: ParityReport | null;
+      manualWork?: ManualWorkItem[];
+      idMap?: Record<string, string>;
+    };
+    return {
+      report: p,
+      parity: p.parity ?? undefined,
+      manual: p.manualWork ?? [],
+      idMap: p.idMap,
+      completed:
+        p.ok === true && p.dryRun === false && !p.stopped && typeof p.newCourseId === 'string' && !!p.newCourseId,
+    };
+  } catch {
+    return null; // corrupt report — treat as no prior run
+  }
+}
+
 /**
  * Run an import for the selected source course ids. Enforces the Source ≠ Target
  * guard once up front, then imports each course strictly sequentially. Persists
@@ -232,9 +303,21 @@ export async function runImport(
     message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} import → ${target?.name ?? 'unknown target'} (${verdict.reason})`,
   });
 
+  // Pin the run to ONE target tab before anything touches the network. A live run
+  // that can't be pinned is blocked (writes must never follow window focus); a
+  // dry run only reads, so it proceeds unpinned with a warning.
+  const { pin, blocked } = await pinTargetTab(target, onEvent);
+  if (blocked && !opts.dryRun) {
+    onEvent({ kind: 'log', message: `BLOCKED: ${blocked}` });
+    return { blocked, outcomes };
+  }
+  if (blocked) onEvent({ kind: 'log', message: `WARN ${blocked} — dry run continues (reads only)` });
+  const relay = makePinnedRelay(pin);
+  const send = pinnedRpc(pin);
+
   // Start on a fresh bearer: the panel may have been idle since the token was
   // last captured, so the very first reads (target fonts) could otherwise 403.
-  await refreshToken(onEvent, 'run start');
+  await refreshToken(onEvent, 'run start', pin);
 
   // Token heartbeat: Rise's own editor refreshes the session continuously (~30s
   // lifecycle/refresh) so the bearer is always fresh. We don't need that cadence
@@ -247,7 +330,7 @@ export async function runImport(
   const HEARTBEAT_MS = 5 * 60_000; // well under the ~15min token, far calmer than Rise's 30s
   const pacedWithHeartbeat = async (): Promise<void> => {
     if (!opts.dryRun && Date.now() - lastAuthMs > HEARTBEAT_MS) {
-      await refreshToken(onEvent, 'heartbeat');
+      await refreshToken(onEvent, 'heartbeat', pin);
       lastAuthMs = Date.now();
     }
     await pacedDelay(pacing);
@@ -263,7 +346,7 @@ export async function runImport(
   // TARGET account typefaces — fetched once against a *live existing* course.
   // FETCH_TYPEFACES 404s on a just-created course id, so we can't ask the
   // brand-new course; we match fonts by name + dedup recreation against this.
-  const targetTypefaces = await fetchTargetTypefaces(onEvent);
+  const targetTypefaces = await fetchTargetTypefaces(onEvent, pin);
 
   // Cross-step state from the account-settings (A) + banks (B) operations, if
   // they were run first: folder + typeface id maps, and the imported-bank map for
@@ -277,7 +360,7 @@ export async function runImport(
       ? accountMap.folders
       : opts.recreateFolders === false
         ? new Map<string, string>()
-        : await setupFolders(storage, target, opts.dryRun, pacing, onEvent);
+        : await setupFolders(storage, target, opts.dryRun, pacing, onEvent, pin);
   const typefaceSeed = accountMap.typefaces;
   if (boundBanks.size > 0) {
     onEvent({ kind: 'log', message: `Auto-binding draw-from-bank to ${boundBanks.size} imported bank(s).` });
@@ -291,14 +374,14 @@ export async function runImport(
   const runStart = Date.now();
   const emitStatus = (i: number, done: number, total: number): void => {
     if (opts.dryRun) return;
-    const fraction = (i + (total ? done / total : 0)) / Math.max(1, numCourses);
-    const elapsed = Date.now() - runStart;
-    // Wait for a little signal before showing a time (early fractions are noisy).
-    const etaSeconds =
-      fraction > 0.02 && elapsed > 3000
-        ? Math.round((elapsed * (1 - fraction)) / fraction / 1000)
-        : null;
-    onEvent({ kind: 'import-status', label: `Importing ${i + 1}/${numCourses}`, etaSeconds, done: false });
+    onEvent(
+      etaStatus({
+        label: `Importing ${i + 1}/${numCourses}`,
+        doneFraction: (i + (total ? done / total : 0)) / Math.max(1, numCourses),
+        runStartMs: runStart,
+        nowMs: Date.now(),
+      }),
+    );
   };
 
   let stopped = false;
@@ -321,15 +404,61 @@ export async function runImport(
       typeof course.course?.title === 'string' ? course.course.title : undefined;
     onEvent({ kind: 'course', index: i, total: courseIds.length, courseId, title: courseTitle });
     emitStatus(i, 0, 1);
+    const pfx = `[${i + 1}/${courseIds.length}]`;
+
+    // Run-level resume: a course whose PRIOR report says it finished is skipped
+    // outright, BEFORE any network call. The rehydrated id map alone doesn't stop
+    // a re-run — the plan's create-course step would create a SECOND target
+    // course — so the skip is what makes a re-run idempotent.
+    const prior = parsePriorReport(await storage.readImportArtifact(`${courseId}.report.json`));
+    if (!opts.dryRun && prior?.completed) {
+      onEvent({
+        kind: 'log',
+        message: `${pfx} Skipped "${courseTitle ?? courseId}" — already imported (target course ${prior.report.newCourseId}); delete _import/${courseId}.report.json to force a re-import`,
+      });
+      outcomes.push({
+        courseId,
+        title: courseTitle,
+        status: 'imported',
+        report: prior.report,
+        parity: prior.parity,
+      });
+      csvCourses.push({
+        title: courseTitle,
+        courseId,
+        targetCourseId: prior.report.newCourseId,
+        status: 'imported',
+        manual: prior.manual,
+      });
+      continue;
+    }
 
     // Refresh the bearer before EACH course: every course is many paced writes,
     // and the first ducks call (UPDATE_COURSE_FIELD_THROTTLE / CREATE_LESSON)
     // 403s on a token that lapsed during the previous course. Per-course refresh
     // keeps each course starting on a token with the full ~15 min window.
-    await refreshToken(onEvent, `[${i + 1}/${courseIds.length}]`);
+    await refreshToken(onEvent, pfx, pin);
     lastAuthMs = Date.now();
 
-    const { entries, fileByKey } = await readCourseAssets(storage, courseId);
+    const { entries, fileByKey, unresolved } = await readCourseAssets(storage, courseId);
+    // Media whose bytes are missing for a NON-terminal reason (500 / network) is an
+    // unknown state, not a deletion at source: importing now would silently drop
+    // live media. Abort this course and tell the operator to re-export its assets.
+    if (unresolved.length && !opts.dryRun) {
+      const sample = unresolved
+        .slice(0, 3)
+        .map((u) => `${u.key}${u.status ? ` (HTTP ${u.status})` : ''}`)
+        .join(', ');
+      const error =
+        `${unresolved.length} asset(s) failed to download for a retryable reason ` +
+        `(${sample}${unresolved.length > 3 ? ', …' : ''}) — re-run the asset export for this course, ` +
+        'then import again. They are NOT known-deleted at the source, so importing would drop live media.';
+      onEvent({ kind: 'log', message: `${pfx} FAILED "${courseTitle ?? courseId}": ${error}` });
+      const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
+      outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
+      csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });
+      continue;
+    }
     const banksById = await readReferencedBanks(storage, course);
     const storylineAttach = await readStorylineAttach(storage, courseId);
     if (storylineAttach) {
@@ -358,15 +487,7 @@ export async function runImport(
     // map now lives nested in the consolidated report.json (`.idMap`); fall back
     // to the legacy standalone joblog.json for migrations started before that.
     let ids = new IdMap();
-    const priorReport = await storage.readImportArtifact(`${courseId}.report.json`);
-    if (priorReport) {
-      try {
-        const parsed = JSON.parse(priorReport) as { idMap?: Record<string, string> };
-        if (parsed.idMap) ids = IdMap.fromJSON(parsed.idMap);
-      } catch {
-        /* corrupt report — start fresh */
-      }
-    }
+    if (prior?.idMap) ids = IdMap.fromJSON(prior.idMap);
     if (ids.size === 0) {
       const priorLog = await storage.readImportArtifact(`${courseId}.joblog.json`);
       if (priorLog) {
@@ -388,7 +509,7 @@ export async function runImport(
 
     const res = await executePlan(steps, {
       input,
-      relay: relayThroughTab,
+      relay,
       readAsset,
       sourceTypefaces,
       targetTypefaces,
@@ -409,7 +530,7 @@ export async function runImport(
       if (tgtFolder) {
         if (!opts.dryRun) {
           await pacedDelay(pacing);
-          const mv = await relayThroughTab(moveCourseToFolder(res.newCourseId, tgtFolder));
+          const mv = await relay(moveCourseToFolder(res.newCourseId, tgtFolder));
           if (mv.ok) {
             onEvent({ kind: 'log', message: `Moved course into folder ${tgtFolder}` });
           } else {
@@ -436,18 +557,48 @@ export async function runImport(
     // course → structural diff vs the archived source. The true round-trip check.
     // Done BEFORE persisting so it folds into the consolidated report.
     let parity: ParityReport | undefined;
+    // Set when the read-back proves a source/foreign media key survived ON THE
+    // TARGET — the executor's own check only inspects a locally derived document.
+    let readBackForeign: string[] = [];
     if (!opts.dryRun && res.ok && res.newCourseId) {
       await pacedDelay(pacing);
       onEvent({ kind: 'log', message: `Verifying parity (read-back GET_COURSE ${res.newCourseId})…` });
-      const rb = await rpc({ type: 'GET_COURSE', courseId: res.newCourseId });
+      // Pinned like every other request of the run: the read-back must GET the
+      // course from the tab we wrote it to, or an unpinned re-resolve could ask
+      // the SOURCE account for an id that only exists on the target (404 → a
+      // false "could not verify" on a course that is actually fine).
+      const rb = await send({ type: 'GET_COURSE', courseId: res.newCourseId });
       if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
-        parity = verifyParity(course, rb.result.data.doc, res.flags);
+        const targetDoc = unwrap(rb.result.data.raw);
+        parity = verifyParity(course, targetDoc, res.flags);
         onEvent({
           kind: 'log',
           message: parity.ok
             ? `Parity OK — ${parity.blocks.compared} block(s) match (${parity.expectedDivergences.length} expected divergence(s))`
             : `Parity DIVERGENCES — ${parity.issues.length} unexpected (see ${courseId}.report.md)`,
         });
+
+        // INVARIANT, measured on the REAL target (CLAUDE.md: "no source media keys
+        // may survive"). The executor asserts this against a doc it derived itself,
+        // which can only ever confirm its own bookkeeping; this reads what Rise
+        // actually stored. Any uploaded key not owned by the new course / new banks
+        // is a key that wasn't remapped → fail this course loudly.
+        const targetOwners = new Set<string>([res.newCourseId]);
+        for (const sourceBankId of banksById.keys()) {
+          const newBankId = res.idMap[sourceBankId] ?? boundBanks.get(sourceBankId)?.newBankId;
+          if (newBankId) targetOwners.add(newBankId);
+        }
+        readBackForeign = findForeignMediaKeys(targetDoc, targetOwners);
+        if (readBackForeign.length) {
+          report.ok = false;
+          report.survivingSourceKeys = [
+            ...new Set([...report.survivingSourceKeys, ...readBackForeign]),
+          ];
+          report.error =
+            `Read-back FAILED: ${readBackForeign.length} foreign media key(s) survived on the target ` +
+            `course ${res.newCourseId} (${readBackForeign.slice(0, 3).join(', ')}${readBackForeign.length > 3 ? ', …' : ''})`;
+          onEvent({ kind: 'log', message: `${pfx} ${report.error} — course kept; re-run to repair, or fix those blocks manually` });
+        }
       } else {
         onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
       }
@@ -473,13 +624,17 @@ export async function runImport(
       ? 'planned'
       : res.stopped
         ? 'stopped'
-        : res.ok
-          ? 'imported'
-          : // A confirmed course that failed mid-build is kept + resumable (partial);
-            // an unconfirmed shell (orphanedCourseId set) or a pre-confirm failure is a hard failure.
-            res.newCourseId && !res.orphanedCourseId
-            ? 'partial'
-            : 'failed';
+        : // A read-back survivor means the course exists but is NOT faithful — it is
+          // never reported as imported; the course is kept and a re-run repairs it.
+          res.ok && readBackForeign.length
+          ? 'partial'
+          : res.ok
+            ? 'imported'
+            : // A confirmed course that failed mid-build is kept + resumable (partial);
+              // an unconfirmed shell (orphanedCourseId set) or a pre-confirm failure is a hard failure.
+              res.newCourseId && !res.orphanedCourseId
+              ? 'partial'
+              : 'failed';
 
     outcomes.push({
       courseId,
@@ -501,6 +656,8 @@ export async function runImport(
     let msg: string;
     if (res.stopped) {
       msg = `STOPPED "${titleStr}" mid-course — partial, resumable on re-run (course ${res.newCourseId ?? '—'})`;
+    } else if (res.ok && readBackForeign.length) {
+      msg = `PARTIAL "${titleStr}": ${report.error} — course ${res.newCourseId} kept (re-run to repair)`;
     } else if (res.ok) {
       msg = `${opts.dryRun ? 'Planned' : 'Imported'} "${titleStr}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`;
     } else if (status === 'partial') {

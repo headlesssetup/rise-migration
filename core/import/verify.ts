@@ -183,13 +183,18 @@ export function verifyParity(
   const issues: ParityIssue[] = [];
   const expected: ParityIssue[] = [];
 
-  // A block is "media-tolerant" if the import flagged it (storyline / orphan) or
-  // any course/lesson/theme/bank media was flagged unsupported.
+  // Media tolerance is PER-BLOCK: a block tolerates a media-missing divergence
+  // only when the import flagged THAT block (storyline/orphan, by block id) or
+  // flagged a key this block's source actually contains (oversize/unsupported
+  // flags carry a sourceKey but not always a block id). A course-level flag
+  // (theme/cover/bank media) must never excuse a media loss on an unrelated
+  // block — that masked real per-block failures course-wide.
   const flaggedBlockIds = new Set(
     flags.filter((f) => f.sourceBlockId).map((f) => f.sourceBlockId),
   );
-  const hasUnsupportedMedia = flags.some((f) => f.kind === 'unsupported-media');
-  const hasStoryline = flags.some((f) => f.kind === 'storyline');
+  const flaggedKeys = flags
+    .map((f) => f.sourceKey)
+    .filter((k): k is string => !!k);
 
   let blocksSource = 0;
   let blocksTarget = 0;
@@ -247,8 +252,10 @@ export function verifyParity(
       }
 
       const isDrawFromBank = blockKey(a) === 'knowledgeCheck/draw from question bank';
+      const aRaw = JSON.stringify(a);
       const mediaTolerant =
-        (a.id && flaggedBlockIds.has(a.id)) || hasUnsupportedMedia || hasStoryline;
+        (a.id !== undefined && flaggedBlockIds.has(a.id)) ||
+        flaggedKeys.some((k) => aRaw.includes(k));
 
       const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
       collectLeafDiffs(canonicalize(a), canonicalize(b), '', diffs);

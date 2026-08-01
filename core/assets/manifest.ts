@@ -50,8 +50,16 @@ export interface AssetManifest {
   /** Distinct keys discovered (= assets.length + failed.length when complete). */
   keyCount: number;
   assets: AssetManifestEntry[];
+  /** Every key without bytes: retryable failures AND terminal orphans (403/404).
+   *  Orphans stay in this list across runs — the import plan reads `failed` to
+   *  flag block-less keys — but are never re-fetched (see `priorOrphans`). */
   failed: AssetFailure[];
-  /** True when every discovered key was downloaded (no failures). */
+  /** How many of `failed` are terminal orphans (missing at source). Absent in
+   *  manifests written before orphan accounting — treat as unknown, not 0. */
+  orphanCount: number;
+  /** True when every DOWNLOADABLE key was stored. Orphans (403/404 at source)
+   *  are a terminal, separately-counted state and do not block completeness;
+   *  retryable failures do. */
   complete: boolean;
 }
 
@@ -63,6 +71,7 @@ export function buildAssetManifest(
   failed: AssetFailure[],
   generatedAt: string = new Date().toISOString(),
 ): AssetManifest {
+  const orphanCount = failed.filter((f) => isOrphanStatus(f.status)).length;
   return {
     ownerType,
     ownerId,
@@ -70,7 +79,8 @@ export function buildAssetManifest(
     keyCount: collected.length,
     assets,
     failed,
-    complete: failed.length === 0,
+    orphanCount,
+    complete: failed.length === orphanCount,
   };
 }
 

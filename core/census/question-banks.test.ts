@@ -40,6 +40,23 @@ describe('extractQuestions', () => {
     });
     expect(qs[0]?.type).toBe('MATCHING');
   });
+
+  it('finds `questions` in document order (BFS) — a later sibling cannot win', () => {
+    // A LIFO walk would pop `second` first; BFS must return `first`'s array.
+    const qs = extractQuestions({
+      first: { questions: [{ id: 'right', type: 'MATCHING' }] },
+      second: { questions: [{ id: 'wrong', type: 'MATCHING' }] },
+    });
+    expect(qs.map((q) => q.id)).toEqual(['right']);
+  });
+
+  it('prefers the shallowest `questions` — nested question data cannot shadow it', () => {
+    const qs = extractQuestions({
+      meta: { deep: { questions: [{ id: 'nested' }] } },
+      questions: [{ id: 'top', type: 'MULTIPLE_CHOICE' }],
+    });
+    expect(qs.map((q) => q.id)).toEqual(['top']);
+  });
 });
 
 describe('buildBankCatalog', () => {

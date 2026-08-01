@@ -122,6 +122,34 @@ describe('verifyParity', () => {
     expect(r.ok).toBe(true);
   });
 
+  it('a COURSE-LEVEL flag does not excuse a block media loss (per-block tolerance, M5)', () => {
+    // Regression: one unsupported-media flag (e.g. a custom theme image) used to
+    // make EVERY block's media-missing divergence "expected", course-wide.
+    const t = faithfulTarget();
+    (t.lessons![0]!.items![1] as any).items[0].media.image.key = '';
+    (t.lessons![0]!.items![1] as any).items[0].media.image.crushedKey = '';
+    const r = verifyParity(src(), t, [
+      { kind: 'unsupported-media', sourceKey: 'rise/courses/SRC/theme-logo.svg', detail: 'theme image' },
+      { kind: 'storyline', sourceBlockId: 'someOtherBlock', detail: 'other block' },
+    ]);
+    expect(r.issues.some((i) => i.kind === 'media-missing')).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
+  it('tolerates media loss when the flagged KEY lives in this block (oversize/unsupported)', () => {
+    // Oversize flags carry a sourceKey but no block id — the block that actually
+    // contains that key tolerates the loss; others do not.
+    const t = faithfulTarget();
+    (t.lessons![0]!.items![1] as any).items[0].media.image.key = '';
+    (t.lessons![0]!.items![1] as any).items[0].media.image.crushedKey = '';
+    const r = verifyParity(src(), t, [
+      { kind: 'unsupported-media', sourceKey: 'rise/courses/SRC/a.jpg', detail: 'too large' },
+    ]);
+    expect(r.issues.some((i) => i.kind === 'media-missing')).toBe(false);
+    expect(r.expectedDivergences.some((i) => i.kind === 'media-missing')).toBe(true);
+    expect(r.ok).toBe(true);
+  });
+
   it('renders a markdown summary', () => {
     const md = parityReportToMarkdown(verifyParity(src(), faithfulTarget()));
     expect(md).toContain('Read-back parity');

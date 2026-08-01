@@ -22,8 +22,15 @@ import {
 
 export const REVIEW_SOCKET_BASE = 'https://360-review-sockets.eu.articulate.com';
 
-/** Plane-aware review-sockets host (EU target by default; US drops the `.eu`). */
+/** Plane-aware review-sockets host (US drops the `.eu`). An unknown plane is a
+ *  LOUD error, not a default: it means we couldn't read the Rise tab's URL, and
+ *  silently picking EU would hang the upload against the wrong host. */
 export function reviewSocketBaseForPlane(plane: 'us' | 'eu' | null | undefined): string {
+  if (plane !== 'us' && plane !== 'eu') {
+    throw new Error(
+      'Rise plane unknown (no Rise tab URL) — cannot pick the Review-360 sockets host. Open a logged-in Rise tab (US or EU) and retry.',
+    );
+  }
   return plane === 'us'
     ? 'https://360-review-sockets.articulate.com'
     : 'https://360-review-sockets.eu.articulate.com';
@@ -59,21 +66,42 @@ export function connectReviewSocket(opts: {
     transports: ['websocket'],
     auth: { token: opts.token },
     forceNew: true,
+    // One-shot upload semantics: each upload connects, runs the handshake, and
+    // disconnects. Auto-reconnect would (a) keep the manager retrying Articulate
+    // forever from the service worker after a stale-token connect_error, and
+    // (b) reconnect UNAUTHENTICATED after a mid-upload transport drop (our
+    // `auth:login` only rides the first connect), turning every later emit into
+    // a silent ack timeout. So: no reconnection — a dropped socket fails the
+    // current upload loudly and the caller retries the whole package.
+    reconnection: false,
   });
   return new Promise<Socket>((resolve, reject) => {
+    // Settle exactly once, and drop our connect/connect_error listeners so they
+    // can never fire again spuriously on the resolved socket.
+    const settle = (): void => {
+      clearTimeout(timer);
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+    };
     const timer = setTimeout(() => {
+      settle();
       socket.disconnect();
       reject(new Error('Review-360 socket connect timed out'));
     }, opts.timeoutMs ?? 20_000);
-    socket.on('connect', () => {
-      clearTimeout(timer);
+    const onConnect = (): void => {
+      settle();
       socket.emit('auth:login', opts.token);
       resolve(socket);
-    });
-    socket.on('connect_error', (err: Error) => {
-      clearTimeout(timer);
+    };
+    const onConnectError = (err: Error): void => {
+      settle();
+      // Tear the manager down — never leave it (or a future reconnect attempt)
+      // dangling in the service worker after a failed connect.
+      socket.disconnect();
       reject(new Error(`Review-360 socket connect_error: ${err.message}`));
-    });
+    };
+    socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
   });
 }
 
@@ -103,6 +131,26 @@ export function emitAck<T = unknown>(
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Fail fast on an error ack. The server acks `{success:false, …}` (or an
+ * `error` string) when it REFUSES a step — treating that as success used to
+ * surface only 180s later as a misleading "item not ready" poll timeout. A
+ * primitive or error-less ack passes (those shapes carry no failure signal).
+ * @throws with the server's own message.
+ */
+export function assertAckOk(event: string, ack: unknown): void {
+  if (!isObject(ack)) return;
+  const failed =
+    ack.success === false || ack.ok === false || (typeof ack.error === 'string' && ack.error !== '');
+  if (!failed) return;
+  const detail = [ack.error, ack.message, ack.reason].find(
+    (v): v is string => typeof v === 'string' && v !== '',
+  );
+  throw new Error(
+    `Review-360 ${event} failed: ${detail ?? JSON.stringify(ack).slice(0, 200)}`,
+  );
 }
 
 /** Pull the new item id out of the `items:create` ack (shape not captured —
@@ -166,6 +214,7 @@ export async function uploadStorylinePackage(
     [buildItemsCreate({ title, userId: opts.userId, createdAt })],
     t,
   );
+  assertAckOk(REVIEW_EVENTS.create, createAck);
   const itemId = parseItemId(createAck);
 
   // 2. presigned upload url for the package zip
@@ -175,22 +224,32 @@ export async function uploadStorylinePackage(
     [buildYurlGetArg({ fileName: opts.fileName, md5Base64: opts.md5Base64 })],
     t,
   );
+  assertAckOk(REVIEW_EVENTS.yurlGet, yurlAck);
   const { url, key } = parseYurlAck(yurlAck);
 
   // 3. S3 PUT the bytes (Content-MD5 = the same base64 md5). Byte transfer —
   //    outside the human-pacing invariant.
   await opts.putBytes(url, opts.zipBytes, opts.md5Base64);
 
-  // 4. record the uploaded package on the item version
-  await emitAck(
+  // 4. record the uploaded package on the item version. The ack IS inspected:
+  //    an error ack here used to read as success and only surface 180s later as
+  //    a misleading poll timeout.
+  const updateAck = await emitAck(
     opts.socket,
     REVIEW_EVENTS.update,
     [buildItemsUpdate({ id: itemId, key, md5Hex: opts.md5Hex, userId: opts.userId, createdAt })],
     t,
   );
+  assertAckOk(REVIEW_EVENTS.update, updateAck);
 
   // 5. trigger server-side unzip/transcode/publish
-  await emitAck(opts.socket, REVIEW_EVENTS.upload, [buildItemsUpload({ id: itemId })], t);
+  const uploadAck = await emitAck(
+    opts.socket,
+    REVIEW_EVENTS.upload,
+    [buildItemsUpload({ id: itemId })],
+    t,
+  );
+  assertAckOk(REVIEW_EVENTS.upload, uploadAck);
 
   return { itemId, key };
 }
@@ -220,6 +279,9 @@ export async function awaitContentPrefix(
   for (;;) {
     const { id, opts: getOpts } = buildItemsGetArg(itemId);
     const ack = await emitAck(socket, REVIEW_EVENTS.get, [id, getOpts], opts.ackTimeoutMs);
+    // An error ack means the server REFUSED the read (it acked `{success:true,…}`
+    // in the capture) — fail with its message now, not a poll timeout later.
+    assertAckOk(REVIEW_EVENTS.get, ack);
     const cp = parseContentPrefix(ack);
     if (cp) return cp;
     if (now() - start > timeoutMs) {

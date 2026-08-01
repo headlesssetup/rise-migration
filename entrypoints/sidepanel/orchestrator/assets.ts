@@ -19,6 +19,7 @@ import {
   keyPathCandidates,
   locateKey,
   assetManifestToJson,
+  type AssetFailure,
   type AssetManifest,
   type DownloadOutcome,
   type Downloader,
@@ -29,6 +30,9 @@ import { unwrap, type ProgressEvent } from './shared';
 const CDN_US = 'https://articulateusercontent.com/';
 const CDN_EU = 'https://articulateusercontent.eu/';
 const MAX_RETRIES = 2; // for transient 429 / 5xx
+// Abort a CDN GET that produces no response in time — a single hung connection
+// would otherwise stall one pool lane forever. Treated as a retryable failure.
+const FETCH_TIMEOUT_MS = 60_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,7 +49,7 @@ export function cdnBasesForPlane(plane: 'us' | 'eu' | null | undefined): string[
  *  CDN object for a key, trying encoding variants (verbatim → normalized → NFC)
  *  so keys with `(n)`, double-encoding, or NFD unicode resolve, and falling
  *  through to the next host base on a miss; retries transient 429/5xx. */
-export function makeCdnDownloader(bases: string[]): Downloader {
+export function makeCdnDownloader(bases: string[], timeoutMs = FETCH_TIMEOUT_MS): Downloader {
   return async (key: string): Promise<DownloadOutcome> => {
     let lastStatus: number | undefined;
     let lastError: string | undefined;
@@ -56,7 +60,7 @@ export function makeCdnDownloader(bases: string[]): Downloader {
         lastUrl = base + path;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           try {
-            const res = await fetch(base + path);
+            const res = await fetch(base + path, { signal: AbortSignal.timeout(timeoutMs) });
             if (res.ok) {
               const buf = await res.arrayBuffer();
               return {
@@ -115,10 +119,13 @@ export interface AssetsSummary {
   /** HTTP status → count, across all failed keys (diagnostics). */
   statusHistogram: Record<string, number>;
   /** Owners with keys that returned 403/404 after every encoding variant —
-   *  missing/inaccessible at source (likely deleted). Flagged, not retried. */
+   *  missing/inaccessible at source (likely deleted). Terminal: flagged every
+   *  run (even when the owner is otherwise skipped), never re-fetched. */
   orphaned: UndownloadedOwner[];
   /** Owners with keys that failed for other (transient/network) reasons. */
   undownloaded: UndownloadedOwner[];
+  /** Owners whose processing threw entirely — no manifest written this run. */
+  failedOwners: { ownerType: 'course' | 'bank'; ownerId: string; title?: string; error: string }[];
   complete: boolean;
 }
 
@@ -159,6 +166,45 @@ async function readPriorManifest(
   }
 }
 
+/** Split an owner's failure list into orphaned (terminal) vs retryable and
+ *  record both on the summary, tagging each key with its source-doc location.
+ *  Only retryable failures clear `summary.complete` — matching the per-owner
+ *  manifest, where orphans don't block `complete` either. */
+function recordOwnerFailures(
+  summary: AssetsSummary,
+  owner: Owner,
+  failures: AssetFailure[],
+): void {
+  if (!failures.length) return;
+  const title = ownerTitle(owner);
+  const orphanKeys: FailedKey[] = [];
+  const otherKeys: FailedKey[] = [];
+  for (const f of failures) {
+    const bucket = String(f.status || 'network');
+    summary.statusHistogram[bucket] = (summary.statusHistogram[bucket] ?? 0) + 1;
+    const path = f.paths?.[0];
+    const location = path ? formatLocation(locateKey(owner.doc, path)) : undefined;
+    (isOrphanStatus(f.status) ? orphanKeys : otherKeys).push({ key: f.key, location });
+  }
+  if (orphanKeys.length) {
+    summary.orphaned.push({
+      ownerType: owner.ownerType,
+      ownerId: owner.id,
+      title,
+      keys: orphanKeys,
+    });
+  }
+  if (otherKeys.length) {
+    summary.complete = false;
+    summary.undownloaded.push({
+      ownerType: owner.ownerType,
+      ownerId: owner.id,
+      title,
+      keys: otherKeys,
+    });
+  }
+}
+
 /**
  * Download assets for every saved course + question bank, writing bytes
  * content-addressed under `assets/` (deduped) and a per-owner `<id>.assets.json`
@@ -166,10 +212,13 @@ async function readPriorManifest(
  * (404 after all encoding variants — likely deleted) vs `undownloaded`
  * (transient/other).
  *
- * Resume: an owner whose prior manifest is already complete is skipped; an
- * incomplete one is re-run, reusing its successful entries and re-attempting
- * only the missing/failed keys. So clicking "Download assets" again is cheap and
- * retries past failures.
+ * Resume: an owner whose prior manifest is already complete is skipped — but
+ * only after verifying that (a) the doc's collected keys are all covered by that
+ * manifest (key detection may have improved since it was written) and (b) every
+ * stored blob still exists; otherwise the owner is re-run, reusing its good
+ * entries and fetching only what's missing. Orphaned keys (403/404 at source)
+ * are terminal: carried forward, surfaced every run, never re-fetched. One
+ * owner's failure never aborts the run — it's recorded in `failedOwners`.
  */
 export async function downloadAllAssets(
   storage: Storage,
@@ -209,86 +258,123 @@ export async function downloadAllAssets(
     statusHistogram: {},
     orphaned: [],
     undownloaded: [],
+    failedOwners: [],
     complete: true,
   };
 
   for (const [i, owner] of owners.entries()) {
     onEvent({ kind: 'course', index: i, total: owners.length, courseId: owner.id });
 
-    // Resume: a complete prior manifest → skip; an incomplete one → reuse its
-    // successes and retry the rest.
-    const prior = await readPriorManifest(storage, owner);
-    if (prior?.complete) {
-      summary.skipped += 1;
-      onEvent({ kind: 'log', message: `Assets already done: ${owner.id}` });
-      continue;
-    }
+    try {
+      const collected = collectAssetKeys(owner.doc, owner.id);
+      const prior = await readPriorManifest(storage, owner);
+      // Terminal orphans from the prior run: carried forward, never re-fetched.
+      // (Legacy manifests kept orphans in `failed` with complete:false — this
+      // filter promotes them to terminal on the first re-run.)
+      const priorOrphans = (prior?.failed ?? []).filter((f) => isOrphanStatus(f.status));
 
-    const collected = collectAssetKeys(owner.doc, owner.id);
-    const { manifest, stats } = await downloadAssetsFor(
-      owner.ownerType,
-      owner.id,
-      owner.doc,
-      storage,
-      downloader,
-      { priorAssets: prior?.assets },
-    );
-    await storage.writeAssetManifest(
-      owner.scope,
-      owner.id,
-      assetManifestToJson(manifest),
-    );
+      // Resume: a complete prior manifest → skip, but only after verifying it
+      // still covers every collected key (the key scanner may have improved
+      // since it was written) and every stored blob still exists.
+      if (prior?.complete) {
+        const covered = new Set([
+          ...(prior.assets ?? []).map((a) => a.key),
+          ...priorOrphans.map((f) => f.key),
+        ]);
+        const newKeys = collected.filter((k) => !covered.has(k.key)).map((k) => k.key);
+        let lostBlob: string | undefined;
+        if (newKeys.length === 0) {
+          for (const a of prior.assets ?? []) {
+            const name = a.file.split('/').pop() ?? a.file;
+            if (!(await storage.hasAsset(name))) {
+              lostBlob = a.file;
+              break;
+            }
+          }
+        }
+        if (newKeys.length === 0 && !lostBlob) {
+          summary.skipped += 1;
+          recordOwnerFailures(summary, owner, priorOrphans);
+          onEvent({
+            kind: 'log',
+            message: `Assets already done: ${owner.id}${
+              priorOrphans.length ? ` (⚠ ${priorOrphans.length} orphaned at source)` : ''
+            }`,
+          });
+          continue;
+        }
+        onEvent({
+          kind: 'log',
+          message: lostBlob
+            ? `Assets re-run ${owner.id}: stored blob missing (${lostBlob})`
+            : `Assets re-run ${owner.id}: ${newKeys.length} key(s) not covered by the prior manifest (e.g. ${newKeys[0]})`,
+        });
+      }
 
-    summary.fetched += stats.fetched;
-    summary.written += stats.written;
-    summary.deduped += stats.deduped;
-    summary.reused += stats.reused;
-    summary.failed += stats.failed;
+      const { manifest, stats } = await downloadAssetsFor(
+        owner.ownerType,
+        owner.id,
+        owner.doc,
+        storage,
+        downloader,
+        {
+          priorAssets: prior?.assets,
+          priorOrphans,
+          onProgress: (message) => onEvent({ kind: 'log', message }),
+        },
+      );
+      await storage.writeAssetManifest(
+        owner.scope,
+        owner.id,
+        assetManifestToJson(manifest),
+      );
 
-    // Split failures into orphaned (403/404 — missing at source) vs retryable,
-    // tagging each with where it lives so it can be found in Rise.
-    const title = ownerTitle(owner);
-    const orphanKeys: FailedKey[] = [];
-    const otherKeys: FailedKey[] = [];
-    for (const f of manifest.failed) {
-      const bucket = String(f.status || 'network');
-      summary.statusHistogram[bucket] = (summary.statusHistogram[bucket] ?? 0) + 1;
-      const path = f.paths?.[0];
-      const location = path ? formatLocation(locateKey(owner.doc, path)) : undefined;
-      (isOrphanStatus(f.status) ? orphanKeys : otherKeys).push({ key: f.key, location });
-    }
-    if (orphanKeys.length) {
-      summary.orphaned.push({
-        ownerType: owner.ownerType,
-        ownerId: owner.id,
-        title,
-        keys: orphanKeys,
-      });
-    }
-    if (otherKeys.length) {
+      summary.fetched += stats.fetched;
+      summary.written += stats.written;
+      summary.deduped += stats.deduped;
+      summary.reused += stats.reused;
+      summary.failed += stats.failed;
+
+      recordOwnerFailures(summary, owner, manifest.failed);
+
+      const missing = findUndownloadedKeys(collected, manifest);
+      if (missing.length) {
+        onEvent({
+          kind: 'log',
+          message: `⚠ ${owner.id}: ${stats.orphaned} orphaned, ${stats.failed} failed`,
+        });
+      } else {
+        onEvent({
+          kind: 'log',
+          message: `Assets ${owner.id}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
+            stats.fetched || stats.reused ? '' : ' (no media)'
+          }`,
+        });
+      }
+    } catch (e) {
+      // One owner's crash (quota, malformed doc, storage error) must not kill
+      // the whole run — record it loudly and move to the next owner.
       summary.complete = false;
-      summary.undownloaded.push({
+      summary.failedOwners.push({
         ownerType: owner.ownerType,
         ownerId: owner.id,
-        title,
-        keys: otherKeys,
+        title: ownerTitle(owner),
+        error: String(e),
+      });
+      onEvent({
+        kind: 'log',
+        message: `⚠ [${i + 1}/${owners.length}] owner FAILED ${owner.id}: ${String(e)}`,
       });
     }
+  }
 
-    const missing = findUndownloadedKeys(collected, manifest);
-    if (missing.length) {
-      onEvent({
-        kind: 'log',
-        message: `⚠ ${owner.id}: ${orphanKeys.length} orphaned, ${otherKeys.length} failed`,
-      });
-    } else {
-      onEvent({
-        kind: 'log',
-        message: `Assets ${owner.id}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
-          stats.fetched || stats.reused ? '' : ' (no media)'
-        }`,
-      });
-    }
+  if (summary.failedOwners.length) {
+    onEvent({
+      kind: 'log',
+      message: `⚠ ${summary.failedOwners.length} owner(s) failed entirely: ${summary.failedOwners
+        .map((f) => f.ownerId)
+        .join(', ')}`,
+    });
   }
 
   await storage.writeAssetsSummary(JSON.stringify(summary, null, 2));

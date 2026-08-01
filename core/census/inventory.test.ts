@@ -3,6 +3,8 @@ import {
   buildInventory,
   inventoryToCsv,
   inventoryToJson,
+  withFolderPaths,
+  type InventoryRow,
 } from './inventory';
 import type { SearchResultItem } from '@/shared/types/rise';
 
@@ -43,8 +45,51 @@ describe('inventory', () => {
     const csv = inventoryToCsv(rows);
     const lines = csv.split('\n');
     expect(lines[0]).toBe(
-      'id,title,type,lessonCount,owner,ownerEmail,folderId,shareId,createdAt,updatedAt,ready,deleted',
+      'id,title,type,lessonCount,owner,ownerEmail,folderId,folderPath,shareId,createdAt,updatedAt,ready,deleted',
     );
     expect(csv).toContain('"Course, with comma"');
+  });
+
+  describe('folderPath (the operator-facing "location")', () => {
+    const paths = new Map([['f1', 'private / Customer A / 2024']]);
+    const pathOf = (rs: InventoryRow[]): string | undefined => rs[0]?.folderPath;
+
+    it('resolves the folder id to a name-path', () => {
+      expect(buildInventory(items, paths)[0]).toMatchObject({
+        folderId: 'f1',
+        folderPath: 'private / Customer A / 2024',
+      });
+    });
+
+    it('leaves the path blank (keeping the raw id) when the tree is unknown', () => {
+      expect(buildInventory(items)[0]).toMatchObject({ folderId: 'f1', folderPath: '' });
+    });
+
+    it('quotes a path containing the CSV separator', () => {
+      const csv = inventoryToCsv(buildInventory(items, new Map([['f1', 'a, b / c']])));
+      expect(csv).toContain('"a, b / c"');
+    });
+
+    it('backfills rows carried over from an earlier listing', () => {
+      const stale = buildInventory(items); // written before any folder export
+      expect(pathOf(withFolderPaths(stale, paths))).toBe('private / Customer A / 2024');
+    });
+
+    it('refreshes a path that changed (folder renamed or moved)', () => {
+      const before = buildInventory(items, new Map([['f1', 'private / Old']]));
+      expect(pathOf(withFolderPaths(before, paths))).toBe('private / Customer A / 2024');
+    });
+
+    it('keeps existing rows untouched when there is no tree to resolve against', () => {
+      const before = buildInventory(items, paths);
+      expect(withFolderPaths(before, new Map())).toBe(before);
+    });
+
+    it('leaves a row whose folder is absent from the tree alone', () => {
+      const before = buildInventory(items, paths);
+      expect(pathOf(withFolderPaths(before, new Map([['other', 'x']])))).toBe(
+        'private / Customer A / 2024',
+      );
+    });
   });
 });

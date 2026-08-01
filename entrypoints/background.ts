@@ -1,10 +1,18 @@
 // Background service worker: owns auth + fetch orchestration.
-//   - Captures the bearer JWT by observing real Rise requests (webRequest).
+//   - Captures the bearer JWT by observing real Rise requests (webRequest),
+//     keyed BY PLANE (a US and an EU session are different bearers).
 //   - Runs API calls INSIDE the Rise tab (first-party cookies) via scripting,
 //     because Rise's catalog/manage API is cookie-authenticated and a
 //     SameSite cookie is withheld from an extension-origin (cross-site) fetch.
 //   - Exposes typed fetch RPCs to the side panel (search, get-course).
 //   - Pacing lives in the panel, NOT here.
+//
+// TAB PINNING (see shared/messaging.ts `TabPin`): a request may name the exact
+// tab it must run in. Unpinned requests keep the historical behavior (the
+// active/last-focused Rise tab); a pinned request runs in THAT tab or fails
+// loudly — it is never silently re-routed, because re-resolving "the active tab"
+// per request made authoring writes follow window focus (a focused US tab could
+// take the writes of an EU import).
 
 import { identityFromToken, type Identity } from '@/core/auth/jwt';
 import {
@@ -27,18 +35,21 @@ import {
   reviewSocketBaseForPlane,
   uploadStorylinePackage,
 } from '@/core/storyline/review-socket-client';
-import { planeFromHost } from '@/core/import/guards';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
+import { risePlaneFromUrl } from '@/shared/messaging';
 import type {
   BackgroundRequest,
   BackgroundResponse,
   ContentMessage,
   FetchResult,
   RawKind,
+  TabPin,
   WriteRelayResult,
 } from '@/shared/messaging';
 
-const TOKEN_KEY = 'riseToken';
+const TOKEN_KEY = 'riseTokens';
+
+type Plane = 'us' | 'eu';
 
 interface InPageResult {
   ok: boolean;
@@ -118,29 +129,71 @@ async function fetchInRiseTab(
 }
 
 export default defineBackground(() => {
-  let token: string | null = null;
-  let identity: Identity | null = null;
+  interface PlaneAuth {
+    token: string | null;
+    identity: Identity | null;
+  }
+
+  // Bearers are PER PLANE. With a single global slot, a background session
+  // refresh in the SOURCE tab overwrote the TARGET bearer mid-import (both planes
+  // feed the same webRequest observer), and every write after it rode the wrong
+  // account's token.
+  const auth: Record<Plane, PlaneAuth> = {
+    us: { token: null, identity: null },
+    eu: { token: null, identity: null },
+  };
+  // Plane of the most recently captured bearer — the fallback for an UNPINNED
+  // request whose own plane holds no token yet (pre-pinning behavior).
+  let latestPlane: Plane | null = null;
   let risePresent = false;
   let accountName: string | null = null;
 
-  // Restore a token captured earlier this browser session (session storage is
+  // Restore tokens captured earlier this browser session (session storage is
   // cleared when the browser closes — we never persist credentials to disk).
-  browser.storage.session
+  // MEMOIZED: `handle()` awaits it, so a message arriving right after a
+  // service-worker restart can never run against a still-empty token slot.
+  const restored: Promise<void> = browser.storage.session
     .get(TOKEN_KEY)
     .then((r) => {
-      const t = r[TOKEN_KEY];
-      if (typeof t === 'string') {
-        token = t;
-        identity = identityFromToken(t);
+      const saved = r[TOKEN_KEY] as Partial<Record<Plane, string>> | undefined;
+      if (!saved || typeof saved !== 'object') return;
+      for (const plane of ['us', 'eu'] as Plane[]) {
+        const t = saved[plane];
+        if (typeof t === 'string' && t) {
+          auth[plane].token = t;
+          auth[plane].identity = identityFromToken(t);
+          latestPlane ??= plane;
+        }
       }
     })
     .catch(() => {});
 
-  function setToken(next: string): void {
-    if (next === token) return;
-    token = next;
-    identity = identityFromToken(next);
-    browser.storage.session.set({ [TOKEN_KEY]: next }).catch(() => {});
+  function setToken(plane: Plane, next: string): void {
+    latestPlane = plane;
+    const slot = auth[plane];
+    if (next === slot.token) return;
+    slot.token = next;
+    slot.identity = identityFromToken(next);
+    browser.storage.session
+      .set({ [TOKEN_KEY]: { us: auth.us.token, eu: auth.eu.token } })
+      .catch(() => {});
+  }
+
+  /** The auth slot a request should use: the named plane's, else the most
+   *  recently captured one (unpinned callers with no resolvable plane). */
+  function slotFor(plane: Plane | null): PlaneAuth | null {
+    if (plane) return auth[plane];
+    return latestPlane ? auth[latestPlane] : null;
+  }
+
+  /** The bearer for a plane. `strict` (a PINNED request) never falls back to the
+   *  other plane's token — a cross-plane bearer is exactly the mix-up pinning
+   *  exists to prevent. Unpinned requests keep the pre-pinning fallback. */
+  function tokenFor(plane: Plane | null, strict = false): string | null {
+    const own = plane ? auth[plane].token : null;
+    if (own) return own;
+    if (strict) return null;
+    return latestPlane ? auth[latestPlane].token : null;
   }
 
   // Open the side panel when the toolbar icon is clicked.
@@ -153,14 +206,17 @@ export default defineBackground(() => {
   }
 
   // --- Token capture: read Authorization off genuine Rise requests ----------
+  // Keyed by the REQUEST's plane so a US and an EU session coexist.
   browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
-      const auth = details.requestHeaders?.find(
+      const plane = risePlaneFromUrl(details.url);
+      if (!plane) return;
+      const header = details.requestHeaders?.find(
         (h) => h.name.toLowerCase() === 'authorization',
       );
-      const value = auth?.value;
+      const value = header?.value;
       if (value && /^Bearer\s+/i.test(value)) {
-        setToken(value.replace(/^Bearer\s+/i, '').trim());
+        setToken(plane, value.replace(/^Bearer\s+/i, '').trim());
       }
     },
     { urls: RISE_TAB_GLOBS },
@@ -181,13 +237,68 @@ export default defineBackground(() => {
     return any.find((t) => typeof t.id === 'number');
   }
 
+  interface ResolvedTarget {
+    tabId: number;
+    plane: Plane;
+    url: string;
+    /** Pinned targets never fall back to another plane's bearer. */
+    pinned: boolean;
+  }
+
+  /**
+   * Resolve the tab a request runs in. With a pin: exactly that tab, and only
+   * while it is still on the expected plane — otherwise a LOUD error (never a
+   * silent re-resolution). Without a pin: the active/last-focused Rise tab.
+   */
+  async function resolveTarget(
+    pin?: TabPin,
+  ): Promise<{ ok: true; target: ResolvedTarget } | { ok: false; error: string }> {
+    if (pin) {
+      let tab: chrome.tabs.Tab | undefined;
+      try {
+        tab = await chrome.tabs.get(pin.pinnedTabId);
+      } catch {
+        tab = undefined;
+      }
+      const want = pin.expectedPlane.toUpperCase();
+      if (!tab || typeof tab.id !== 'number') {
+        return {
+          ok: false,
+          error: `Pinned target Rise tab (id ${pin.pinnedTabId}, ${want}) is gone — this run is pinned to that tab so its writes can never land in another account. Reopen the target Rise tab, then start the run again.`,
+        };
+      }
+      const plane = risePlaneFromUrl(tab.url);
+      if (plane !== pin.expectedPlane) {
+        return {
+          ok: false,
+          error: `Pinned target Rise tab (id ${pin.pinnedTabId}) is no longer on the ${want} plane (now ${plane ? plane.toUpperCase() : (tab.url ?? 'a non-Rise page')}) — refusing to write into a different account. Point that tab back at the target Rise account, then start the run again.`,
+        };
+      }
+      return { ok: true, target: { tabId: tab.id, plane, url: tab.url ?? '', pinned: true } };
+    }
+    const tab = await findRiseTab();
+    const plane = risePlaneFromUrl(tab?.url);
+    if (!tab || typeof tab.id !== 'number' || !plane) {
+      return {
+        ok: false,
+        error:
+          'No open Rise tab (US rise.articulate.com or EU rise.eu.articulate.com). Open and log into Rise, keep that tab open, then retry.',
+      };
+    }
+    return { ok: true, target: { tabId: tab.id, plane, url: tab.url ?? '', pinned: false } };
+  }
+
   // A Rise COURSE EDITOR tab — URL path `/authoring/{id}`. Operator-confirmed:
   // ONLY a course-editor boot rotates the bearer; reloading the dashboard /
   // project list (`/manage`, `/`) does NOT. So token refresh must target one of
-  // these, never the dashboard. Prefer the active/last-focused editor.
-  async function findCourseEditorTab(): Promise<chrome.tabs.Tab | undefined> {
+  // these, never the dashboard. Prefer the active/last-focused editor, and — when
+  // a plane is known (a pinned run) — only an editor ON THAT PLANE: reloading the
+  // source editor rotates the source bearer and leaves the target's stale.
+  async function findCourseEditorTab(plane?: Plane | null): Promise<chrome.tabs.Tab | undefined> {
     const isEditor = (t: chrome.tabs.Tab): boolean =>
-      typeof t.id === 'number' && /\/authoring\/[^/]+/.test(t.url ?? '');
+      typeof t.id === 'number' &&
+      /\/authoring\/[^/]+/.test(t.url ?? '') &&
+      (!plane || risePlaneFromUrl(t.url) === plane);
     const active = await chrome.tabs.query({ url: RISE_TAB_GLOBS, active: true, lastFocusedWindow: true });
     const hit = active.find(isEditor);
     if (hit) return hit;
@@ -198,19 +309,20 @@ export default defineBackground(() => {
   // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
   // the access token Rise sends as `Authorization: Bearer`. This needs no course
   // navigation and no page reload: the Cookies API reads it (even httpOnly) for
-  // the live tab's plane. Returns true ONLY if a NEW (rotated) JWT was captured —
+  // the given URL's plane. Returns true ONLY if a NEW (rotated) JWT was captured —
   // re-reading the same stale cookie is not a refresh and must not read as one.
-  async function grabTokenFromCookie(): Promise<boolean> {
-    const tab = await findRiseTab();
-    const url = tab?.url;
-    if (!url) return false;
+  // Takes ONE specific tab's URL: the cookie is per-plane, so reading it for the
+  // wrong tab stores the wrong account's bearer under the wrong slot.
+  async function grabTokenForUrl(url: string | undefined): Promise<boolean> {
+    const plane = risePlaneFromUrl(url);
+    if (!url || !plane) return false;
     try {
       const c = await browser.cookies.get({ url, name: '_articulate_rise_' });
       const value = c?.value?.trim();
       // A JWT has three dot-separated segments; guard against a stray cookie.
       if (value && value.split('.').length === 3) {
-        const changed = value !== token;
-        setToken(value);
+        const changed = value !== auth[plane].token;
+        setToken(plane, value);
         return changed;
       }
     } catch {
@@ -219,14 +331,19 @@ export default defineBackground(() => {
     return false;
   }
 
+  async function grabTokenFromCookie(pin?: TabPin): Promise<boolean> {
+    const r = await resolveTarget(pin);
+    return r.ok ? grabTokenForUrl(r.target.url) : false;
+  }
+
   // The account-local Rise user id (`_articulate_user_id` cookie) — the valid
-  // principal for folder ownership. May be URL-encoded (`auth0%7C…`).
-  async function readAccountUserId(): Promise<string | null> {
-    const tab = await findRiseTab();
-    const url = tab?.url;
-    if (!url) return null;
+  // principal for folder ownership. May be URL-encoded (`auth0%7C…`). Read from
+  // the pinned/active target tab, so it is the TARGET account's principal.
+  async function readAccountUserId(pin?: TabPin): Promise<string | null> {
+    const r = await resolveTarget(pin);
+    if (!r.ok) return null;
     try {
-      const c = await browser.cookies.get({ url, name: '_articulate_user_id' });
+      const c = await browser.cookies.get({ url: r.target.url, name: '_articulate_user_id' });
       const raw = c?.value?.trim();
       if (!raw) return null;
       return decodeURIComponent(raw);
@@ -235,20 +352,15 @@ export default defineBackground(() => {
     }
   }
 
-  // Locate the live Rise tab and run the fetch inside it (first-party cookies).
-  async function relayFetch(spec: RelaySpec): Promise<InPageResult> {
-    const tab = await findRiseTab();
-    if (!tab || typeof tab.id !== 'number') {
-      return {
-        ok: false,
-        status: 0,
-        error:
-          'No open Rise tab (US rise.articulate.com or EU rise.eu.articulate.com). Open and log into Rise, keep that tab open, then retry.',
-      };
-    }
+  // Locate the Rise tab (pinned or active) and run the fetch inside it —
+  // first-party cookies plus THAT plane's bearer.
+  async function relayFetch(spec: RelaySpec, pin?: TabPin): Promise<InPageResult> {
+    const resolved = await resolveTarget(pin);
+    if (!resolved.ok) return { ok: false, status: 0, error: resolved.error };
+    const { tabId, plane, pinned } = resolved.target;
     try {
       const [injection] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
+        target: { tabId },
         world: 'ISOLATED',
         func: fetchInRiseTab,
         args: [
@@ -262,7 +374,7 @@ export default defineBackground(() => {
             noAuth: spec.noAuth,
             omitBearer: spec.omitBearer,
           },
-          token,
+          tokenFor(plane, pinned),
         ],
       });
       return (
@@ -284,15 +396,22 @@ export default defineBackground(() => {
   // --- In-page fetch with one-shot 401/403 re-auth --------------------------
   async function rawFetch(
     spec: RequestSpec,
+    pin?: TabPin,
     attempt = 0,
   ): Promise<FetchResult<string>> {
-    const r = await relayFetch(spec);
+    const r = await relayFetch(spec, pin);
 
     // An expired bearer reads back as 401 OR 403 (the authoring endpoints answer
     // 403 "Forbidden") — re-auth and retry once, but ONLY if the token actually
-    // advanced; retrying with the same stale token just 403s again.
-    if ((r.status === 401 || r.status === 403) && attempt === 0 && (await reauth()).advanced) {
-      return rawFetch(spec, 1);
+    // advanced; retrying with the same stale token just 403s again. Throttled:
+    // a dead SSO session would otherwise reload the tab on EVERY paced request.
+    if (
+      (r.status === 401 || r.status === 403) &&
+      attempt === 0 &&
+      reauthAllowed() &&
+      (await reauth(pin)).advanced
+    ) {
+      return rawFetch(spec, pin, 1);
     }
     if (r.status === 401 || r.status === 403) {
       return {
@@ -314,16 +433,19 @@ export default defineBackground(() => {
   // Relay one WRITE envelope through the live Rise tab. Unlike rawFetch, it
   // returns the raw body even on non-2xx so the importer can loud-fail with the
   // server's message (protocol §12). One-shot 401 refresh + retry.
-  async function relayWrite(spec: WriteSpec): Promise<WriteRelayResult> {
+  async function relayWrite(spec: WriteSpec, pin?: TabPin): Promise<WriteRelayResult> {
     // Proactive: refresh before the token lapses so a long import never trips a
     // mid-flight 403 (throttled, so a non-rotating token can't spam refresh).
-    if (tokenExpiringSoon() && Date.now() - lastReauthMs > 30_000) await reauth();
-    let r = await relayFetch(spec);
+    const resolved = await resolveTarget(pin);
+    const plane = resolved.ok ? resolved.target.plane : null;
+    if (tokenExpiringSoon(plane) && reauthAllowed()) await reauth(pin);
+    let r = await relayFetch(spec, pin);
     // Reactive: Rise returns 401 OR 403 on an expired/invalid bearer — re-auth
     // and retry once, but ONLY if the token actually advanced (a non-rotating
-    // refresh would just 403 again on the retry).
-    if ((r.status === 401 || r.status === 403) && (await reauth()).advanced) {
-      r = await relayFetch(spec);
+    // refresh would just 403 again on the retry). Throttled like the proactive
+    // branch so a doomed session can't reload the tab once per paced write.
+    if ((r.status === 401 || r.status === 403) && reauthAllowed() && (await reauth(pin)).advanced) {
+      r = await relayFetch(spec, pin);
     }
     return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
   }
@@ -342,12 +464,17 @@ export default defineBackground(() => {
   // experience — a working in-tab Okta silent re-auth, or driving the SPA's own
   // token service. A reload is robust but visibly disruptive on a long import.
 
-  // Resolve when a tab finishes loading (or a timeout elapses). Used after a
-  // reload so we don't re-read the cookie before the SPA has booted. status is
-  // readable without the "tabs" permission for a host we hold permission for.
-  function waitForTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+  // Resolve when a tab finishes loading a NEW document (or a timeout elapses).
+  // Used after a reload so we don't re-read the cookie before the SPA has booted.
+  // Only a 'complete' that FOLLOWS this reload's 'loading' counts: the tab is
+  // already 'complete' when the reload is issued, so accepting the first
+  // 'complete' resolved immediately and we then read the PRE-reload cookie. If no
+  // 'loading' arrives within the grace window (the reload landed before the
+  // listener attached), an already-'complete' tab is accepted.
+  function waitForTabComplete(tabId: number, timeoutMs: number, graceMs = 1_500): Promise<void> {
     return new Promise((resolve) => {
       let settled = false;
+      let sawLoading = false;
       const finish = (): void => {
         if (settled) return;
         settled = true;
@@ -359,101 +486,140 @@ export default defineBackground(() => {
         resolve();
       };
       const listener = (id: number, info: chrome.tabs.OnUpdatedInfo): void => {
-        if (id === tabId && info.status === 'complete') finish();
+        if (id !== tabId) return;
+        if (info.status === 'loading') {
+          sawLoading = true;
+          return;
+        }
+        if (info.status === 'complete' && sawLoading) finish();
       };
       chrome.tabs.onUpdated.addListener(listener);
-      chrome.tabs
-        .get(tabId)
-        .then((t) => {
-          if (t.status === 'complete') finish();
-        })
-        .catch(() => {});
+      setTimeout(() => {
+        if (settled || sawLoading) return;
+        chrome.tabs
+          .get(tabId)
+          .then((t) => {
+            if (!sawLoading && t.status === 'complete') finish();
+          })
+          .catch(() => {});
+      }, graceMs);
       setTimeout(finish, timeoutMs);
     });
   }
 
-  // Fallback refresh: reload the Rise tab so the SPA runs its OWN (native) Okta
-  // silent re-auth on boot and writes a rotated `_articulate_rise_` cookie, then
-  // poll the cookie until its `exp` advances. This piggybacks on Rise's own,
-  // battle-tested refresh instead of replicating the Okta flow ourselves — far
-  // more robust than the injected iframe, at the cost of a visible reload. Safe
-  // mid-import: reauth only runs BETWEEN paced writes (proactive heartbeat) or
-  // AFTER a write already returned 403, so no write is in flight during reload.
+  // Fallback refresh: reload a Rise COURSE EDITOR tab so the SPA runs its OWN
+  // (native) Okta silent re-auth on boot and writes a rotated `_articulate_rise_`
+  // cookie, then poll THAT TAB's cookie until its `exp` advances. This piggybacks
+  // on Rise's own, battle-tested refresh instead of replicating the Okta flow
+  // ourselves — far more robust than the injected iframe, at the cost of a visible
+  // reload. Safe mid-import: reauth only runs BETWEEN paced writes (proactive
+  // heartbeat) or AFTER a write already returned 403, so no write is in flight.
   // IMPORTANT: only a COURSE EDITOR boot rotates the bearer — reloading the
-  // dashboard does NOT (operator-confirmed 2026-06-23). So this reload only helps
-  // when the active Rise tab is a course editor; if it's the dashboard the poll
-  // times out and we report no-advance honestly (the panel then tells the
-  // operator to open a course). We reload the active/last-focused Rise tab (the
-  // one the operator is looking at and that writes already ride).
-  async function reloadRiseTabForToken(): Promise<boolean> {
+  // dashboard does NOT (operator-confirmed 2026-06-23). If no editor tab is open
+  // the poll times out and we report no-advance honestly (the panel then tells the
+  // operator to open a course).
+  async function reloadRiseTabForToken(plane: Plane | null): Promise<boolean> {
     // ONLY reload a course-editor tab — reloading the dashboard/project list is
     // useless (it never rotates the bearer) and disruptive, so we never do it.
-    // If no editor tab is open, give up here; the caller reports "open a course
-    // editor" rather than churning the wrong tab.
-    const tab = await findCourseEditorTab();
+    const tab = await findCourseEditorTab(plane);
     if (!tab || typeof tab.id !== 'number') return false;
-    const before = identity?.expiresAt ?? 0;
+    const tabId = tab.id;
+    // Poll the RELOADED TAB's own plane/cookie — never the active tab's, which may
+    // belong to a different account entirely.
+    const tabPlane = risePlaneFromUrl(tab.url);
+    if (!tabPlane) return false;
+    const before = auth[tabPlane].identity?.expiresAt ?? 0;
+    // Listen BEFORE reloading so the reload's own 'loading' can't be missed.
+    const loaded = waitForTabComplete(tabId, 20_000);
     try {
-      await chrome.tabs.reload(tab.id);
+      await chrome.tabs.reload(tabId);
     } catch {
       return false;
     }
-    await waitForTabComplete(tab.id, 20_000);
+    await loaded;
     // The SPA's auth bootstrap is async after load — poll the cookie for advance.
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
-      await grabTokenFromCookie();
-      if ((identity?.expiresAt ?? 0) > before) return true;
+      const live = await chrome.tabs.get(tabId).catch(() => undefined);
+      await grabTokenForUrl(live?.url ?? tab.url);
+      if ((auth[tabPlane].identity?.expiresAt ?? 0) > before) return true;
       await new Promise((r) => setTimeout(r, 750));
     }
     return false;
   }
 
   // Re-establish a fresh bearer mid-import.
-  //   1. Re-read the cookie — the editor may have already rotated it (the
-  //      operator opened/refreshed a course, or its own token service fired).
-  //      During an import there's no page traffic for the webRequest observer to
-  //      catch, so we must pull the rotated cookie ourselves.
+  //   1. Re-read the cookie of the pinned/active tab — the editor may have already
+  //      rotated it (the operator opened/refreshed a course, or its own token
+  //      service fired). During an import there's no page traffic for the
+  //      webRequest observer to catch, so we must pull the rotated cookie.
   //   2. If that didn't advance AND the token actually needs refreshing
-  //      (expiring/expired), reload the Rise tab so the SPA refreshes natively
-  //      (the only refresh that works in practice — see reloadRiseTabForToken).
+  //      (expiring/expired), reload a course-editor tab ON THAT PLANE so the Rise
+  //      SPA refreshes natively (the only refresh that works in practice).
   // Reports honestly:
   //   - `advanced`: true ONLY when `exp` actually moved forward (a real
   //     rotation). A "refresh" that doesn't advance `exp` is a no-op, and
   //     retrying a write with it just 403s again.
   //   - `valid`: we currently hold a non-expired token (rotated or not).
   //   - `via`: how the bearer was (re)obtained — for honest logging.
-  // Throttled by the callers so a doomed token can't spam the reload.
+  // The automatic callers gate on reauthAllowed() so a doomed session can't spam
+  // tab reloads; an explicit REAUTH message is operator/run-driven and bypasses it.
   let lastReauthMs = 0;
-  async function reauth(): Promise<{
+  const REAUTH_THROTTLE_MS = 30_000;
+  function reauthAllowed(): boolean {
+    return Date.now() - lastReauthMs > REAUTH_THROTTLE_MS;
+  }
+
+  async function reauth(pin?: TabPin): Promise<{
     advanced: boolean;
     valid: boolean;
     via: 'tab-reload' | 'cookie' | 'none';
   }> {
     lastReauthMs = Date.now();
-    const before = identity?.expiresAt ?? 0;
-    const rotatedByCookie = await grabTokenFromCookie();
+    const resolved = await resolveTarget(pin);
+    const plane = resolved.ok ? resolved.target.plane : null;
+    const before = slotFor(plane)?.identity?.expiresAt ?? 0;
+    const expiryNow = (): number => slotFor(plane)?.identity?.expiresAt ?? 0;
+
+    const rotatedByCookie = resolved.ok ? await grabTokenForUrl(resolved.target.url) : false;
     let via: 'tab-reload' | 'cookie' | 'none' =
-      (identity?.expiresAt ?? 0) > before && rotatedByCookie ? 'cookie' : 'none';
+      expiryNow() > before && rotatedByCookie ? 'cookie' : 'none';
 
     // Cookie re-read didn't rotate. If the token genuinely needs refreshing, let
     // the Rise SPA do it via a tab reload. When the token is still healthy we
     // skip the reload — no point disrupting the tab.
-    if ((identity?.expiresAt ?? 0) <= before && tokenExpiringSoon()) {
-      if (await reloadRiseTabForToken()) via = 'tab-reload';
+    if (expiryNow() <= before && tokenExpiringSoon(plane)) {
+      if (await reloadRiseTabForToken(plane)) via = 'tab-reload';
     }
 
-    const after = identity?.expiresAt ?? 0;
-    const advanced = after > before;
-    const valid = identity?.expiresAt !== undefined && identity.expiresAt > Date.now();
-    return { advanced, valid, via };
+    const after = expiryNow();
+    return { advanced: after > before, valid: after > Date.now(), via };
   }
 
   // The held bearer is short-lived (~15 min). On a long import it expires
   // mid-run; Rise answers an expired token on the authoring endpoints with 403
   // (not 401) — e.g. GET_YURL "Forbidden" — so we must treat 403 as re-auth too.
-  function tokenExpiringSoon(skewMs = 60_000): boolean {
-    return identity?.expiresAt !== undefined && identity.expiresAt - skewMs <= Date.now();
+  // Holding NO token counts as expiring, or the proactive bootstrap before the
+  // first write of a cold service worker never fires.
+  function tokenExpiringSoon(plane: Plane | null, skewMs = 60_000): boolean {
+    const slot = slotFor(plane);
+    if (!slot?.token || slot.identity?.expiresAt === undefined) return true;
+    return slot.identity.expiresAt - skewMs <= Date.now();
+  }
+
+  // MV3 reaps an idle service worker after ~30s of quiet — which kills a pending
+  // sendResponse. The storyline sockets wait minutes with no extension-API
+  // traffic of their own, so poke a trivial API on an interval to reset the idle
+  // timer for the duration of the wait.
+  function startKeepalive(): () => void {
+    const id = setInterval(() => {
+      try {
+        chrome.runtime.getPlatformInfo(() => {});
+      } catch {
+        /* best-effort poke — ignore */
+      }
+    }, 20_000);
+    return () => clearInterval(id);
   }
 
   // Fetch a raw JSON resource and wrap it as a RAW_RESULT (shared by the
@@ -462,8 +628,9 @@ export default defineBackground(() => {
     kind: RawKind,
     spec: RequestSpec,
     label: string,
+    pin?: TabPin,
   ): Promise<BackgroundResponse> {
-    const r = await rawFetch(spec);
+    const r = await rawFetch(spec, pin);
     if (!r.ok) return { type: 'RAW_RESULT', kind, result: r };
     try {
       return {
@@ -487,6 +654,9 @@ export default defineBackground(() => {
   async function handle(
     msg: BackgroundRequest,
   ): Promise<BackgroundResponse> {
+    // Never run against a half-restored token slot after a worker restart.
+    await restored;
+    const pin = msg.pin;
     switch (msg.type) {
       case 'GET_SESSION_STATE': {
         // Live tab query is authoritative (survives SW restarts; the content
@@ -495,30 +665,53 @@ export default defineBackground(() => {
         // so a US-source + EU-target multi-tab setup reports the plane writes
         // actually go to — the Source ≠ Target guard depends on it.
         let present = risePresent;
-        let plane: 'us' | 'eu' | null = null;
+        let plane: Plane | null = null;
         try {
           const all = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
           present = all.some((t) => typeof t.id === 'number');
           const writeTab = await findRiseTab();
           const url = writeTab?.url ?? all.find((t) => typeof t.url === 'string')?.url;
-          plane = planeFromHost(url);
+          plane = risePlaneFromUrl(url);
         } catch {
           /* keep the ping-based value */
         }
-        // Opportunistically grab the bearer from the cookie when we don't have
-        // one yet — so the panel shows a ready session without the operator
-        // clicking "grab token" or opening a course.
-        if (!token && present) await grabTokenFromCookie();
+        // Opportunistically grab the bearer from the cookie when we don't have one
+        // for this plane yet — so the panel shows a ready session without the
+        // operator clicking "grab token" or opening a course.
+        if (!tokenFor(plane) && present) await grabTokenFromCookie();
         const userId = present ? await readAccountUserId() : null;
         return {
           type: 'SESSION_STATE',
-          state: { hasToken: !!token, risePresent: present, identity, accountName, plane, userId },
+          state: {
+            hasToken: !!tokenFor(plane),
+            risePresent: present,
+            identity: slotFor(plane)?.identity ?? null,
+            accountName,
+            plane,
+            userId,
+          },
+        };
+      }
+
+      case 'PIN_RISE_TAB': {
+        // Resolve, ONCE and up front, the tab a whole run is pinned to. Every
+        // later request of that run carries the pin, so focusing another Rise tab
+        // mid-run can no longer redirect its reads or writes.
+        const resolved = await resolveTarget();
+        if (!resolved.ok) {
+          return { type: 'RISE_TAB_PIN', result: { ok: false, error: resolved.error } };
+        }
+        const { tabId, plane, url } = resolved.target;
+        return {
+          type: 'RISE_TAB_PIN',
+          result: { ok: true, status: 200, data: { pinnedTabId: tabId, expectedPlane: plane, url } },
         };
       }
 
       case 'SEARCH_COURSES': {
         const r = await rawFetch(
           buildSearchRequest({ page: msg.page, pageSize: msg.pageSize }),
+          pin,
         );
         if (!r.ok) return { type: 'SEARCH_RESULT', result: r };
         try {
@@ -539,15 +732,16 @@ export default defineBackground(() => {
       }
 
       case 'GET_COURSE': {
-        const r = await rawFetch(buildGetCourseRequest(msg.courseId));
+        const r = await rawFetch(buildGetCourseRequest(msg.courseId), pin);
         if (!r.ok) return { type: 'COURSE_RESULT', result: r };
         try {
-          const parsed = JSON.parse(r.data) as { payload?: unknown };
-          // Save the raw body verbatim; the census walks the payload.
-          const doc = (parsed.payload ?? parsed) as Record<string, unknown>;
+          // Parse to VALIDATE only. A full course document can approach the 64MB
+          // message cap, so it crosses the port ONCE as the raw body — the panel
+          // persists that verbatim and unwraps it locally when it needs the doc.
+          JSON.parse(r.data);
           return {
             type: 'COURSE_RESULT',
-            result: { ok: true, status: r.status, data: { raw: r.data, doc } },
+            result: { ok: true, status: r.status, data: { raw: r.data } },
           };
         } catch {
           return {
@@ -562,7 +756,7 @@ export default defineBackground(() => {
       }
 
       case 'LIST_FOLDERS': {
-        const r = await rawFetch(buildListFoldersRequest());
+        const r = await rawFetch(buildListFoldersRequest(), pin);
         if (!r.ok) return { type: 'FOLDERS_RESULT', result: r };
         try {
           return {
@@ -586,7 +780,7 @@ export default defineBackground(() => {
       }
 
       case 'LIST_QUESTION_BANKS': {
-        const r = await rawFetch(buildListQuestionBanksRequest());
+        const r = await rawFetch(buildListQuestionBanksRequest(), pin);
         if (!r.ok) return { type: 'BANKS_RESULT', result: r };
         try {
           return {
@@ -610,7 +804,7 @@ export default defineBackground(() => {
       }
 
       case 'GET_QUESTION_BANK': {
-        const r = await rawFetch(buildGetQuestionBankRequest(msg.bankId));
+        const r = await rawFetch(buildGetQuestionBankRequest(msg.bankId), pin);
         if (!r.ok) return { type: 'BANK_RESULT', result: r };
         try {
           return {
@@ -638,6 +832,7 @@ export default defineBackground(() => {
           'blockTemplates',
           buildFetchBlockTemplatesRequest(),
           'Block templates response',
+          pin,
         );
 
       case 'FETCH_TYPEFACES':
@@ -645,38 +840,46 @@ export default defineBackground(() => {
           'typefaces',
           buildFetchTypefacesRequest(msg.courseId),
           'Typefaces response',
+          pin,
         );
 
       case 'RELAY_WRITE':
-        return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec) };
+        return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec, pin) };
 
       case 'STORYLINE_EXPORT': {
-        // Trigger the web/raw export and await its zip URL on the ws.eu socket.
-        // The socket runs here so the bearer never leaves the background; the
+        // Trigger the web/raw export and await its zip URL on the ws socket. The
+        // socket runs here so the bearer never leaves the background; the
         // build/raw POST is sent only AFTER `identify` so we can't miss the
         // completion notify. One course at a time (the panel paces the loop), so
         // the first package:success is ours.
-        if (!token) {
-          return {
-            type: 'STORYLINE_EXPORT_RESULT',
-            result: { ok: false, error: 'No Rise token captured yet.' },
-          };
+        //
+        // The completion socket is PLANE-SPECIFIC: a US export's package:success
+        // is pushed to wss://ws.articulate.com, an EU export's to ws.eu. Listen on
+        // the plane of the tab the export actually runs in, else we wait forever
+        // on the wrong host.
+        const resolved = await resolveTarget(pin);
+        if (!resolved.ok) {
+          return { type: 'STORYLINE_EXPORT_RESULT', result: { ok: false, error: resolved.error } };
         }
+        const { plane, pinned, url: tabUrl } = resolved.target;
         // Keep the bearer fresh PER COURSE: the ws `identify` is token-authed and
         // fails silently (socket opens, no identify result) on a stale token —
         // the dominant failure on a long run. Re-read the rotated cookie cheaply;
         // reauth (tab reload) only when actually near expiry.
-        if (tokenExpiringSoon()) await reauth();
-        else await grabTokenFromCookie();
-
-        // The completion socket is PLANE-SPECIFIC: a US export's package:success
-        // is pushed to wss://ws.articulate.com, an EU export's to ws.eu. Listen on
-        // the plane of the source Rise tab (where build/raw runs), else we wait
-        // forever on the wrong host.
-        const exportTab = await findRiseTab();
-        const plane = planeFromHost(exportTab?.url);
+        if (tokenExpiringSoon(plane) && reauthAllowed()) await reauth(pin);
+        else await grabTokenForUrl(tabUrl);
+        const token = tokenFor(plane, pinned);
+        if (!token) {
+          return {
+            type: 'STORYLINE_EXPORT_RESULT',
+            result: { ok: false, error: `No Rise token captured yet for the ${plane.toUpperCase()} plane.` },
+          };
+        }
         const wsUrl = wsExportUrlForPlane(plane);
-        const trace: string[] = [`plane=${plane ?? '?'}`, `ws=${wsUrl}`];
+        const trace: string[] = [`plane=${plane}`, `ws=${wsUrl}`];
+        // The waits below are minutes long with no extension-API traffic — keep
+        // the worker (and this pending response) alive.
+        const stopKeepalive = startKeepalive();
         try {
           const loc = await awaitExportLocation({
             token,
@@ -698,7 +901,7 @@ export default defineBackground(() => {
                 title: msg.title,
                 websocketSessionId: serverSessionId,
               });
-              const r = await relayWrite(spec);
+              const r = await relayWrite(spec, pin);
               trace.push(`build HTTP ${r.status}`);
               if (!r.ok) {
                 throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 150)}`);
@@ -715,27 +918,41 @@ export default defineBackground(() => {
             type: 'STORYLINE_EXPORT_RESULT',
             result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
           };
+        } finally {
+          stopKeepalive();
         }
       }
 
       case 'STORYLINE_UPLOAD': {
         // Upload one repackaged storyline zip to the TARGET Review 360 over
-        // socket.io, then resolve its published contentPrefix. Plane-agnostic:
-        // the review-sockets host follows the active tab's plane.
-        if (!token) {
-          return { type: 'STORYLINE_UPLOAD_RESULT', result: { ok: false, error: 'No Rise token captured yet.' } };
+        // socket.io, then resolve its published contentPrefix. The review-sockets
+        // host follows the plane of the tab this runs in (pinned when the caller
+        // pinned the run).
+        const resolved = await resolveTarget(pin);
+        if (!resolved.ok) {
+          return { type: 'STORYLINE_UPLOAD_RESULT', result: { ok: false, error: resolved.error } };
         }
-        const userId = await readAccountUserId();
+        const { plane, pinned } = resolved.target;
+        const token = tokenFor(plane, pinned);
+        if (!token) {
+          return {
+            type: 'STORYLINE_UPLOAD_RESULT',
+            result: { ok: false, error: `No Rise token captured yet for the ${plane.toUpperCase()} plane.` },
+          };
+        }
+        const userId = await readAccountUserId(pin);
         if (!userId) {
           return {
             type: 'STORYLINE_UPLOAD_RESULT',
             result: { ok: false, error: 'No target account user id (open a logged-in Rise/360 tab).' },
           };
         }
-        const tab = await findRiseTab();
-        const base = reviewSocketBaseForPlane(planeFromHost(tab?.url));
+        const base = reviewSocketBaseForPlane(plane);
         const trace: string[] = [`base=${base}`, `user=${userId.slice(0, 12)}`];
         let socket: Awaited<ReturnType<typeof connectReviewSocket>> | null = null;
+        // Minutes of socket wait with no extension-API traffic — keep the worker
+        // (and this pending response) alive.
+        const stopKeepalive = startKeepalive();
         try {
           socket = await connectReviewSocket({ userId, token, base });
           trace.push('connected');
@@ -752,6 +969,7 @@ export default defineBackground(() => {
             putBytes: async (url) => {
               const r = await relayWrite(
                 s3PutReview({ url, base64Body: msg.zipB64, contentMd5Base64: msg.md5Base64 }),
+                pin,
               );
               if (!r.ok) throw new Error(`S3 PUT HTTP ${r.status}: ${(r.text ?? '').slice(0, 120)}`);
             },
@@ -769,6 +987,7 @@ export default defineBackground(() => {
             result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
           };
         } finally {
+          stopKeepalive();
           try {
             socket?.disconnect();
           } catch {
@@ -781,7 +1000,9 @@ export default defineBackground(() => {
         // Force a fresh bearer on demand (panel calls this before each course).
         // Report whether the token actually advanced vs is merely still valid so
         // the panel can log honestly instead of claiming a refresh that no-op'd.
-        const { advanced, valid, via } = await reauth();
+        const { advanced, valid, via } = await reauth(pin);
+        const resolved = await resolveTarget(pin);
+        const identity = slotFor(resolved.ok ? resolved.target.plane : null)?.identity ?? null;
         return { type: 'REAUTH_RESULT', advanced, valid, via, identity };
       }
     }
@@ -806,7 +1027,11 @@ export default defineBackground(() => {
         accountName = msg.name;
         return false;
       }
-      handle(msg).then(sendResponse);
+      // ALWAYS answer: a throw anywhere outside a per-case try would otherwise
+      // leave the panel awaiting a response that never arrives.
+      handle(msg).then(sendResponse, (e: unknown) =>
+        sendResponse({ type: 'ERROR', error: `Background error: ${String(e)}` }),
+      );
       return true; // async response
     },
   );
