@@ -343,6 +343,13 @@ bank (create + PUT questions), then point the block's item at the new bank id.
 - Likely against Articulate ToS; confirm content ownership/licensing.
 - Re-uploaded media is re-processed (not byte-identical to originals).
 - Token expiry → refresh on 401 (`POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh`).
+- **Multi-language courses ("stacks")** rewrite the course document into l10n
+  form (`{l10nId}` refs + per-locale translation tables in `payload.l10n`, most
+  media keys INSIDE the tables) and add a family of `…/translations` +
+  `rise/l10n/*` + `rise/labelSets/*` endpoints. Captured 2026-07-31/08-01 (EU
+  plane) and documented separately in **`docs/rise-multilang.md`** — detect
+  `course.localizationMetadata.isLocalized` (helper: `core/l10n`
+  `isLocalizedStack`) and use the stack import path.
 
 ---
 

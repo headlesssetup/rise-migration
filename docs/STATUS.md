@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-07-31 (Storyline Stage D built; full-codebase audit fixed). Keep this current at each phase boundary._
+_Last updated: 2026-08-02 (v0.6.0 — multi-language stacks: export, inventory, full import). Keep this current at each phase boundary._
 
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
@@ -8,8 +8,51 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
-> changed a behavior they describe, this top section wins. Current: **v0.4.0**,
-> **468 Vitest tests**, `compile` / `test` green.
+> changed a behavior they describe, this top section wins. Current: **v0.6.0**,
+> **536 Vitest tests**, `compile` / `test` green.
+
+## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
+
+Protocol fully captured across three MITM sessions and documented in
+`docs/rise-multilang.md`; primitives in `core/l10n/` (detector, materializer
+with locale→default→any fallback, cell/batch machinery); stack branch in
+`core/import/plan.ts` + `executor.ts`.
+
+- **Export**: raw archives already carry the full `payload.l10n` overlay; the
+  exporter now RE-FETCHES a course whose archive predates languages shown by
+  the listing; census scans stacks materialized (no `*.l10nId` novelty noise);
+  asset discovery covers table media (generic raw-doc walk); orphan locations
+  format as `translations (ru) › …`; manifest records `toolVersion`.
+- **Inventory**: `multi_language` column (locale codes, default first) straight
+  from the search listing.
+- **Import** (docs/rise-multilang.md §6): minimal placeholder course →
+  `POST …/translations` per formality group (the AI "stack-shape factory" —
+  the ONLY way locale rows exist; AI sees placeholder strings only) → paced
+  await until every language `complete` → GET_COURSE learns the target's own
+  course-level refs → content copy-faithful with SOURCE l10nIds verbatim
+  (creates carry inline `translationChanges`, capture-proven) → table media
+  uploaded + remapped inside cell values → batched `UPDATE_L10N_BATCH` writes,
+  default locale FIRST (pending-flag rule) → custom per-language label sets
+  (CREATE_LABEL_SET/UPDATE_LABELS/UPDATE_LOCALE, run-deduped) → junk-cell
+  cleanup → clean title/description cells per language LAST. Preflight
+  sanity-checks locale codes against `available-languages` (localization is
+  free on every subscription — no plan gating). Read-back: unfiltered foreign-
+  key scan + `verifyL10nParity` (cell-by-cell) + per-language pending counts;
+  reports carry the standing **"never click Update translation"** warning.
+- **"Ready to import?"**: rough pre-run estimate (paced envelopes × pacing +
+  upload bytes + 90 s per stack) shown for any selection in step C.
+- Known gaps (documented in rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR`
+  payload (manual flag), stacks containing banks/Storyline keep the placeholder
+  policy per language, glossaries out of scope, monolingual course-level label
+  sets still unmigrated.
+
+### Roadmap → v0.7.0 (recorded, not designed)
+
+- **Parallel course creation**: Articulate tolerates ~two concurrent editing
+  sessions per account → two internally-sequential import pipelines could run
+  side by side. Needs a scoped relaxation of the strictly-sequential invariant
+  ("per-pipeline sequential, max 2 pipelines") + a re-entrant executor/
+  orchestrator (separate locks, shared token heartbeat, per-course logs).
 
 ## Phase 5 — Storyline/Mighty end-to-end (Stage D): BUILT, needs live verification
 
