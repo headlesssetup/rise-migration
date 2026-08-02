@@ -2,6 +2,12 @@
 
 _Last updated: 2026-08-02 (v0.6.0 — multi-language stacks: export, inventory, full import). Keep this current at each phase boundary._
 
+**Session handover (2026-08-02, multi-language):**
+`docs/handover-2026-08-02-multilang.md` — what shipped, the ONE open decision
+(the "N source changes detected" badge; nothing built, mirroring rejected, an AI
+updates-run is the only remaining route pending a 1-minute operator test), the
+gap list, and the leftover test-run state to clean up.
+
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
 `docs/rise-question-banks.md`, `docs/rise-folders.md`.

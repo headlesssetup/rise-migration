@@ -384,6 +384,29 @@ divergence → the course is `partial`, never `imported`.
 mid-build keeps its `!importing:`/`!unfinished:` marker and is re-imported from
 scratch; delete the partial by hand.
 
+## 6b. OPEN DECISION — the sync badge (nothing built)
+
+A migrated stack shows Rise's "N source changes detected" badge (45 / 57 on the
+two test courses) while the sources show 2. Content is verified identical; the
+target simply lacks the AI-run *stamps* the source's run left behind (§2, pending
+rule). Operator-verified: no dismiss affordance exists, and the ONLY way to clear
+the badge is a course-wide AI run.
+
+Status of the options — **mirroring default values into missing target rows is
+REJECTED** (it permanently disconnects those cells from default-language edits,
+with no in-editor way back: the bundle has `revertToSourceAudio` only, no image
+revert). Faking `translatedAt` is impossible (read-only, server-owned). The only
+remaining route is triggering Rise's own updates-run
+(`POST …/translations/updates {}`), which stamps image cells WITHOUT creating
+target rows — i.e. exactly the source's state, no disconnect — at the cost of AI
+text on the few genuinely-untranslated cells (or an ex-post correction of those).
+Badge 0 is an accepted outcome; reproducing the source's badge is not required.
+
+Unproven and load-bearing: whether an *incremental* run stamps pending MEDIA the
+way the initial `translateAll` did. Settle it with one click on the scratch
+course before building anything — see
+`docs/handover-2026-08-02-multilang.md` §1.
+
 ## 7. Known gaps / open questions
 
 - `TOGGLE_LOCALE_SELECTOR` payload (manual flag until captured).
