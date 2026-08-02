@@ -4,6 +4,12 @@
   font-size: 13px;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
 }
@@ -13,6 +19,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Fill the panel so the Log card can claim the leftover height. */
+  box-sizing: border-box;
+  min-height: 100%;
+}
+
+/* The Log is the only growing card: it takes whatever height is left and
+   scrolls internally, so the panel itself never grows a second scrollbar. */
+.log-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
 }
 
 h1 {
@@ -112,7 +130,10 @@ button:disabled {
 }
 
 .log {
-  max-height: 180px;
+  flex: 1 1 auto;
+  /* A flex item's min-height defaults to auto — without this the <pre> refuses
+     to shrink below its content and pushes the card past the viewport. */
+  min-height: 0;
   overflow: auto;
   font-family: ui-monospace, monospace;
   font-size: 11px;
