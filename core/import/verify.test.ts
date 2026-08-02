@@ -374,3 +374,46 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     ]);
   });
 });
+
+describe('verifyL10nParity — tolerated missing cells (flagged storyline)', () => {
+  const source = {
+    course: { id: 'S' },
+    lessons: [],
+    l10n: {
+      defaultLocale: 'en-us',
+      translations: {
+        'en-us': {
+          'cell-text': 'Hello',
+          'cell-sl': { storyline: { contentPrefix: 'rise/courses/S/leaf', src: 'x' } },
+        },
+        ru: { 'cell-sl': { storyline: { contentPrefix: 'rise/courses/S/leafRU', src: 'y' } } },
+      },
+    },
+  } as never;
+  const target = {
+    course: { id: 'T' },
+    lessons: [],
+    l10n: {
+      defaultLocale: 'en-us',
+      translations: { 'en-us': { 'cell-text': 'Hello' }, ru: {} },
+    },
+  } as never;
+
+  it('routes tolerated absences to `expected` and stays ok', () => {
+    const tolerated = new Set(['cell-sl en-us', 'cell-sl ru']);
+    const r = verifyL10nParity(source, target, { toleratedMissing: tolerated });
+    expect(r.issues).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.expected).toHaveLength(2);
+    expect(r.expected![0]).toMatchObject({ kind: 'missing-cell', l10nId: 'cell-sl' });
+  });
+
+  it('still fails on absences that were NOT announced', () => {
+    const r = verifyL10nParity(source, target);
+    expect(r.ok).toBe(false);
+    expect(r.issues.map((i) => `${i.l10nId} ${i.locale}`).sort()).toEqual([
+      'cell-sl en-us',
+      'cell-sl ru',
+    ]);
+  });
+});

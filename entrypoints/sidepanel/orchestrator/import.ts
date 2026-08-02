@@ -13,6 +13,7 @@ import {
   defaultLocaleOf,
   defaultOnlyCells,
   isLocalizedStack,
+  storylineCells,
   resolveStackTitle,
   stackLocales,
 } from '@/core/l10n';
@@ -871,7 +872,12 @@ export async function runImport(
         // (locale sets, per-locale values modulo media remap) and read back the
         // per-language pending counts for the report.
         if (courseIsStack) {
-          l10nParity = verifyL10nParity(course, targetDoc);
+          // Flagged storyline cells are deliberately NOT copied — their absence
+          // on the target is announced, not a failure (docs/rise-multilang.md §4.3b).
+          const toleratedMissing = new Set(
+            storylineCells(course).map((c) => `${c.l10nId} ${c.locale}`),
+          );
+          l10nParity = verifyL10nParity(course, targetDoc, { toleratedMissing });
           onEvent({
             kind: 'log',
             message: l10nParity.ok

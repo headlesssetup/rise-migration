@@ -423,6 +423,10 @@ export interface L10nParityIssue {
 }
 
 export interface L10nParityReport {
+  /** Divergences that were announced by the plan (flagged storyline cells the
+   *  import deliberately does not copy) — reported, but they never fail the
+   *  course. Mirrors ParityReport.expectedDivergences. */
+  expected?: L10nParityIssue[];
   ok: boolean;
   locales: { source: string[]; target: string[] };
   cells: { source: number; target: number; compared: number };
@@ -443,12 +447,20 @@ export interface L10nParityReport {
 export function verifyL10nParity(
   source: GetCourseDocument,
   target: GetCourseDocument,
+  opts: {
+    /** `cellKey(l10nId, locale)` entries whose ABSENCE on the target is
+     *  expected — the flagged storyline cells the planner deliberately does not
+     *  copy (docs/rise-multilang.md §4.3b). Without this, every flagged stack
+     *  import false-fails its language read-back on exactly those cells. */
+    toleratedMissing?: Set<string>;
+  } = {},
 ): L10nParityReport {
   const srcTables = source.l10n?.translations ?? {};
   const tgtTables = target.l10n?.translations ?? {};
   const srcLocales = Object.keys(srcTables);
   const tgtLocales = Object.keys(tgtTables);
   const issues: L10nParityIssue[] = [];
+  const expected: L10nParityIssue[] = [];
 
   for (const code of srcLocales) {
     if (!tgtLocales.includes(code)) issues.push({ kind: 'missing-locale', locale: code });
@@ -505,7 +517,11 @@ export function verifyL10nParity(
       const tgtId = idMap.get(id) ?? id;
       const tgtValue = tgtTable[tgtId];
       if (tgtValue === undefined) {
-        issues.push({ kind: 'missing-cell', locale: code, l10nId: id });
+        (opts.toleratedMissing?.has(`${id} ${code}`) ? expected : issues).push({
+          kind: 'missing-cell',
+          locale: code,
+          l10nId: id,
+        });
         continue;
       }
       compared++;
@@ -542,12 +558,18 @@ export function verifyL10nParity(
     locales: { source: srcLocales, target: tgtLocales },
     cells: { source: sourceCells, target: targetCells, compared },
     issues,
+    ...(expected.length ? { expected } : {}),
   };
 }
 
 export function l10nParityToMarkdown(r: L10nParityReport): string {
   const lines: string[] = [];
   lines.push(`## Language parity${r.ok ? ' — OK' : ' — DIVERGENCES'}`);
+  if (r.expected?.length) {
+    lines.push(
+      `- ${r.expected.length} expected absence(s) (flagged storyline cells — not copied by design)`,
+    );
+  }
   lines.push(
     `- Languages: ${r.locales.source.join(', ') || '—'} (source) / ${r.locales.target.join(', ') || '—'} (target)`,
   );

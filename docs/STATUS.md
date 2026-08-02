@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **588 Vitest tests**, `compile` / `test` green.
+> **590 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -70,6 +70,23 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
 - Other known gaps (rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR` payload
   (manual flag), glossaries out of scope, monolingual course-level label sets
   still unmigrated.
+
+### Read-back coverage audit (v0.6.4)
+
+Per-surface truth: COURSES are verified against the server at three stages
+(creation handshake; post-conversion GET_COURSE on stacks; end-of-course parity —
+blocks + course fields + media keys + l10n cells + pending counts). Everything
+else is response-trusted with NO independent read-back: folders (created tree
+never re-listed; course→folder move unverified), question banks (no GET-back of
+questions after PUT), typefaces (binding verified, the FONT ids tokenize — a
+FETCH_TYPEFACES name compare would close it), per-language label-set bindings
+(`l10n.locales[].labelSetId` present in the read-back but unchecked), storyline
+attach (media slot verified as filled, not which bundle). Candidate next
+read-backs, by value: bank GET-back ≻ label-set binding ≻ typeface names.
+FIXED in the same pass: `verifyL10nParity` treated the deliberately-not-copied
+(flagged) storyline cells as failures — a stack with an unattached storyline
+would have gone `partial` on its language read-back despite the flag announcing
+exactly that absence; those cells are now routed to `expected`.
 
 ### Course-field read-back (v0.6.4)
 
