@@ -5,6 +5,7 @@ import {
   cellKey,
   collectCells,
   courseRefMap,
+  defaultOnlyCells,
   inlineTranslationChanges,
   isStorylineCell,
   junkCellIds,
@@ -210,5 +211,34 @@ describe('storyline cells (docs/rise-multilang.md §4.3b)', () => {
     expect(new Set(cells.map((c) => c.l10nId))).toEqual(
       new Set(['cccc3333-0000-4000-8000-000000000009']),
     );
+  });
+});
+
+describe('defaultOnlyCells — the "N source changes detected" badge', () => {
+  it('counts per target locale, split media vs text', () => {
+    const counts = defaultOnlyCells(doc);
+    // fixture: en-us default; ru has most cells, ar has few
+    expect(Object.keys(counts).sort()).toEqual(['ar', 'ru']);
+    for (const [, v] of Object.entries(counts)) {
+      expect(v.total).toBe(v.media + v.text);
+    }
+    // ar holds only the title cell → everything else is default-only for ar
+    expect(counts.ar!.total).toBeGreaterThan(counts.ru!.total);
+    // the fixture's default-only set includes media (logo/cover/hero)
+    expect(counts.ru!.media).toBeGreaterThan(0);
+  });
+
+  it('is empty when every locale mirrors the default', () => {
+    const full = {
+      l10n: {
+        defaultLocale: 'en-us',
+        translations: { 'en-us': { a: 'x', b: 'y' }, ru: { a: 'х', b: 'у' } },
+      },
+    } as never;
+    expect(defaultOnlyCells(full)).toEqual({ ru: { total: 0, media: 0, text: 0 } });
+  });
+
+  it('is empty for a monolingual course', () => {
+    expect(defaultOnlyCells({ course: {} } as never)).toEqual({});
   });
 });

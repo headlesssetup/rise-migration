@@ -11,6 +11,7 @@
 
 import {
   defaultLocaleOf,
+  defaultOnlyCells,
   isLocalizedStack,
   resolveStackTitle,
   stackLocales,
@@ -825,6 +826,7 @@ export async function runImport(
     // pending-translation counts (informational — see the report warning).
     let l10nParity: L10nParityReport | undefined;
     let l10nPending: Record<string, number> | undefined;
+    let l10nPendingExpected: Record<string, number> | undefined;
     if (!opts.dryRun && res.ok && res.newCourseId) {
       await pacedDelay(pacing);
       onEvent({ kind: 'log', message: `Verifying parity (read-back GET_COURSE ${res.newCourseId})…` });
@@ -895,12 +897,32 @@ export async function runImport(
               const n = typeof it.pendingChangesCount === 'number' ? it.pendingChangesCount : 0;
               if (code && n > 0) l10nPending[code] = n;
             }
+            // Predict the count from the ARCHIVE (cells the source has only in
+            // the default language) so the operator can match it against Rise's
+            // badge: equal ⇒ expected/benign, different ⇒ a real signal.
+            const expected = defaultOnlyCells(course);
+            l10nPendingExpected = Object.fromEntries(
+              Object.entries(expected).map(([c, v]) => [c, v.total]),
+            );
             if (Object.keys(l10nPending).length) {
+              const parts = Object.entries(l10nPending).map(([c, n]) => {
+                const e = expected[c];
+                if (!e) return `${c}: ${n}`;
+                const verdict = n === e.total ? 'as expected' : `EXPECTED ${e.total}`;
+                return `${c}: ${n} (${verdict}; ${e.media} media, ${e.text} text)`;
+              });
+              const mismatch = Object.entries(l10nPending).some(
+                ([c, n]) => (expected[c]?.total ?? -1) !== n,
+              );
               onEvent({
                 kind: 'log',
-                message: `${pfx} NOTE: Rise shows pending "untranslated" cells (${Object.entries(l10nPending)
-                  .map(([c, n]) => `${c}: ${n}`)
-                  .join(', ')}) — faithful to the source's fallback state. Do NOT click "Update translation".`,
+                message:
+                  `${pfx} NOTE: Rise shows "source changes detected" — ${parts.join(', ')}. ` +
+                  'These are cells the SOURCE holds only in its default language (fallback ' +
+                  'cells — mostly media): the content is identical, only Rise\'s sync marker ' +
+                  'differs, and it cannot be set via the API. Do NOT click "Update Translations" ' +
+                  '(it would AI-translate them).' +
+                  (mismatch ? ' ⚠ The count does NOT match the archive — investigate.' : ''),
               });
             }
           }
@@ -919,11 +941,19 @@ export async function runImport(
     const manual = resolveManualWork(res.flags, blockIndex);
     await storage.writeImportArtifact(
       `${courseId}.report.md`,
-      buildCourseReportMarkdown({ report, parity, l10nParity, l10nPending, manual }),
+      buildCourseReportMarkdown({ report, parity, l10nParity, l10nPending, l10nPendingExpected, manual }),
     );
     await storage.writeImportArtifact(
       `${courseId}.report.json`,
-      buildCourseReportJson({ report, parity, l10nParity, l10nPending, manual, idMap: res.idMap }),
+      buildCourseReportJson({
+        report,
+        parity,
+        l10nParity,
+        l10nPending,
+        l10nPendingExpected,
+        manual,
+        idMap: res.idMap,
+      }),
     );
 
     const status: CourseStatus = opts.dryRun

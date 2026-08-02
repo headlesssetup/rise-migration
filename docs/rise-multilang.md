@@ -87,13 +87,26 @@ Facts that drive the migration design:
   the asset from the source" — official docs). A single-row cell is what every
   language shares; that's why swapping an image sometimes "changes all
   languages" (that cell had one row).
-- **Pending ("new content, untranslated") rule** (capture-derived): a cell is
-  flagged per target locale iff the default-locale row is NEWER than that
-  locale's row, or the target row is missing. Target-only cells are never
-  flagged. ⇒ **write default-locale values BEFORE target-locale values**;
-  cells that are default-only in the source stay flagged on the target —
-  faithful — and the report warns: **never click "Update translation"** on a
-  migrated stack (it AI-translates exactly those cells).
+- **Pending ("N source changes detected") rule** (capture + live-verified): a
+  cell counts as pending for a target locale iff the default-locale row is NEWER
+  than that locale's row, or **the target row is missing**. Target-only cells are
+  never flagged. ⇒ **write default-locale values BEFORE target-locale values**
+  (otherwise EVERY cell is pending).
+  **After a faithful import the badge is expected and unavoidable.** Cells the
+  source holds only in its default language (fallback cells — overwhelmingly
+  media records, plus non-translatable text like quiz choices, numbers, urls)
+  have no target-locale row to copy, so Rise counts each one as a source change.
+  Live measurement (2026-08-02): a stack whose source reported `updateCount: 2`
+  imported as "45 source changes" — exactly its 45 default-only cells (41 media,
+  4 text); its sibling: 57. The source shows a *lower* number only because its
+  own AI run stamped those cells as processed; **no API can set that marker** —
+  the only writer is a translation run, which a migration must never do (it would
+  AI-translate content the source deliberately left untranslated).
+  So: content is identical in every language; only the sync marker differs.
+  `defaultOnlyCells()` (`core/l10n/tables.ts`) PREDICTS the number from the
+  archive, and the import logs + reports it next to what Rise shows — matching
+  counts mean benign, a mismatch is a real signal. The reports also carry the
+  standing warning: **never click "Update Translations"** on a migrated stack.
 - `defaultLocale` is operator-DECLARED at conversion, never validated (a German
   course declared `en-us` converts happily).
 - Label sets are **account-scoped**; the default locale row points at the

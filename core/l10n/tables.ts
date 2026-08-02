@@ -261,6 +261,45 @@ export function planCellWrites(
 }
 
 /**
+ * Cells the source holds ONLY in the default locale, per target locale.
+ *
+ * These are fallback cells (mostly media records, plus non-translatable text
+ * like quiz choices, numbers, urls): the source renders them in every language
+ * from the default row, and there is no target-locale row to copy. After an
+ * import Rise counts each one as a "source change" for that language — the
+ * "N source changes detected / translations are out of sync" badge — because on
+ * the target those cells were authored AFTER the conversion, so Rise has never
+ * stamped them as translated. The CONTENT is identical to the source; only the
+ * sync marker differs, and it cannot be set through the API (the only writer is
+ * an AI translation run, which is exactly what a migration must not do).
+ *
+ * We therefore PREDICT the number from the archive so the operator can match it
+ * against what Rise shows: equal ⇒ benign and expected; different ⇒ a real
+ * signal worth investigating.
+ */
+export function defaultOnlyCells(doc: GetCourseDocument): Record<
+  string,
+  { total: number; media: number; text: number }
+> {
+  const tables = doc.l10n?.translations ?? {};
+  const def = defaultLocaleOf(doc) ?? '';
+  const defTable = tables[def] ?? {};
+  const out: Record<string, { total: number; media: number; text: number }> = {};
+  for (const [locale, table] of Object.entries(tables)) {
+    if (locale === def) continue;
+    let media = 0;
+    let text = 0;
+    for (const [id, value] of Object.entries(defTable)) {
+      if (table[id] !== undefined) continue;
+      if (typeof value === 'string') text++;
+      else media++;
+    }
+    out[locale] = { total: media + text, media, text };
+  }
+  return out;
+}
+
+/**
  * Target-side cells to DELETE after the import: l10nIds present in the target
  * tables that are neither source ids nor mapped target ids (`keep`). These are
  * the placeholder-era cells the AI conversion created. `delete` removes the id

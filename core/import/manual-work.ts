@@ -224,9 +224,12 @@ export function buildCourseReportMarkdown(args: {
   l10nParity?: L10nParityReport;
   /** Per-language pending-translation counts read back after the import. */
   l10nPending?: Record<string, number>;
+  /** Same shape, PREDICTED from the archive (cells the source holds only in its
+   *  default language). Equal to `l10nPending` ⇒ expected/benign. */
+  l10nPendingExpected?: Record<string, number>;
   manual: ManualWorkItem[];
 }): string {
-  const { report: r, parity, l10nParity, l10nPending, manual } = args;
+  const { report: r, parity, l10nParity, l10nPending, l10nPendingExpected, manual } = args;
   const status = fidelityStatus(r);
   const resumable = status === 'PARTIAL' || status === 'STOPPED';
   const lines: string[] = [];
@@ -265,11 +268,27 @@ export function buildCourseReportMarkdown(args: {
     lines.push('');
     lines.push(l10nParityToMarkdown(l10nParity));
     if (l10nPending && Object.keys(l10nPending).length) {
-      const parts = Object.entries(l10nPending).map(([c, n]) => `${c}: ${n}`);
-      lines.push(`- Cells Rise shows as "untranslated" per language: ${parts.join(' · ')}`);
+      const parts = Object.entries(l10nPending).map(([c, n]) => {
+        const exp = l10nPendingExpected?.[c];
+        return exp === undefined ? `${c}: ${n}` : `${c}: ${n} of ${exp} expected`;
+      });
+      const mismatch =
+        !!l10nPendingExpected &&
+        Object.entries(l10nPending).some(([c, n]) => l10nPendingExpected[c] !== n);
+      lines.push(`- Rise reports "source changes detected" per language: ${parts.join(' · ')}`);
       lines.push(
-        '  (faithful to the source — those cells fall back to the default language there too)',
+        '  These are cells the SOURCE holds only in its default language (fallback cells —',
       );
+      lines.push(
+        '  mostly media, plus non-translatable text). Every language shows the same content as',
+      );
+      lines.push(
+        '  the source; only Rise\'s "translated" marker differs, and no API can set it (the only',
+      );
+      lines.push('  writer is an AI translation run).');
+      if (mismatch) {
+        lines.push('  ⚠ The counts do NOT match the archive — investigate before shipping.');
+      }
     }
     lines.push('');
     lines.push(
@@ -287,6 +306,7 @@ export function buildCourseReportJson(args: {
   parity?: ParityReport;
   l10nParity?: L10nParityReport;
   l10nPending?: Record<string, number>;
+  l10nPendingExpected?: Record<string, number>;
   manual: ManualWorkItem[];
   idMap: Record<string, string>;
 }): string {
@@ -296,6 +316,7 @@ export function buildCourseReportJson(args: {
       parity: args.parity ?? null,
       l10nParity: args.l10nParity ?? null,
       l10nPending: args.l10nPending ?? null,
+      l10nPendingExpected: args.l10nPendingExpected ?? null,
       manualWork: args.manual,
       idMap: args.idMap,
     },
