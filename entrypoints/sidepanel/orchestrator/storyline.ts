@@ -88,7 +88,15 @@ export async function scanSavedCoursesForStoryline(
       out.push({ courseId, title: courseTitle(doc), blocks });
       onEvent({
         kind: 'log',
-        message: `[${i + 1}/${ids.length}] ${courseTitle(doc) ?? courseId}: ${blocks.length} storyline block(s)`,
+        // A STACK yields one ref PER LANGUAGE for the same block (each language
+        // can carry its own package), so count distinct blocks separately from
+        // the per-language packages — "2 blocks" for a 1-block stack misleads.
+        message:
+          `[${i + 1}/${ids.length}] ${courseTitle(doc) ?? courseId}: ` +
+          `${new Set(blocks.map((b) => b.blockId)).size} storyline block(s)` +
+          (blocks.some((b) => b.locale)
+            ? `, ${blocks.filter((b) => b.locale).length} language-specific package(s)`
+            : ''),
       });
     }
   }

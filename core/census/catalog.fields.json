@@ -1374,6 +1374,7 @@
     "items[].media.image.sourcedFrom",
     "items[].media.image.src",
     "items[].media.image.thumbnail",
+    "items[].media.image.translationOverride",
     "items[].media.image.type",
     "items[].media.image.uploadProgress",
     "items[].media.image.useCrushedKey",

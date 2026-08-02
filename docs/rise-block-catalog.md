@@ -125,6 +125,12 @@ These are known Rise block types not yet captured in our traffic. Copy-faithful 
 
 > **Field profiles.** A scrape writes `catalog.json`/`catalog.csv` — per-variant field profiles (each field tagged **core**/**optional** with presence %). That is the scalable knowledge base this table summarizes; `novelty.csv` surfaces only **new variants** and (once a variant has a recorded field baseline) **new fields**.
 
+## Accepted from novelty review
+
+| Variant | Field | Classification | Source |
+|---|---|---|---|
+| `image/hero` | `items[].media.image.translationOverride` | **new field** — multi-language feature: marks a media cell a language OVERRIDE (set when a target language's asset is swapped; the cell then stops following the source language). Copy-faithful; carried verbatim in the l10n cell. | novelty run 2026-08-02 (EU stack `AEDTROY…`), capture `capture1aug_2.mitm`; see `docs/rise-multilang.md` §2/§4.3 |
+
 ## Review queue (auto-captured, awaiting classification)
 
 _Tool appends here: shape signature, classification hypotheses (new block / version diff / code fault), example courseId + path, raw snippet. Operator classifies → entry moves up + catalog updates._
