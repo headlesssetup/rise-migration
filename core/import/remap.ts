@@ -46,6 +46,74 @@ export function registerClientIds(doc: Json, ids: IdMap): IdMap {
   return ids;
 }
 
+/**
+ * Give a BLOCK's structural client ids fresh values, positionally.
+ *
+ * Why this exists: `remapIds` only re-mints ids that LOOK like Rise cuids
+ * (`looksLikeClientId`). Real courses carry other shapes — Rise's own sample
+ * courses number their blocks and items `"1"`, `"2"`, `"3"` and reuse those ids
+ * in EVERY lesson (one captured course: 40 blocks, 14 distinct ids). Sending the
+ * same block id for five lessons made the server clobber them: blocks landed in
+ * the wrong lesson, and on a stack their translation cells vanished with them.
+ *
+ * A block id is ours to choose, so any id that is not cuid-shaped is replaced
+ * with a fresh one. The rewrite is:
+ *  - POSITIONAL — only the block's own `id` and the `id` of objects reachable
+ *    through `items` arrays. Ids nested elsewhere (`media.storyline.meta.slides[].id`,
+ *    bank `questions[].id`) are left alone; a short id like "1" must never be
+ *    replaced by string-equality, which would also hit ordinary values.
+ *  - PER BLOCK — the map is local to this call, so `"1"` in lesson 2 and `"1"`
+ *    in lesson 3 get DIFFERENT new ids (the whole point).
+ * `items:<oldId>` ref strings inside the same block are rewritten to match.
+ *
+ * Blocks whose ids are already cuid-shaped come back untouched (the global
+ * `remapIds` pass handles those, keeping cross-block refs consistent).
+ */
+export function freshClientIds<T extends Json>(block: T, mint: () => string): T {
+  const local = new Map<string, string>();
+  const claim = (id: unknown): string | undefined => {
+    if (typeof id !== 'string' || id === '' || looksLikeClientId(id)) return undefined;
+    let next = local.get(id);
+    if (!next) {
+      next = mint();
+      local.set(id, next);
+    }
+    return next;
+  };
+  // Pass 1 — collect, walking only the structural id positions.
+  const collect = (node: Json): void => {
+    if (!isObject(node)) return;
+    claim(node.id);
+    const items = node.items;
+    if (Array.isArray(items)) items.forEach(collect);
+  };
+  collect(block);
+  if (local.size === 0) return block;
+  // Pass 2 — clone, substituting ids at those positions and inside ref strings.
+  const clone = (node: Json, structural: boolean): Json => {
+    if (typeof node === 'string') {
+      return node.replace(/items:([^/\s"']+)/g, (m, id: string) => {
+        const next = local.get(id);
+        return next ? `items:${next}` : m;
+      });
+    }
+    if (Array.isArray(node)) return node.map((v) => clone(v, structural));
+    if (!isObject(node)) return node;
+    const out: Record<string, Json> = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'id' && structural && typeof v === 'string' && local.has(v)) {
+        out[k] = local.get(v)!;
+      } else if (k === 'items') {
+        out[k] = Array.isArray(v) ? v.map((child) => clone(child, true)) : clone(v, false);
+      } else {
+        out[k] = clone(v, false);
+      }
+    }
+    return out;
+  };
+  return clone(block, true) as T;
+}
+
 /** Rewrite any `items:<oldId>` segments inside a ref/uploadId string. */
 function remapRefString(s: string, ids: IdMap): string {
   return s.replace(/items:([a-z0-9]+)/gi, (m, id) => {

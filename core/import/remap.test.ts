@@ -1,15 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { IdMap } from './ids';
 import {
-  remapIds,
-  blankUploadedMediaKeys,
+  SERVER_OWNED_FIELDS,
   blankForeignMediaKeys,
+  blankUploadedMediaKeys,
+  findForeignMediaKeys,
+  findSurvivingSourceKeys,
+  freshClientIds,
+  registerClientIds,
+  remapIds,
   remapMediaKeys,
   stripMediaReference,
-  findSurvivingSourceKeys,
-  findForeignMediaKeys,
-  registerClientIds,
-  SERVER_OWNED_FIELDS,
 } from './remap';
 
 // Deterministic id factory: old-id → NEW(old-id)
@@ -290,5 +291,76 @@ describe('findForeignMediaKeys', () => {
   it('keeps cdn/embeds out of scope', () => {
     const doc = { cover: 'https://cdn.articulate.com/x.jpg', e: 'https://youtu.be/1' };
     expect(findForeignMediaKeys(doc, ['TGT'])).toEqual([]);
+  });
+});
+
+describe('freshClientIds — non-cuid block/item ids (Rise sample courses)', () => {
+  const mint = () => {
+    let n = 0;
+    return () => `cfresh${String(++n).padStart(19, '0')}`;
+  };
+
+  const numberedBlock = {
+    id: '3',
+    family: 'list',
+    variant: 'numbered',
+    items: [
+      { id: '1', paragraph: 'a', refs: ['items:1/paragraph'] },
+      { id: '2', paragraph: 'b' },
+    ],
+    settings: { paddingTop: 3, columns: '2' },
+  };
+
+  it('re-mints the block + item ids and rewrites items: refs', () => {
+    const out = freshClientIds(numberedBlock, mint()) as typeof numberedBlock;
+    expect(out.id).toBe('cfresh0000000000000000001');
+    expect(out.items[0]!.id).toBe('cfresh0000000000000000002');
+    expect(out.items[1]!.id).toBe('cfresh0000000000000000003');
+    // the id is swapped, the path suffix preserved
+    expect(out.items[0]!.refs).toEqual(['items:cfresh0000000000000000002/paragraph']);
+    // untouched content — a bare "2" that is NOT an id position stays put
+    expect(out.settings.columns).toBe('2');
+    expect(out.family).toBe('list');
+  });
+
+  it('gives the SAME source id different values per call (the collision fix)', () => {
+    const m = mint();
+    const a = freshClientIds(numberedBlock, m) as typeof numberedBlock;
+    const b = freshClientIds(numberedBlock, m) as typeof numberedBlock;
+    expect(a.id).not.toBe(b.id);
+    expect(a.items[0]!.id).not.toBe(b.items[0]!.id);
+  });
+
+  it('leaves cuid-shaped ids alone (the global IdMap pass owns those)', () => {
+    const cuid = {
+      id: 'cmsahv00e002j3b7vsfxtdddt',
+      items: [{ id: 'cmsahv00e0170357is3ygm7ch' }],
+    };
+    expect(freshClientIds(cuid, mint())).toEqual(cuid);
+  });
+
+  it('never touches ids outside the items chain (storyline meta, bank questions)', () => {
+    const block = {
+      id: '1',
+      items: [
+        {
+          id: '1',
+          media: { storyline: { meta: { slides: [{ id: '61v06kIDyzq', title: 'Intro' }] } } },
+        },
+        { id: '2', type: 'DRAW_FROM_QUESTION_BANK', questions: [{ id: '7', title: 'q' }] },
+      ],
+    };
+    const out = freshClientIds(block, mint()) as typeof block;
+    // structural ids changed…
+    expect(out.id).not.toBe('1');
+    expect(out.items[0]!.id).not.toBe('1');
+    // …nested non-structural ids did NOT
+    expect(out.items[0]!.media!.storyline.meta.slides[0]!.id).toBe('61v06kIDyzq');
+    expect(out.items[1]!.questions![0]!.id).toBe('7');
+  });
+
+  it('is a no-op for a block with no ids at all', () => {
+    const b = { family: 'divider', settings: {} };
+    expect(freshClientIds(b, mint())).toEqual(b);
   });
 });

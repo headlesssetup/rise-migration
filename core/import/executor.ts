@@ -22,6 +22,7 @@ import {
   type L10nChange,
 } from '@/core/l10n';
 import {
+  freshClientIds,
   remapIds,
   blankUploadedMediaKeys,
   blankForeignMediaKeys,
@@ -45,6 +46,7 @@ import {
   parseJson,
   payloadOf,
   indexSource,
+  blockKey,
   authorProfile,
 } from './executor-types';
 import type { ExecutorDeps, ExecResult, AssetBytes } from './executor-types';
@@ -637,14 +639,19 @@ export async function executePlan(
           const newIdToSource = new Map<string, string>();
           const built: Record<string, unknown>[] = [];
           for (const ref of step.blocks) {
-            const entry = srcBlocks.get(ref.sourceBlockId);
+            const entry = srcBlocks.get(blockKey(step.sourceLessonId, ref.sourceBlockId));
             if (!entry) throw new WriteError(`Source block ${ref.sourceBlockId} not found`, step.kind);
-            const remapped = blankUploadedMediaKeys(remapIds(entry.block, ids)) as Record<string, unknown>;
+            // freshClientIds FIRST: block/item ids that are not cuid-shaped (Rise's
+            // sample courses number them "1","2","3"… in EVERY lesson) get a fresh
+            // per-block id, so two lessons never claim the same block id. Then the
+            // usual IdMap pass handles cuid-shaped ids + refs globally.
+            const normalized = freshClientIds(entry.block, mint);
+            const remapped = blankUploadedMediaKeys(remapIds(normalized, ids)) as Record<string, unknown>;
             const newBlockId = String(remapped.id ?? '');
             newIdToSource.set(newBlockId, ref.sourceBlockId);
             built.push(remapped);
             // Provisional mapping (confirmed below in a live run).
-            blockMeta.set(ref.sourceBlockId, { newId: newBlockId });
+            blockMeta.set(blockKey(step.sourceLessonId, ref.sourceBlockId), { newId: newBlockId });
           }
           // Stack: inline the default-locale cells for every {l10nId} ref in
           // these blocks (action:'add' + the TARGET lesson id — capture-proven).
@@ -652,7 +659,7 @@ export async function executePlan(
           let translationChanges: L10nChange[] | undefined;
           if (stack) {
             const srcSubtrees = step.blocks.map(
-              (r) => srcBlocks.get(r.sourceBlockId)?.block,
+              (r) => srcBlocks.get(blockKey(step.sourceLessonId, r.sourceBlockId))?.block,
             );
             translationChanges = inlineTranslationChanges(
               srcSubtrees,
@@ -695,7 +702,7 @@ export async function executePlan(
                   JSON.stringify(resp),
                 );
               }
-              blockMeta.set(src, {
+              blockMeta.set(blockKey(step.sourceLessonId, src), {
                 newId: newBlockId,
                 globalBlockId:
                   typeof meta.globalBlockId === 'string' ? meta.globalBlockId : undefined,
@@ -718,7 +725,7 @@ export async function executePlan(
           const bound = deps.input.boundBanks?.get(step.sourceBankId);
           const newBankId = bound?.newBankId ?? ids.get(step.sourceBankId);
           if (!newBankId) throw new WriteError('bind before bank create', step.kind);
-          const meta = blockMeta.get(step.sourceBlockId);
+          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           const newLessonId = ids.get(step.sourceLessonId)!;
           const pendingItemId = mint();
           const questionList = bound?.questionIds ?? bankQuestionIds.get(step.sourceBankId) ?? [];
@@ -752,8 +759,8 @@ export async function executePlan(
           break;
         }
         case 'patch-block-media': {
-          const entry = srcBlocks.get(step.sourceBlockId);
-          const meta = blockMeta.get(step.sourceBlockId);
+          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           if (!entry || !meta) throw new WriteError('patch before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
           // Build the patched block: remap ids, then swap source keys → new keys.
@@ -774,8 +781,8 @@ export async function executePlan(
           // item's bundle into the course, then patch the (empty) block's
           // media.storyline to point at the copied bundle. The copy preserves the
           // review item's leaf, so contentPrefix = rise/courses/{courseId}/{leaf}.
-          const entry = srcBlocks.get(step.sourceBlockId);
-          const meta = blockMeta.get(step.sourceBlockId);
+          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           if (!entry || !meta) throw new WriteError('attach before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
           const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
@@ -1078,7 +1085,7 @@ export async function executePlan(
           // language's uploaded package into the course, then write the storyline
           // CELL for that locale. The block already carries the {l10nId} ref
           // (copy-faithful) — patching its media would clobber every language.
-          const meta = blockMeta.get(step.sourceBlockId);
+          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           if (!meta) throw new WriteError('attach before block create', step.kind);
           const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
           await send(

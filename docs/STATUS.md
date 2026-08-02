@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **572 Vitest tests**, `compile` / `test` green.
+> **579 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -70,6 +70,19 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
 - Other known gaps (rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR` payload
   (manual flag), glossaries out of scope, monolingual course-level label sets
   still unmigrated.
+
+### Duplicate client ids across lessons — FIXED (v0.6.3)
+
+Found by the first full stack import: block/item ids are client-generated and
+Rise's own sample courses reuse `"1"`,`"2"`,`"3"` in every lesson (40 blocks /
+14 distinct ids). We shipped them verbatim (`remapIds` only re-mints cuid-shaped
+ids), so the server clobbered blocks across lessons: whole lessons' translation
+cells vanished (100 of 170 on one course), read-back parity reported
+`block-type-changed`, and per-block follow-ups were mis-keyed. Now
+`freshClientIds` re-mints non-cuid ids positionally + per block, and the source
+index / blockMeta / follow-up steps key on `lessonId+blockId`. **This was a
+monolingual bug too** — any course with such ids lost blocks silently; the l10n
+parity check is what finally made it visible.
 
 ### Built-in ("library") assets — copied + probed (v0.6.2)
 

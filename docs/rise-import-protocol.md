@@ -282,6 +282,33 @@ images stay as references. The `GET_YURL→S3 PUT` upload is capture-confirmed; 
   no uploaded media (text, divider, html/inline, continue, etc.) are **done** after
   `CREATE_BLOCKS` — nothing else to do.
 
+### Client ids are NOT unique in the source — re-mint them all
+
+Block and item ids are **client-generated**, and real courses reuse them across
+lessons: Rise's own sample courses number blocks and items `"1"`, `"2"`, `"3"` in
+EVERY lesson (one captured course: 40 blocks, **14 distinct ids**; 50 item ids,
+8 distinct). Consequences if they are shipped verbatim (the bug fixed in v0.6.3):
+
+- five lessons each claim block id `"1"` → the server keeps one and clobbers the
+  rest, so blocks land in the wrong lesson (read-back parity reports
+  `block-type-changed`);
+- on a STACK the clobbered blocks take their translation cells with them (that
+  course lost 100 of 170 cells, whole lessons at a time);
+- per-block follow-ups (`patch-block-media`, `attach-storyline`) and the source
+  index were keyed by block id ALONE, so they resolved to the wrong block.
+
+Rules:
+
+- `freshClientIds(block, mint)` (`core/import/remap.ts`) re-mints any block/item
+  id that is not cuid-shaped, **positionally** (the block's own `id` and `id`s
+  reachable through `items` arrays only — never `media.storyline.meta.slides[].id`
+  or bank `questions[].id`) and **per block**, so `"1"` in lesson 2 and `"1"` in
+  lesson 3 get different ids. `items:<id>` refs inside the block are rewritten to
+  match. Cuid-shaped ids are left to the global `IdMap` pass, which keeps
+  cross-block references consistent.
+- Everything that addresses a source block — the source index, `blockMeta`, plan
+  follow-up steps — is keyed by **`lessonId` + `blockId`** (`blockKey()`).
+
 ### Built-in ("library") assets vs account uploads
 
 Rise's own stock media is NOT account media and has nothing to re-upload. It

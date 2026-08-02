@@ -808,3 +808,187 @@ describe('built-in (library) course images — copied, probed, flagged', () => {
     expect(flag?.detail).toMatch(/NOT checked/);
   });
 });
+
+describe('duplicate block ids across lessons (Rise sample courses)', () => {
+  /** Two lessons whose blocks BOTH use ids "1"/"2" — the shape that made the
+   *  server clobber blocks and drop their l10n cells. */
+  function collidingCourse(): PlanInput {
+    const block = (id: string, variant: string, key?: string) => ({
+      id,
+      family: key ? 'image' : 'text',
+      variant,
+      type: key ? 'image' : 'text',
+      items: [
+        key
+          ? { id: '1', media: { image: { key, type: 'image' } } }
+          : { id: '1', paragraph: `text of ${variant}` },
+      ],
+    });
+    return {
+      author: 'auth0|target',
+      targetFolderId: 'all',
+      banksById: new Map(),
+      assets: [
+        { key: 'rise/courses/SRC/a.jpg', kind: 'media-image', file: 'assets/h.jpg', ext: 'jpg' },
+      ],
+      course: {
+        course: { id: 'SRC', title: 'Sample', lessons: ['L1', 'L2'] },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'One',
+            items: [block('1', 'heading'), block('2', 'hero', 'rise/courses/SRC/a.jpg')],
+          },
+          {
+            id: 'L2',
+            position: 1,
+            type: 'blocks',
+            title: 'Two',
+            items: [block('1', 'paragraph'), block('2', 'quote')],
+          },
+        ],
+      },
+    };
+  }
+
+  it('sends DISTINCT block ids per lesson and keeps each lesson its own content', async () => {
+    const input = collidingCourse();
+    const sent: { lessonId: string; blocks: { id: string; variant: string }[] }[] = [];
+    let lessonN = 0;
+    const relay: Relay = async (spec) => {
+      const body: unknown = spec.body ? JSON.parse(spec.body) : undefined;
+      if (spec.url.endsWith('/lessons/CREATE_LESSON')) {
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ payload: { lesson: { id: `TL${++lessonN}` } } }),
+        };
+      }
+      if (spec.url.endsWith('/lessons/CREATE_BLOCKS')) {
+        const p = (body as { payload: { lessonId: string; blocks: { id: string; variant: string }[] } })
+          .payload;
+        sent.push({ lessonId: p.lessonId, blocks: p.blocks.map((b) => ({ id: b.id, variant: b.variant })) });
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            payload: {
+              success: true,
+              blockMetadata: p.blocks.map((b) => ({ id: b.id, globalBlockId: `g-${b.id}` })),
+            },
+          }),
+        };
+      }
+      if (spec.url.includes('/manage/api/content')) {
+        return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      }
+      if (spec.label.includes('GET_COURSE')) {
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }),
+        };
+      }
+      if (spec.label.includes('GET_YURL')) {
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            payload: { key: 'rise/courses/NEWCOURSE/x.jpg', url: 'https://s3/put', type: 'image/jpeg' },
+          }),
+        };
+      }
+      return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true } }) };
+    };
+
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.ok).toBe(true);
+
+    expect(sent).toHaveLength(2);
+    const [l1, l2] = sent;
+    // no source id survives, and the two lessons share NO block id
+    const all = [...l1!.blocks, ...l2!.blocks].map((b) => b.id);
+    expect(all).not.toContain('1');
+    expect(all).not.toContain('2');
+    expect(new Set(all).size).toBe(4);
+    // each lesson kept ITS OWN blocks (the collision used to swap them)
+    expect(l1!.blocks.map((b) => b.variant)).toEqual(['heading', 'hero']);
+    expect(l2!.blocks.map((b) => b.variant)).toEqual(['paragraph', 'quote']);
+    expect(l1!.lessonId).not.toBe(l2!.lessonId);
+  });
+
+  it('patches media on the RIGHT lesson-2 block (per-block follow-ups were mis-keyed)', async () => {
+    const input = collidingCourse();
+    // move the media block into lesson 2 so a wrong key would patch lesson 1
+    input.course.lessons![1]!.items![1] = {
+      id: '2',
+      family: 'image',
+      variant: 'hero',
+      type: 'image',
+      items: [{ id: '1', media: { image: { key: 'rise/courses/SRC/a.jpg', type: 'image' } } }],
+    };
+    input.course.lessons![0]!.items![1] = {
+      id: '2',
+      family: 'text',
+      variant: 'quote',
+      type: 'text',
+      items: [{ id: '1', paragraph: 'no media here' }],
+    };
+    const patches: { lessonId: string; blockId: string }[] = [];
+    let lessonN = 0;
+    const relay: Relay = async (spec) => {
+      const body: unknown = spec.body ? JSON.parse(spec.body) : undefined;
+      if (spec.url.endsWith('/lessons/CREATE_LESSON')) {
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: `TL${++lessonN}` } } }) };
+      }
+      if (spec.url.endsWith('/lessons/CREATE_BLOCKS')) {
+        const p = (body as { payload: { blocks: { id: string }[] } }).payload;
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            payload: { success: true, blockMetadata: p.blocks.map((b) => ({ id: b.id })) },
+          }),
+        };
+      }
+      if (spec.url.endsWith('/lessons/UPDATE_BLOCK_DEBOUNCE')) {
+        const p = (body as { payload: { id: string; lessonId: string } }).payload;
+        patches.push({ lessonId: p.lessonId, blockId: p.id });
+      }
+      if (spec.url.includes('/manage/api/content')) {
+        return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      }
+      if (spec.label.includes('GET_COURSE')) {
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      }
+      if (spec.label.includes('GET_YURL')) {
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            payload: { key: 'rise/courses/NEWCOURSE/x.jpg', url: 'https://s3/put', type: 'image/jpeg' },
+          }),
+        };
+      }
+      return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true } }) };
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // exactly one media patch, and it went to lesson 2's target lesson
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.lessonId).toBe('TL2');
+  });
+});

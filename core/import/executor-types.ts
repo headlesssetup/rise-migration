@@ -173,6 +173,18 @@ export function payloadOf(obj: Record<string, unknown>): Record<string, unknown>
 }
 
 /** Build source-id → object indexes once, so steps resolve their source doc. */
+/**
+ * Blocks are keyed by LESSON + BLOCK id, never by block id alone: block ids are
+ * client-generated and real courses reuse them across lessons (Rise's own sample
+ * courses number their blocks "1","2","3"… in EVERY lesson — 40 blocks, 14
+ * distinct ids). Keying on the block id alone silently collapsed those blocks:
+ * one lesson's JSON was sent for another's, and per-block follow-ups (media
+ * patch, storyline attach) hit the wrong target block.
+ */
+export function blockKey(lessonId: string, blockId: string): string {
+  return `${lessonId}\u0000${blockId}`;
+}
+
 export function indexSource(course: GetCourseDocument): {
   lessons: Map<string, Lesson>;
   blocks: Map<string, { block: Block; lessonId: string }>;
@@ -184,7 +196,7 @@ export function indexSource(course: GetCourseDocument): {
     if (lid) lessons.set(lid, l);
     for (const b of (l.items ?? []) as Block[]) {
       const bid = typeof b.id === 'string' ? b.id : '';
-      if (bid) blocks.set(bid, { block: b, lessonId: lid });
+      if (bid) blocks.set(blockKey(lid, bid), { block: b, lessonId: lid });
     }
   }
   return { lessons, blocks };
