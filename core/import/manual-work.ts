@@ -141,6 +141,12 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'Enable the learner language selector manually (the source course shows it; the toggle has no captured envelope yet).',
       };
+    case 'l10n-storyline':
+      return {
+        itemType: 'Storyline in a multi-language course',
+        action:
+          'This block\u2019s Storyline package is language-specific in the source. Attach it in Review 360 for each language listed \u2014 the source package reference was deliberately not copied (it points at the source account).',
+      };
     case 'l10n-ref':
       return {
         itemType: 'Localized course field',
@@ -156,7 +162,9 @@ function categoryLocation(kind: ManualFlag['kind']): string {
   if (kind === 'title') return 'Course-level';
   if (kind === 'typeface') return 'Theme / fonts';
   if (kind === 'orphan-bank') return 'Question banks';
-  if (kind === 'locale-selector' || kind === 'l10n-ref') return 'Languages';
+  if (kind === 'locale-selector' || kind === 'l10n-ref' || kind === 'l10n-storyline') {
+    return 'Languages';
+  }
   return 'Course-level';
 }
 

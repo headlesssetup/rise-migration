@@ -18,6 +18,7 @@ import {
   planCellWrites,
   resolveStackTitle,
   stackLocales,
+  storylineCells,
 } from '@/core/l10n';
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 
@@ -324,6 +325,19 @@ export type PlanStep =
       // Source stack shows the learner language selector; the toggle envelope
       // (TOGGLE_LOCALE_SELECTOR) is not capture-proven → manual flag.
       kind: 'flag-locale-selector';
+      summary: string;
+    }
+  | {
+      // A stack cell holds a Storyline package reference (docs/rise-multilang.md
+      // §4.3b). NEVER copied verbatim — its contentPrefix points at the SOURCE
+      // course's S3 prefix and storyline keys are exempt from the foreign-key
+      // invariant, so a verbatim copy would ship a dead reference silently.
+      // v0.6.0: the block is recreated bare and every language is flagged for a
+      // manual Review-360 attach (per-language attach automation → v0.6.1).
+      kind: 'flag-l10n-storyline';
+      l10nId: string;
+      locales: string[];
+      title?: string;
       summary: string;
     };
 
@@ -664,7 +678,12 @@ export function buildPlan(input: PlanInput): PlanStep[] {
 
       if (isStoryline(block)) {
         const attach = input.storylineAttach?.get(sourceBlockId);
-        if (attach) {
+        // On a STACK the block's media is an {l10nId} ref and the package lives
+        // in the cell tables (docs/rise-multilang.md §4.3b): attaching via
+        // UPDATE_BLOCK_DEBOUNCE would overwrite that ref with a plain storyline
+        // object and destroy every language's binding. Flag instead until the
+        // per-language cell attach lands (v0.6.1).
+        if (attach && !stack) {
           steps.push({
             kind: 'attach-storyline',
             sourceLessonId,
@@ -970,6 +989,28 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       .map((r) => r.l10nId);
     for (const id of titleDescIds) {
       for (const code of Object.keys(tables)) inlineSkip.add(cellKey(id, code));
+    }
+    // Storyline cells are NEVER shipped verbatim (their contentPrefix belongs to
+    // the SOURCE course and storyline keys bypass the foreign-key invariant):
+    // exclude them here and flag each one, grouped by cell, with its languages.
+    const slCells = storylineCells(doc);
+    const slByRef = new Map<string, { locales: string[]; title?: string }>();
+    for (const c of slCells) {
+      inlineSkip.add(cellKey(c.l10nId, c.locale));
+      const entry = slByRef.get(c.l10nId) ?? { locales: [] };
+      entry.locales.push(c.locale);
+      const sl = (c.value as { storyline?: { title?: unknown } }).storyline;
+      if (!entry.title && typeof sl?.title === 'string') entry.title = sl.title;
+      slByRef.set(c.l10nId, entry);
+    }
+    for (const [l10nId, entry] of slByRef) {
+      steps.push({
+        kind: 'flag-l10n-storyline',
+        l10nId,
+        locales: entry.locales,
+        ...(entry.title ? { title: entry.title } : {}),
+        summary: `⚠ Storyline in a stack${entry.title ? ` ("${entry.title}")` : ''} — attach manually per language (${entry.locales.join(', ')})`,
+      });
     }
     const batches = planCellWrites(collectCells(doc), { skip: inlineSkip });
     batches.forEach((batch, i) => {

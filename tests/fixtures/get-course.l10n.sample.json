@@ -1,16 +1,34 @@
 {
   "course": {
     "id": "stackCourse000000000000000000000",
-    "title": { "l10nId": "aaaa1111-0000-4000-8000-000000000001" },
-    "description": { "l10nId": "aaaa1111-0000-4000-8000-000000000002" },
-    "media": { "l10nId": "aaaa1111-0000-4000-8000-000000000003" },
-    "coverImage": { "media": { "l10nId": "aaaa1111-0000-4000-8000-000000000004" } },
+    "title": {
+      "l10nId": "aaaa1111-0000-4000-8000-000000000001"
+    },
+    "description": {
+      "l10nId": "aaaa1111-0000-4000-8000-000000000002"
+    },
+    "media": {
+      "l10nId": "aaaa1111-0000-4000-8000-000000000003"
+    },
+    "coverImage": {
+      "media": {
+        "l10nId": "aaaa1111-0000-4000-8000-000000000004"
+      }
+    },
     "defaultLocaleId": "loc-row-en-us",
-    "localizationMetadata": { "isLocalized": true, "localizedAt": "2026-08-01T14:24:31.735Z" },
+    "localizationMetadata": {
+      "isLocalized": true,
+      "localizedAt": "2026-08-01T14:24:31.735Z"
+    },
     "labelSetId": "customSetSrc0000000000mm",
-    "lessons": ["lessonA-0000000000000000000000", "lessonB-0000000000000000000000"],
+    "lessons": [
+      "lessonA-0000000000000000000000",
+      "lessonB-0000000000000000000000"
+    ],
     "type": null,
-    "theme": { "themeId": "classic" }
+    "theme": {
+      "themeId": "classic"
+    }
   },
   "lessons": [
     {
@@ -18,7 +36,9 @@
       "courseId": "stackCourse000000000000000000000",
       "type": null,
       "position": 1,
-      "title": { "l10nId": "bbbb2222-0000-4000-8000-000000000001" },
+      "title": {
+        "l10nId": "bbbb2222-0000-4000-8000-000000000001"
+      },
       "description": "",
       "items": [
         {
@@ -29,11 +49,18 @@
           "items": [
             {
               "id": "cblock0000000000000000002",
-              "heading": { "l10nId": "cccc3333-0000-4000-8000-000000000001" },
-              "paragraph": { "l10nId": "cccc3333-0000-4000-8000-000000000002" }
+              "heading": {
+                "l10nId": "cccc3333-0000-4000-8000-000000000001"
+              },
+              "paragraph": {
+                "l10nId": "cccc3333-0000-4000-8000-000000000002"
+              }
             }
           ],
-          "settings": { "paddingTop": 3, "paddingBottom": 3 }
+          "settings": {
+            "paddingTop": 3,
+            "paddingBottom": 3
+          }
         },
         {
           "id": "cblock0000000000000000003",
@@ -44,11 +71,17 @@
             {
               "id": "cblock0000000000000000004",
               "paragraph": "",
-              "caption": { "l10nId": "cccc3333-0000-4000-8000-000000000003" },
-              "media": { "l10nId": "cccc3333-0000-4000-8000-000000000004" }
+              "caption": {
+                "l10nId": "cccc3333-0000-4000-8000-000000000003"
+              },
+              "media": {
+                "l10nId": "cccc3333-0000-4000-8000-000000000004"
+              }
             }
           ],
-          "settings": { "zoomOnClick": true }
+          "settings": {
+            "zoomOnClick": true
+          }
         },
         {
           "id": "cblock0000000000000000005",
@@ -75,7 +108,9 @@
       "courseId": "stackCourse000000000000000000000",
       "type": null,
       "position": 2,
-      "title": { "l10nId": "bbbb2222-0000-4000-8000-000000000002" },
+      "title": {
+        "l10nId": "bbbb2222-0000-4000-8000-000000000002"
+      },
       "description": "",
       "items": [
         {
@@ -86,10 +121,29 @@
           "items": [
             {
               "id": "cblock0000000000000000008",
-              "paragraph": { "l10nId": "cccc3333-0000-4000-8000-000000000005" }
+              "paragraph": {
+                "l10nId": "cccc3333-0000-4000-8000-000000000005"
+              }
             }
           ],
           "settings": {}
+        },
+        {
+          "id": "cblockSL00000000000000000",
+          "type": "interactive",
+          "family": "360",
+          "variant": "storyline",
+          "items": [
+            {
+              "id": "citemSL000000000000000000",
+              "media": {
+                "l10nId": "cccc3333-0000-4000-8000-000000000009"
+              }
+            }
+          ],
+          "settings": {
+            "paddingTop": 3
+          }
         }
       ]
     }
@@ -159,7 +213,28 @@
             "key": "rise/courses/stackCourse000000000000000000000/heroEN0000000000.jpg",
             "type": "image",
             "sourcedFrom": "USER",
-            "dimensions": { "originalWidth": 1080, "originalHeight": 810 }
+            "dimensions": {
+              "originalWidth": 1080,
+              "originalHeight": 810
+            }
+          }
+        },
+        "cccc3333-0000-4000-8000-000000000009": {
+          "storyline": {
+            "contentPrefix": "rise/courses/stackCourse000000000000000000000/slEN000000000000",
+            "src": "rise/courses/stackCourse000000000000000000000/slEN000000000000/story.html",
+            "title": "Onboarding EN",
+            "type": "storyline",
+            "processing": false,
+            "meta": {
+              "title": "Onboarding EN",
+              "slides": [
+                {
+                  "id": "s1",
+                  "title": "Slide"
+                }
+              ]
+            }
           }
         }
       },
@@ -176,10 +251,31 @@
             "type": "image",
             "sourcedFrom": "USER",
             "translationOverride": true,
-            "dimensions": { "originalWidth": 1680, "originalHeight": 2982 }
+            "dimensions": {
+              "originalWidth": 1680,
+              "originalHeight": 2982
+            }
           }
         },
-        "cccc3333-0000-4000-8000-000000000005": "<p>Только по-русски</p>"
+        "cccc3333-0000-4000-8000-000000000005": "<p>Только по-русски</p>",
+        "cccc3333-0000-4000-8000-000000000009": {
+          "storyline": {
+            "contentPrefix": "rise/courses/stackCourse000000000000000000000/slRU000000000000",
+            "src": "rise/courses/stackCourse000000000000000000000/slRU000000000000/story.html",
+            "title": "Onboarding RU",
+            "type": "storyline",
+            "processing": false,
+            "meta": {
+              "title": "Onboarding RU",
+              "slides": [
+                {
+                  "id": "s1",
+                  "title": "Slide"
+                }
+              ]
+            }
+          }
+        }
       },
       "ar": {
         "aaaa1111-0000-4000-8000-000000000001": "دورة مكدسة (عينة)",
@@ -189,9 +285,18 @@
       }
     },
     "languageCodeMetadata": {
-      "en-us": { "displayName": "English (US)", "rightToLeft": false },
-      "ru": { "displayName": "Russian", "rightToLeft": false },
-      "ar": { "displayName": "Arabic", "rightToLeft": true }
+      "en-us": {
+        "displayName": "English (US)",
+        "rightToLeft": false
+      },
+      "ru": {
+        "displayName": "Russian",
+        "rightToLeft": false
+      },
+      "ar": {
+        "displayName": "Arabic",
+        "rightToLeft": true
+      }
     }
   },
   "labelSets": [
@@ -200,14 +305,20 @@
       "name": "German custom",
       "iso639Code": "de",
       "defaultSet": false,
-      "labels": { "courseStart": "LOS GEHT'S", "lessonQuiz": "Quiz" }
+      "labels": {
+        "courseStart": "LOS GEHT'S",
+        "lessonQuiz": "Quiz"
+      }
     },
     {
       "id": "customSetRu00000000000mm",
       "name": "Russian custom",
       "iso639Code": "ru",
       "defaultSet": false,
-      "labels": { "courseStart": "ПОЕХАЛИ", "lessonQuiz": "Тест" }
+      "labels": {
+        "courseStart": "ПОЕХАЛИ",
+        "lessonQuiz": "Тест"
+      }
     }
   ],
   "defaultLabelSets": [
@@ -216,7 +327,10 @@
       "name": "Russian",
       "iso639Code": "ru",
       "defaultSet": true,
-      "labels": { "courseStart": "НАЧАТЬ КУРС", "lessonQuiz": "Тест" }
+      "labels": {
+        "courseStart": "НАЧАТЬ КУРС",
+        "lessonQuiz": "Тест"
+      }
     }
   ],
   "translationUpdates": {
@@ -224,8 +338,14 @@
     "localeUpdateCounts": {},
     "courseUpdates": [],
     "lessonItemUpdates": {},
-    "mondrianUpdates": { "count": 0, "locales": [] },
-    "aiScenarioUpdates": { "count": 0, "locales": [] },
+    "mondrianUpdates": {
+      "count": 0,
+      "locales": []
+    },
+    "aiScenarioUpdates": {
+      "count": 0,
+      "locales": []
+    },
     "inProgress": false
   }
 }

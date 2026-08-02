@@ -90,6 +90,7 @@ export interface ManualFlag {
     | 'typeface'
     // Multi-language stacks (docs/rise-multilang.md):
     | 'locale-selector' // learner language selector must be enabled manually
+    | 'l10n-storyline' // stack cell holds a Storyline package → manual per-language attach
     | 'l10n-ref'; // a source course-level l10n ref had no target counterpart
   sourceBlockId?: string;
   sourceKey?: string;

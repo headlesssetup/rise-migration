@@ -1,12 +1,14 @@
 # Rise Multi-Language Courses ("stacks") — captured protocol + import algorithm
 
-> Sources: three MITM captures in `_multilang_capture/` (EU plane):
+> Sources: four MITM captures in `_multilang_capture/` (EU plane):
 > `capture_31july.mitm` (convert a real German course, add ar/bs/lv via AI, edit
 > a translated string, edit a block, push the stack to Review 360),
 > `capture1aug.mitm` (fresh account: label sets per language, `UPDATE_LOCALE`,
-> XLIFF export/import on a NON-stack course), and `capture1aug_2.mitm` (add a
+> XLIFF export/import on a NON-stack course), `capture1aug_2.mitm` (add a
 > language; add/edit blocks in BOTH languages; swap an image per language; edit
-> source vs translation; "Update translation"). Official docs cross-checked:
+> source vs translation; "Update translation"), and `capture2aug.mitm`
+> (**per-language Storyline attach** via Review 360; a **draw-from-bank block
+> inside a stack**). Official docs cross-checked:
 > [Articulate Localization](https://www.articulate.com/features/localization/).
 >
 > Companion to `docs/rise-api-reference.md` (single-language protocol) and
@@ -62,10 +64,11 @@ payload.l10n = {
 
 Facts that drive the migration design:
 
-- **Cell values** are plain strings (`valueType:"plain"`), HTML (`"rich"`), or
+- **Cell values** are plain strings (`valueType:"plain"`), HTML (`"rich"`),
   **full media objects** (`"mediaRecord"` — `{image:{key,crushedKey,…}}`,
-  audio, video). In the 31-July course ~96 of 97 media keys lived inside the
-  tables; only note **attachments** stayed in the lessons doc.
+  audio, video) or **Storyline objects** (`"storyline"` — §4.3b). In the
+  31-July course ~96 of 97 media keys lived inside the tables; only note
+  **attachments** stayed in the lessons doc.
 - **Cells exist in ANY subset of locales.** A block authored while viewing
   Russian has ru-only cells; a swapped image lives only in the edited locale
   (with `translationOverride:true`). Rendering falls back across locales, so
@@ -172,6 +175,60 @@ Object (media) values are accepted (per-locale overrides carry
 migrator keeps that. Editing a translated string holds a lock
 `l10n/{courseId}/{l10nId}` (normal PUT_LOCK/DEL_LOCK); success mirrors on the
 socket as `UPDATE_L10N_BATCH_SUCCESS`.
+
+### 4.3b Storyline blocks in a stack — per-language attach (capture2aug)
+
+A Storyline block's `media` is an l10n ref like any other media field, and the
+storyline object lives in the cell tables — so **each language can carry its own
+Storyline package**. The editor's attach sequence per language is:
+
+1. `CREATE_BLOCKS` with the bare `360/storyline` block (`items:[{id}]`, no
+   media, `translationChanges:[]`).
+2. `POST /api/rise-runtime/copy_review_item {id:<courseId>,
+   reviewPrefix:"review/items/<leaf>", jobId:<BLOCK id>}` → S3 copy result array
+   (identical to the monolingual path; `jobId` is the block id in BOTH cases).
+3. Only on the FIRST attach: `UPDATE_BLOCK_DEBOUNCE` to point the block item at
+   the new ref (`items:[{id, media:{l10nId}}]`) — the client mints the l10nId.
+4. `UPDATE_L10N_BATCH` with the storyline object as the cell value and
+   **`valueType:"storyline"`**:
+
+```jsonc
+{"action":"add","l10nId":"eaf56586-…","lessonId":"pJ-D6…","locale":"en-us",
+ "value":{"storyline":{"contentPrefix":"rise/courses/{courseId}/{leaf}",
+   "src":"rise/courses/{courseId}/{leaf}/story.html", "title":"…",
+   "type":"storyline", "processing":false, "meta":{…threeSixty.json…}}},
+ "valueType":"storyline"}
+```
+
+Attaching a DIFFERENT package for another language repeats steps 2 + 4 only
+(same block, same l10nId, `action:"update"`, `locale:"ru"`, a new
+`contentPrefix`/`leaf`/`meta`) — no block write. So per-language Storyline is
+exactly the image-override pattern, with `valueType:"storyline"` and one extra
+`copy_review_item` per distinct package.
+
+### 4.3c Draw-from-bank blocks in a stack (capture2aug)
+
+Banks are **NOT localized** — one bank, shared by every language:
+
+- `GET /api/rise-authoring/question_banks` returns bank questions as **plain
+  strings** (`title:"…"`, `answers[].title:"…"`) — no `{l10nId}` refs, in a
+  stack account or otherwise. Banks live outside the course document and have
+  no l10n overlay.
+- Inserting/binding is the normal `INSERT_QUESTION_BANK_QUESTIONS` envelope
+  (`{lesson, blockOrItemId, drawCount, mode, pendingItemId, questionBankId,
+  questionDrawType, questionList, courseId}`) — **no `translationChanges`**,
+  no `UPDATE_L10N_BATCH` follow-up (capture: zero batch calls after the
+  inserts).
+- The RESPONSE lesson shows the drawn questions inside the block with
+  `{l10nId}` refs on `title`/`answers[].title` — Rise l10n-ifies the *copied*
+  questions as it materializes them into the course document, minting new ids
+  server-side. Those cells then behave like any other course cell (translated
+  with the stack, editable per language), while the BANK itself stays plain.
+- Consequence for migration: bind the bank exactly as for a monolingual course;
+  the target's own conversion/bind mints its own question cells. Per-language
+  question text (if the source had any) is NOT copied — the bank binding is
+  faithful, the drawn-question cells are freshly minted. That divergence is
+  reported, not silently ignored.
 
 ### 4.4 Locale rows + label sets
 
@@ -290,9 +347,20 @@ scratch; delete the partial by hand.
 - `TOGGLE_LOCALE_SELECTOR` payload (manual flag until captured).
 - Exact bodies for `archive/restore/cancel/breakout/DELETE translations/`
   (UI dialogs not opened during capture) and XLIFF stack flows.
-- Stacks containing draw-from-bank or Storyline blocks: bank questions and
-  mondrian translations are separate subsystems — those blocks follow the
-  existing placeholder/flag policy (no per-language migration).
+- **Per-language Storyline attach is captured (§4.3b) but NOT yet implemented**
+  (v0.6.1): the export side already stages one zip per distinct package leaf
+  (`storyline/<courseId>/<leaf>.zip`), so the work is (a) discover storyline
+  cells per locale instead of per block, (b) upload each distinct leaf once,
+  (c) `copy_review_item` per locale + a `write-l10n` cell with
+  `valueType:"storyline"`. Until then a stack's storyline block gets the
+  DEFAULT locale's package in every language, and the report flags the other
+  languages for a manual attach.
+- Draw-from-bank in a stack: banks are not localized (§4.3c) — binding is
+  faithful; the target mints its own drawn-question cells, so per-language edits
+  to drawn questions in the SOURCE do not migrate (reported).
+- Storyline INNER text per language (mondrian XLIFF per blockument) is a
+  separate subsystem — not migrated (a per-language package attach, §4.3b, is
+  the supported route: different story bundle per language).
 - Glossaries: gated behind an active Localize subscription; fields
   (`glossaryId`/`glossaryGroupId`/`glossaryStats`) mapped, no code — locale
   rows import with `glossaryId:null`.

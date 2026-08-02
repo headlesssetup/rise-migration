@@ -113,6 +113,28 @@ describe('buildPlan — stack sequence', () => {
   it('flags the learner language selector (source shows it; toggle not capture-proven)', () => {
     expect(ks).toContain('flag-locale-selector');
   });
+
+  it('never copies a storyline cell verbatim — flags it per language instead', () => {
+    const flags = steps.filter(
+      (s): s is Extract<PlanStep, { kind: 'flag-l10n-storyline' }> =>
+        s.kind === 'flag-l10n-storyline',
+    );
+    expect(flags).toHaveLength(1);
+    expect(flags[0]).toMatchObject({
+      l10nId: 'cccc3333-0000-4000-8000-000000000009',
+      locales: ['en-us', 'ru'],
+      title: 'Onboarding EN',
+    });
+    // the cell appears in NO write-l10n batch (source contentPrefix must not ship)
+    const written = steps
+      .filter((s): s is Extract<PlanStep, { kind: 'write-l10n' }> => s.kind === 'write-l10n')
+      .flatMap((w) => w.l10nIds);
+    expect(written).not.toContain('cccc3333-0000-4000-8000-000000000009');
+    // …and the storyline block is NOT attached via UPDATE_BLOCK_DEBOUNCE (that
+    // would clobber the {l10nId} ref and every other language's binding)
+    expect(ks).not.toContain('attach-storyline');
+    expect(ks).toContain('flag-storyline');
+  });
 });
 
 describe('executePlan — stack live run (scripted relay)', () => {
@@ -211,6 +233,12 @@ describe('executePlan — stack live run (scripted relay)', () => {
 
     // the language-selector flag surfaced
     expect(res.flags.some((f) => f.kind === 'locale-selector')).toBe(true);
+    // storyline in a stack: flagged, and its source contentPrefix never shipped
+    const slFlag = res.flags.find((f) => f.kind === 'l10n-storyline');
+    expect(slFlag?.detail).toMatch(/en-us, ru/);
+    const allWritten = JSON.stringify(bodies);
+    expect(allWritten).not.toContain('slEN000000000000');
+    expect(allWritten).not.toContain('slRU000000000000');
   });
 
   it('fails loudly when the conversion never completes (poll timeout)', async () => {

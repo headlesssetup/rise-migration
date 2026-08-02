@@ -2,14 +2,16 @@ import { describe, it, expect } from 'vitest';
 import sample from '../../tests/fixtures/get-course.l10n.sample.json';
 import type { GetCourseDocument } from '@/shared/types/rise';
 import {
-  valueTypeOf,
+  cellKey,
   collectCells,
-  lessonIdByRef,
   courseRefMap,
   inlineTranslationChanges,
-  planCellWrites,
+  isStorylineCell,
   junkCellIds,
-  cellKey,
+  lessonIdByRef,
+  planCellWrites,
+  storylineCells,
+  valueTypeOf,
 } from './tables';
 import { remapMediaKeys } from '@/core/import/remap';
 
@@ -111,9 +113,19 @@ describe('inlineTranslationChanges', () => {
   });
 
   it('skips refs whose cell exists only in a non-default locale', () => {
-    const blocks = doc.lessons![1]!.items!;
-    // cccc…0005 is ru-only → no default value to inline
-    expect(inlineTranslationChanges(blocks, doc)).toEqual([]);
+    // lesson B's paragraph block: cccc…0005 is ru-only → no default to inline
+    const paragraphBlock = doc.lessons![1]!.items!.filter((b) => b.family === 'text');
+    expect(inlineTranslationChanges(paragraphBlock, doc)).toEqual([]);
+  });
+
+  it('never inlines a STORYLINE cell (its contentPrefix is source-owned)', () => {
+    // lesson B also holds a storyline block whose en-us cell DOES exist —
+    // it must still be skipped (docs/rise-multilang.md §4.3b).
+    const changes = inlineTranslationChanges(doc.lessons![1]!.items!, doc);
+    expect(changes.every((c) => c.valueType !== 'storyline')).toBe(true);
+    expect(changes.map((c) => c.l10nId)).not.toContain(
+      'cccc3333-0000-4000-8000-000000000009',
+    );
   });
 });
 
@@ -178,5 +190,25 @@ describe('junkCellIds', () => {
       },
     };
     expect(junkCellIds(doc, target, ['tttt-title']).sort()).toEqual(['junk-1', 'junk-2']);
+  });
+});
+
+describe('storyline cells (docs/rise-multilang.md §4.3b)', () => {
+  it('isStorylineCell / valueTypeOf classify a storyline package object', () => {
+    const cell = doc.l10n!.translations!['en-us']!['cccc3333-0000-4000-8000-000000000009']!;
+    expect(isStorylineCell(cell)).toBe(true);
+    expect(valueTypeOf(cell)).toBe('storyline');
+    // a plain image cell is NOT storyline
+    const img = doc.l10n!.translations!['en-us']!['cccc3333-0000-4000-8000-000000000004']!;
+    expect(isStorylineCell(img)).toBe(false);
+    expect(valueTypeOf(img)).toBe('mediaRecord');
+  });
+
+  it('storylineCells lists every (cell, locale) holding a package', () => {
+    const cells = storylineCells(doc);
+    expect(cells.map((c) => c.locale)).toEqual(['en-us', 'ru']); // default first
+    expect(new Set(cells.map((c) => c.l10nId))).toEqual(
+      new Set(['cccc3333-0000-4000-8000-000000000009']),
+    );
   });
 });

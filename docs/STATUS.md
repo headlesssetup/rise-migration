@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.0**,
-> **536 Vitest tests**, `compile` / `test` green.
+> **540 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -41,10 +41,25 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
   reports carry the standing **"never click Update translation"** warning.
 - **"Ready to import?"**: rough pre-run estimate (paced envelopes × pacing +
   upload bytes + 90 s per stack) shown for any selection in step C.
-- Known gaps (documented in rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR`
-  payload (manual flag), stacks containing banks/Storyline keep the placeholder
-  policy per language, glossaries out of scope, monolingual course-level label
-  sets still unmigrated.
+- **Storyline in a stack** (capture2aug): a storyline block's package lives in
+  the cell tables, so each language can carry its OWN package. v0.6.0 does NOT
+  copy those cells — the source `contentPrefix` belongs to the source course and
+  storyline keys are exempt from the foreign-key invariant, so a verbatim copy
+  would ship a dead reference silently. The block is recreated bare, every
+  language is flagged for a manual Review-360 attach, and `attach-storyline` is
+  suppressed on stacks (patching block media would clobber the `{l10nId}` ref
+  and every language's binding). Per-language attach automation → v0.6.1
+  (needs the export side to resolve storyline refs through the tables so each
+  language's leaf gets staged).
+- **Draw-from-bank in a stack** (capture2aug): banks are NOT localized — bank
+  questions are plain strings, `INSERT_QUESTION_BANK_QUESTIONS` carries no
+  `translationChanges`, and Rise mints fresh question cells when it materializes
+  drawn questions into the course. Binding is therefore faithful with the
+  existing code path; per-language edits to DRAWN questions in the source do not
+  migrate (reported).
+- Other known gaps (rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR` payload
+  (manual flag), glossaries out of scope, monolingual course-level label sets
+  still unmigrated.
 
 ### Roadmap → v0.7.0 (recorded, not designed)
 

@@ -1012,6 +1012,19 @@ export async function executePlan(
           }
           break;
         }
+        case 'flag-l10n-storyline': {
+          // The source cell's storyline contentPrefix belongs to the SOURCE
+          // course and storyline keys bypass the foreign-key invariant, so the
+          // cell is deliberately NOT written (docs/rise-multilang.md §4.3b).
+          result.flags.push({
+            kind: 'l10n-storyline',
+            detail: `${step.title ? `"${step.title}" — ` : ''}attach the Storyline package manually for: ${step.locales.join(', ')}`,
+          });
+          log(
+            `${pfx()} ⚠ FLAG storyline in stack — cell ${step.l10nId} not copied; attach per language (${step.locales.join(', ')})`,
+          );
+          break;
+        }
         case 'flag-locale-selector': {
           result.flags.push({
             kind: 'locale-selector',
