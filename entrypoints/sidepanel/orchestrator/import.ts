@@ -51,7 +51,7 @@ import {
   type L10nParityReport,
   type RunCsvCourse,
 } from '@/core/import';
-import { isOrphanStatus } from '@/core/assets';
+import { collectAssetKeys, isOrphanStatus } from '@/core/assets';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
@@ -90,6 +90,26 @@ export {
   type BankImportOutcome,
   type BankImportOptions,
 } from './import-banks';
+
+/**
+ * Media keys a course's document references that the archive has NO bytes for
+ * (and that are not recorded as terminal orphans). The usual cause is simply
+ * that "Download assets" was never run for this archive — in which case the
+ * import would create the course, convert the stack, and only then die on the
+ * first upload, leaving a partial to clean up. Cheap to check up front.
+ */
+export function missingAssetKeys(
+  doc: unknown,
+  courseId: string,
+  entries: { key: string; file?: string; orphaned?: boolean }[],
+): string[] {
+  const have = new Set(entries.filter((e) => e.file || e.orphaned).map((e) => e.key));
+  const missing = new Set<string>();
+  for (const k of collectAssetKeys(doc, courseId)) {
+    if (!have.has(k.key)) missing.add(k.key);
+  }
+  return [...missing];
+}
 
 /**
  * Split a manifest's `failed` list into the two states the import must treat
@@ -449,6 +469,43 @@ export async function runImport(
   }
   const courseFolders = await readCourseFolders(storage);
 
+  // --- Pre-flight: does the archive actually HOLD the media it references? ---
+  // "Download assets" is a separate export step and easy to forget; without it
+  // every course with media dies on its first upload AFTER the course (and, for a
+  // stack, its languages) already exist. Warn once, up front, naming the courses.
+  {
+    const short: { id: string; title?: string; missing: number }[] = [];
+    for (const id of courseIds) {
+      const raw = await storage.readCourse(id);
+      if (!raw) continue;
+      const doc = unwrap(raw);
+      const { entries } = await readCourseAssets(storage, id);
+      const missing = missingAssetKeys(doc, id, entries);
+      if (missing.length) {
+        short.push({
+          id,
+          title: typeof doc.course?.title === 'string' ? doc.course.title : undefined,
+          missing: missing.length,
+        });
+      }
+    }
+    if (short.length) {
+      onEvent({
+        kind: 'log',
+        message:
+          `⚠ ASSETS MISSING FROM THE ARCHIVE — did you forget Export → "Download assets"? ` +
+          `${short.length} of ${courseIds.length} selected course(s) reference media this archive has no bytes for; ` +
+          `they will be SKIPPED (nothing is created for them):`,
+      });
+      for (const c of short) {
+        onEvent({
+          kind: 'log',
+          message: `    - ${c.title ?? c.id}: ${c.missing} missing asset(s)`,
+        });
+      }
+    }
+  }
+
   // --- Multi-language stacks (docs/rise-multilang.md): run-level state ---
   // Account-scoped label sets recreated once per run (source set id → target id).
   const labelSetCache = new Map<string, string>();
@@ -586,6 +643,22 @@ export async function runImport(
         `(${sample}${unresolved.length > 3 ? ', …' : ''}) — re-run the asset export for this course, ` +
         'then import again. They are NOT known-deleted at the source, so importing would drop live media.';
       onEvent({ kind: 'log', message: `${pfx} FAILED "${courseTitle ?? courseId}": ${error}` });
+      const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
+      outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
+      csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });
+      continue;
+    }
+    // Media the archive simply does not hold (no bytes, not a recorded orphan):
+    // almost always a forgotten "Download assets". Refuse BEFORE the first write —
+    // otherwise the course (and, for a stack, its AI-converted languages) exists
+    // and the run dies on the first upload, leaving a partial to delete by hand.
+    const absent = missingAssetKeys(course, courseId, entries);
+    if (absent.length && !opts.dryRun) {
+      const error =
+        `${absent.length} referenced asset(s) are not in the archive (e.g. ${absent[0]}) — ` +
+        'run Export → "Download assets" for this archive, then import again. ' +
+        'Nothing was created for this course.';
+      onEvent({ kind: 'log', message: `${pfx} SKIPPED "${courseTitle ?? courseId}": ${error}` });
       const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
       outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
       csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAssetFailures } from './import';
+import { classifyAssetFailures, missingAssetKeys } from './import';
 
 describe('classifyAssetFailures', () => {
   it('treats ONLY 403/404 as deleted-at-source orphans', () => {
@@ -26,5 +26,57 @@ describe('classifyAssetFailures', () => {
   it('tolerates a manifest with no failures', () => {
     expect(classifyAssetFailures(undefined)).toEqual({ orphans: [], unresolved: [] });
     expect(classifyAssetFailures([])).toEqual({ orphans: [], unresolved: [] });
+  });
+});
+
+describe('missingAssetKeys — forgotten "Download assets" pre-flight', () => {
+  const doc = {
+    course: { id: 'C1', coverImage: { media: { image: { key: 'rise/courses/C1/cover.jpg' } } } },
+    lessons: [
+      {
+        id: 'L1',
+        items: [
+          {
+            id: 'b1',
+            family: 'image',
+            variant: 'hero',
+            items: [{ id: 'i1', media: { image: { key: 'rise/courses/C1/hero.jpg' } } }],
+          },
+        ],
+      },
+    ],
+    // stack tables hold media too — they must be covered by the same check
+    l10n: {
+      defaultLocale: 'en-us',
+      translations: {
+        ru: { cell1: { image: { key: 'rise/courses/C1/ru-override.jpg' } } },
+      },
+    },
+  };
+
+  it('lists every referenced key the archive has no bytes for (incl. l10n cells)', () => {
+    expect(missingAssetKeys(doc, 'C1', []).sort()).toEqual([
+      'rise/courses/C1/cover.jpg',
+      'rise/courses/C1/hero.jpg',
+      'rise/courses/C1/ru-override.jpg',
+    ]);
+  });
+
+  it('counts a downloaded asset as present, and a recorded ORPHAN as handled', () => {
+    const entries = [
+      { key: 'rise/courses/C1/cover.jpg', file: 'assets/a.jpg' },
+      { key: 'rise/courses/C1/hero.jpg', orphaned: true }, // 403/404 at source
+      { key: 'rise/courses/C1/ru-override.jpg', file: 'assets/b.jpg' },
+    ];
+    expect(missingAssetKeys(doc, 'C1', entries)).toEqual([]);
+  });
+
+  it('is empty for a course with no media at all (no false alarm)', () => {
+    expect(missingAssetKeys({ course: { id: 'C2' }, lessons: [] }, 'C2', [])).toEqual([]);
+  });
+
+  it('flags an entry present in the manifest but with no bytes and no orphan mark', () => {
+    const entries = [{ key: 'rise/courses/C1/cover.jpg' }]; // neither file nor orphaned
+    expect(missingAssetKeys(doc, 'C1', entries)).toContain('rise/courses/C1/cover.jpg');
   });
 });
