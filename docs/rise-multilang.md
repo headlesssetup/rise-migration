@@ -25,10 +25,20 @@ structure and per-language text — switchable in the editor, preview, and Revie
 360. There is a single course id, ONE set of lessons/blocks (adding/removing a
 block — or an item inside a block — affects every language), and a localization
 overlay. Each language is a **stack item** (aka **locale**), a UUID row.
-Localization is available on every subscription (only publishing a stack to
-SCORM is plan-gated). **The only way to create a stack is to add a language,
-and adding a language always AI-translates** — there is no "add empty
-language" call (operator-confirmed; the basis of the import design, §7).
+Localization (creating/translating a stack) is available on every subscription.
+**PUBLISHING or EXPORTING a stack requires an active Articulate Localization
+subscription** (operator-confirmed 2026-08-02): without it, Rise's web-export
+build returns **HTTP 500** for a stack (`POST /api/rise-runtime/build/{id}/raw`
+→ 500, while the same call succeeds for monolingual courses in the same
+account). This matters to us beyond publishing: our Storyline pipeline SOURCES
+its bundles from that web export, so **a stack that embeds Storyline/Mighty can
+only be migrated with its embeds from a Localize-subscribed account** (§4.3b);
+otherwise those blocks arrive empty + flagged. Everything else about a stack
+(content, media, per-language cells, label sets) migrates without it.
+
+**The only way to create a stack is to add a language, and adding a language
+always AI-translates** — there is no "add empty language" call
+(operator-confirmed; the basis of the import design, §7).
 
 ## 2. Data model — the l10n overlay
 
@@ -206,6 +216,11 @@ Attaching a DIFFERENT package for another language repeats steps 2 + 4 only
 exactly the image-override pattern, with `valueType:"storyline"` and one extra
 `copy_review_item` per distinct package.
 
+**Prerequisite (operator-confirmed).** The export side needs Rise's web export,
+which for a STACK is gated behind an active Localization subscription — without
+it the build returns HTTP 500 and no bundle can be staged (see §1). The import
+then flags every language of that block for a manual attach.
+
 **Implemented end-to-end (v0.6.1).** Export: `findStorylineBlocks`
 (`core/storyline/detect.ts`) resolves a stack block's `{l10nId}` media ref
 through the tables and yields ONE ref per language that holds a package
@@ -361,6 +376,9 @@ scratch; delete the partial by hand.
 - `TOGGLE_LOCALE_SELECTOR` payload (manual flag until captured).
 - Exact bodies for `archive/restore/cancel/breakout/DELETE translations/`
   (UI dialogs not opened during capture) and XLIFF stack flows.
+- Stack web export / publish is Localize-subscription gated (HTTP 500 without
+  it) — so Storyline bundles cannot be staged for a stack on an unsubscribed
+  account. Not a tool bug; re-run the storyline step from a subscribed account.
 - Per-language Storyline is implemented (§4.3b). Storyline cells are still
   never COPIED verbatim (the source `contentPrefix` is source-owned and
   storyline keys are exempt from the foreign-key invariant) — each language's

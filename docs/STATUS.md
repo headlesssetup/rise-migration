@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **547 Vitest tests**, `compile` / `test` green.
+> **551 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -60,6 +60,13 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
   drawn questions into the course. Binding is therefore faithful with the
   existing code path; per-language edits to DRAWN questions in the source do not
   migrate (reported).
+- **Stack export/publish is Localize-gated** (operator-confirmed 2026-08-02):
+  `build/{id}/raw` returns **HTTP 500** for a stack on an account without an
+  active Articulate Localization subscription (monolingual courses in the same
+  account export fine). Since Stage D sources Storyline bundles from that web
+  export, a stack's embeds can only be migrated from a subscribed account —
+  otherwise those blocks import empty + flagged. Content/media/cells/label sets
+  are unaffected.
 - Other known gaps (rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR` payload
   (manual flag), glossaries out of scope, monolingual course-level label sets
   still unmigrated.

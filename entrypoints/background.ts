@@ -675,10 +675,18 @@ export default defineBackground(() => {
         } catch {
           /* keep the ping-based value */
         }
-        // Opportunistically grab the bearer from the cookie when we don't have one
-        // for this plane yet — so the panel shows a ready session without the
-        // operator clicking "grab token" or opening a course.
-        if (!tokenFor(plane) && present) await grabTokenFromCookie();
+        // RECONCILE the cached bearer with the live cookie on every session poll
+        // (a local cookie read, no network). Doing this only when the slot was
+        // EMPTY meant that after the operator switched Rise accounts we kept the
+        // PREVIOUS account's token — and therefore its JWT identity — while the
+        // header-derived `accountName` updated to the new account. That mismatch
+        // (a) made the Source≠Target guard compare a stale `sub` and cry
+        // "same account" for two plainly different accounts, and (b) would have
+        // attached the OLD account's bearer to writes aimed at the new one.
+        // Safe to do unconditionally: cookies are per-ORIGIN, so a plane has
+        // exactly one live Rise session in a profile — the cookie IS the truth
+        // for that plane, and `setToken` no-ops when the value is unchanged.
+        if (present) await grabTokenFromCookie();
         const userId = present ? await readAccountUserId() : null;
         return {
           type: 'SESSION_STATE',

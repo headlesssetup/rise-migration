@@ -78,3 +78,54 @@ describe('describeTarget', () => {
     expect(describeTarget(undefined)).toMatch(/no target/i);
   });
 });
+
+describe('checkSourceNotTarget — why a same-account verdict fired', () => {
+  it('names the JWT-sub match, and calls out a likely STALE identity when names differ', () => {
+    // The real case: operator switched Rise accounts; the header-derived name
+    // refreshed but the cached bearer (and its sub) still belonged to the source.
+    const v = checkSourceNotTarget(
+      { name: 'Sergey Snegirev branchtrack.com', sub: 'auth0|aaa', plane: 'eu' },
+      { name: 'Konstantin S', sub: 'auth0|aaa', plane: 'eu' },
+    );
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.matchedBy).toBe('sub');
+      expect(v.reason).toMatch(/JWT sub/);
+      expect(v.reason).toMatch(/account names differ/);
+      expect(v.reason).toMatch(/reload the target Rise COURSE EDITOR tab/i);
+    }
+  });
+
+  it('a genuine same-account write (same sub AND same name) says so plainly', () => {
+    const v = checkSourceNotTarget(
+      { name: 'Acme', sub: 'auth0|aaa', plane: 'eu' },
+      { name: 'Acme', sub: 'auth0|aaa', plane: 'eu' },
+    );
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.matchedBy).toBe('sub');
+      expect(v.reason).not.toMatch(/names differ/);
+    }
+  });
+
+  it('a name-only match reports the name (target JWT identity not captured yet)', () => {
+    const v = checkSourceNotTarget(
+      { name: 'Acme', sub: 'auth0|aaa', plane: 'us' },
+      { name: 'acme', sub: null, plane: 'eu' },
+    );
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.matchedBy).toBe('name');
+      expect(v.reason).toMatch(/matched by account name/);
+    }
+  });
+
+  it('different sub AND different name still passes cleanly', () => {
+    const v = checkSourceNotTarget(
+      { name: 'Sergey Snegirev branchtrack.com', sub: 'auth0|aaa', plane: 'eu' },
+      { name: 'Konstantin S', sub: 'auth0|bbb', plane: 'eu' },
+    );
+    expect(v.ok).toBe(true);
+    expect(v.reason).toMatch(/differs from source/);
+  });
+});
