@@ -206,6 +206,20 @@ Attaching a DIFFERENT package for another language repeats steps 2 + 4 only
 exactly the image-override pattern, with `valueType:"storyline"` and one extra
 `copy_review_item` per distinct package.
 
+**Implemented end-to-end (v0.6.1).** Export: `findStorylineBlocks`
+(`core/storyline/detect.ts`) resolves a stack block's `{l10nId}` media ref
+through the tables and yields ONE ref per language that holds a package
+(`locale` + `l10nId` on the ref); the export pass stages one zip per distinct
+leaf (`storylineLeaves`) and records `locale`/`l10nId` in the course's storyline
+manifest, so two languages sharing a bundle stage it once. Import: the plan
+emits an `attach-storyline-l10n` step per language (`copy_review_item` with the
+TARGET block id, then the storyline cell write for that locale), and the block
+itself is created copy-faithful with its `{l10nId}` ref — **never patched**, as
+patching `items[0].media` would replace the ref and destroy every language's
+binding. Languages whose package could not be staged are flagged
+(`flag-l10n-storyline`), and a stack storyline block with no package in ANY
+language is flagged block-level (`flag-storyline`) so nothing is silent.
+
 ### 4.3c Draw-from-bank blocks in a stack (capture2aug)
 
 Banks are **NOT localized** — one bank, shared by every language:
@@ -347,14 +361,10 @@ scratch; delete the partial by hand.
 - `TOGGLE_LOCALE_SELECTOR` payload (manual flag until captured).
 - Exact bodies for `archive/restore/cancel/breakout/DELETE translations/`
   (UI dialogs not opened during capture) and XLIFF stack flows.
-- **Per-language Storyline attach is captured (§4.3b) but NOT yet implemented**
-  (v0.6.1): the export side already stages one zip per distinct package leaf
-  (`storyline/<courseId>/<leaf>.zip`), so the work is (a) discover storyline
-  cells per locale instead of per block, (b) upload each distinct leaf once,
-  (c) `copy_review_item` per locale + a `write-l10n` cell with
-  `valueType:"storyline"`. Until then a stack's storyline block gets the
-  DEFAULT locale's package in every language, and the report flags the other
-  languages for a manual attach.
+- Per-language Storyline is implemented (§4.3b). Storyline cells are still
+  never COPIED verbatim (the source `contentPrefix` is source-owned and
+  storyline keys are exempt from the foreign-key invariant) — each language's
+  package is re-created through Review 360 and its cell written fresh.
 - Draw-from-bank in a stack: banks are not localized (§4.3c) — binding is
   faithful; the target mints its own drawn-question cells, so per-language edits
   to drawn questions in the SOURCE do not migrate (reported).

@@ -1012,6 +1012,45 @@ export async function executePlan(
           }
           break;
         }
+        case 'attach-storyline-l10n': {
+          // STACK per-language attach (docs/rise-multilang.md §4.3b): copy THIS
+          // language's uploaded package into the course, then write the storyline
+          // CELL for that locale. The block already carries the {l10nId} ref
+          // (copy-faithful) — patching its media would clobber every language.
+          const meta = blockMeta.get(step.sourceBlockId);
+          if (!meta) throw new WriteError('attach before block create', step.kind);
+          const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
+          await send(
+            env.copyReviewItem({
+              courseId: newCourseId,
+              reviewPrefix: step.reviewPrefix,
+              blockId: meta.newId,
+            }),
+            step.kind,
+          );
+          const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
+          const targetLesson = ids.get(step.sourceLessonId);
+          await send(
+            env.updateL10nBatch(newCourseId, [
+              {
+                action: 'add',
+                l10nId: stackRefMap.get(step.l10nId) ?? step.l10nId,
+                ...(targetLesson ? { lessonId: targetLesson } : {}),
+                locale: step.locale,
+                value: env.buildStorylineMedia({
+                  contentPrefix,
+                  meta: step.meta,
+                  title: step.title,
+                }),
+                valueType: 'storyline',
+              },
+            ]),
+            step.kind,
+          );
+          result.storylineAttached = (result.storylineAttached ?? 0) + 1;
+          log(`${pfx()} ✓ attached storyline [${step.locale}] → ${contentPrefix}`);
+          break;
+        }
         case 'flag-l10n-storyline': {
           // The source cell's storyline contentPrefix belongs to the SOURCE
           // course and storyline keys bypass the foreign-key invariant, so the

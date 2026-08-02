@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findStorylineBlocks, hasStorylineBlocks } from './detect';
+import { findStorylineBlocks, hasStorylineBlocks, storylineLeaves } from './detect';
 
 const course = {
   course: { id: 'C1' },
@@ -95,5 +95,113 @@ describe('findStorylineBlocks', () => {
       ],
     };
     expect(findStorylineBlocks(doc)).toHaveLength(2);
+  });
+});
+
+describe('findStorylineBlocks — multi-language stacks (docs/rise-multilang.md §4.3b)', () => {
+  // A stack storyline block: media is an {l10nId} ref; each locale's cell holds
+  // its OWN package (capture2aug: en-us and ru attached different bundles).
+  const stackDoc = {
+    course: { id: 'STACK', localizationMetadata: { isLocalized: true } },
+    lessons: [
+      {
+        id: 'L1',
+        items: [
+          {
+            id: 'blkSL',
+            family: '360',
+            variant: 'storyline',
+            items: [{ id: 'itemSL', media: { l10nId: 'cell-sl' } }],
+          },
+        ],
+      },
+    ],
+    l10n: {
+      defaultLocale: 'en-us',
+      translations: {
+        'en-us': {
+          'cell-sl': {
+            storyline: {
+              contentPrefix: 'rise/courses/STACK/leafEN',
+              src: 'rise/courses/STACK/leafEN/story.html',
+              meta: { title: 'Onboarding EN' },
+            },
+          },
+        },
+        ru: {
+          'cell-sl': {
+            storyline: {
+              contentPrefix: 'rise/courses/STACK/leafRU',
+              meta: { title: 'Onboarding RU' },
+            },
+          },
+        },
+        // a locale with no override: falls back, so no entry of its own
+        ar: { other: 'text' },
+      },
+    },
+  };
+
+  it('yields one entry per language that holds a package, with locale + cell id', () => {
+    const refs = findStorylineBlocks(stackDoc);
+    expect(refs).toHaveLength(2);
+    expect(refs.map((r) => [r.locale, r.leaf])).toEqual([
+      ['en-us', 'leafEN'],
+      ['ru', 'leafRU'],
+    ]);
+    for (const r of refs) {
+      expect(r.blockId).toBe('blkSL');
+      expect(r.lessonId).toBe('L1');
+      expect(r.itemId).toBe('itemSL');
+      expect(r.l10nId).toBe('cell-sl');
+    }
+    expect(refs[1]!.meta).toEqual({ title: 'Onboarding RU' });
+  });
+
+  it('reports every distinct leaf once (the repackaging unit)', () => {
+    expect(storylineLeaves(findStorylineBlocks(stackDoc)).sort()).toEqual(['leafEN', 'leafRU']);
+    // two languages sharing ONE package → a single leaf
+    const shared = JSON.parse(JSON.stringify(stackDoc)) as typeof stackDoc;
+    (shared.l10n.translations.ru!['cell-sl'] as { storyline: { contentPrefix: string } })
+      .storyline.contentPrefix = 'rise/courses/STACK/leafEN';
+    expect(storylineLeaves(findStorylineBlocks(shared))).toEqual(['leafEN']);
+  });
+
+  it('still yields one leaf-less entry for a stack block with no package anywhere', () => {
+    const empty = JSON.parse(JSON.stringify(stackDoc)) as typeof stackDoc;
+    empty.l10n.translations = { 'en-us': {}, ru: {} } as never;
+    const refs = findStorylineBlocks(empty);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.blockId).toBe('blkSL');
+    expect(refs[0]!.leaf).toBeUndefined();
+    expect(refs[0]!.locale).toBeUndefined();
+  });
+
+  it('leaves monolingual detection unchanged (no locale/l10nId fields)', () => {
+    const mono = {
+      lessons: [
+        {
+          id: 'L1',
+          items: [
+            {
+              id: 'b1',
+              family: '360',
+              variant: 'storyline',
+              items: [
+                {
+                  id: 'i1',
+                  media: { storyline: { contentPrefix: 'rise/courses/C/leaf1', meta: {} } },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const refs = findStorylineBlocks(mono);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.leaf).toBe('leaf1');
+    expect(refs[0]!.locale).toBeUndefined();
+    expect(refs[0]!.l10nId).toBeUndefined();
   });
 });

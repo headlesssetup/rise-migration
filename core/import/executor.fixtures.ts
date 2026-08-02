@@ -114,6 +114,38 @@ export function l10nCourse(): PlanInput {
   };
 }
 
+/** The per-language storyline packages a staged archive would provide for the
+ *  fixture stack (docs/rise-multilang.md §4.3b): en-us + ru attached DIFFERENT
+ *  bundles, so the plan emits one attach step per language. */
+export function l10nStorylineAttach(): Map<
+  string,
+  { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
+> {
+  const cell = 'cccc3333-0000-4000-8000-000000000009';
+  return new Map([
+    [
+      'cblockSL00000000000000000|en-us',
+      {
+        locale: 'en-us',
+        l10nId: cell,
+        reviewPrefix: 'review/items/slEN000000000000',
+        meta: { title: 'Onboarding EN' },
+        title: 'Onboarding EN',
+      },
+    ],
+    [
+      'cblockSL00000000000000000|ru',
+      {
+        locale: 'ru',
+        l10nId: cell,
+        reviewPrefix: 'review/items/slRU000000000000',
+        meta: { title: 'Onboarding RU' },
+        title: 'Onboarding RU',
+      },
+    ],
+  ]);
+}
+
 /** Scripted happy-path handlers for a full stack import. GET_COURSE is stateful:
  *  the 1st call is the post-create handshake (plain shell), later calls return
  *  the CONVERTED target (l10n-ified refs + a junk placeholder cell). */
@@ -196,5 +228,6 @@ export function l10nHandlers(): Record<string, (body: unknown) => unknown> {
     UPDATE_LOCALE: () => ({ payload: { locale: 'ru', labelSetId: 'NEWLABELSET1' } }),
     UPDATE_COURSE: () => ({ payload: {} }),
     UPDATE_LESSON: () => ({ payload: {} }),
+    copy_review_item: () => [{ CopyObjectResult: { ETag: '"x"' } }],
   };
 }

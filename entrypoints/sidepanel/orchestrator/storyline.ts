@@ -108,6 +108,11 @@ export interface StorylineManifestEntry {
   meta?: unknown;
   /** Stored Review-360 upload zip, relative to the archive root. */
   zip: string;
+  /** STACK only (docs/rise-multilang.md §4.3b): the language this package
+   *  belongs to, and the l10n cell that holds it. One block can have one entry
+   *  per language, each with its own leaf. Absent on monolingual courses. */
+  locale?: string;
+  l10nId?: string;
 }
 
 export interface StorylineExportSummary {
@@ -303,13 +308,14 @@ export async function exportStorylinePackages(
       const entries: StorylineManifestEntry[] = [];
       const leavesDone = new Set<string>();
       for (const b of blocks) {
+        const where = b.locale ? `block ${b.blockId} [${b.locale}]` : `block ${b.blockId}`;
         if (!b.leaf) {
-          onEvent({ kind: 'log', message: `${label} block ${b.blockId}: no source leaf (placeholder), skipped` });
+          onEvent({ kind: 'log', message: `${label} ${where}: no source leaf (placeholder), skipped` });
           continue;
         }
         if (!physicalLeaves.includes(b.leaf)) {
           throw new Error(
-            `contentPrefix mismatch: block ${b.blockId} expects package leaf "${b.leaf}", ` +
+            `contentPrefix mismatch: ${where} expects package leaf "${b.leaf}", ` +
               `but the web export carries [${physicalLeaves.join(', ') || 'none'}]` +
               (runtimeLeaves
                 ? `; its runtime-data.js lists [${runtimeLeaves.join(', ') || 'none'}]`
@@ -328,6 +334,8 @@ export async function exportStorylinePackages(
           leaf: b.leaf,
           meta: b.meta,
           zip: `storyline/${courseId}/${b.leaf}.zip`,
+          ...(b.locale ? { locale: b.locale } : {}),
+          ...(b.l10nId ? { l10nId: b.l10nId } : {}),
         });
       }
 
@@ -338,7 +346,11 @@ export async function exportStorylinePackages(
       summary.packaged += 1;
       onEvent({
         kind: 'log',
-        message: `${label} ${title ?? courseId}: ${leavesDone.size} package(s) → storyline/${courseId}/`,
+        message:
+          `${label} ${title ?? courseId}: ${leavesDone.size} package(s) → storyline/${courseId}/` +
+          (entries.some((e) => e.locale)
+            ? ` (${entries.filter((e) => e.locale).length} language-specific)`
+            : ''),
       });
     } catch (e) {
       const error = (e as Error).message;

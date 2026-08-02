@@ -5,7 +5,13 @@
 import { describe, it, expect } from 'vitest';
 import { buildPlan, type PlanStep } from './plan';
 import { executePlan } from './executor';
-import { counterMint, mockRelay, l10nCourse, l10nHandlers } from './executor.fixtures';
+import {
+  counterMint,
+  mockRelay,
+  l10nCourse,
+  l10nHandlers,
+  l10nStorylineAttach,
+} from './executor.fixtures';
 
 const readAsset = async () => ({ base64: 'Zm9v', contentType: 'application/octet-stream' });
 
@@ -130,10 +136,11 @@ describe('buildPlan — stack sequence', () => {
       .filter((s): s is Extract<PlanStep, { kind: 'write-l10n' }> => s.kind === 'write-l10n')
       .flatMap((w) => w.l10nIds);
     expect(written).not.toContain('cccc3333-0000-4000-8000-000000000009');
-    // …and the storyline block is NOT attached via UPDATE_BLOCK_DEBOUNCE (that
-    // would clobber the {l10nId} ref and every other language's binding)
+    // …and the block is never attached via UPDATE_BLOCK_DEBOUNCE (that would
+    // clobber the {l10nId} ref and every other language's binding)
     expect(ks).not.toContain('attach-storyline');
-    expect(ks).toContain('flag-storyline');
+    // the per-cell flag replaces the block-level one when the cell HAS packages
+    expect(ks).not.toContain('flag-storyline');
   });
 });
 
@@ -287,5 +294,114 @@ describe('executePlan — stack live run (scripted relay)', () => {
     expect(res.envelopes.some((e) => e.step === 'await-stack')).toBe(true);
     expect(res.envelopes.some((e) => e.step === 'write-l10n')).toBe(true);
     expect(res.envelopes.some((e) => e.step === 'set-stack-titles')).toBe(true);
+  });
+});
+
+describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => {
+  function stackWithPackages() {
+    const input = l10nCourse();
+    input.storylineAttachL10n = l10nStorylineAttach();
+    return input;
+  }
+
+  it('plans one attach per language and drops the manual flag', () => {
+    const steps = buildPlan(stackWithPackages());
+    const attaches = steps.filter(
+      (s): s is Extract<PlanStep, { kind: 'attach-storyline-l10n' }> =>
+        s.kind === 'attach-storyline-l10n',
+    );
+    expect(attaches.map((a) => a.locale)).toEqual(['en-us', 'ru']);
+    expect(attaches[0]).toMatchObject({
+      sourceBlockId: 'cblockSL00000000000000000',
+      l10nId: 'cccc3333-0000-4000-8000-000000000009',
+      reviewPrefix: 'review/items/slEN000000000000',
+      title: 'Onboarding EN',
+    });
+    // nothing left to flag: every language has a staged package
+    expect(kinds(steps)).not.toContain('flag-l10n-storyline');
+    // and the block is still never patched
+    expect(kinds(steps)).not.toContain('attach-storyline');
+  });
+
+  it('flags only the languages with no staged package', () => {
+    const input = stackWithPackages();
+    input.storylineAttachL10n!.delete('cblockSL00000000000000000|ru');
+    const steps = buildPlan(input);
+    expect(
+      steps.filter((s) => s.kind === 'attach-storyline-l10n').map((s) => (s as { locale: string }).locale),
+    ).toEqual(['en-us']);
+    const flags = steps.filter(
+      (s): s is Extract<PlanStep, { kind: 'flag-l10n-storyline' }> =>
+        s.kind === 'flag-l10n-storyline',
+    );
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.locales).toEqual(['ru']); // en-us was attached → not flagged
+  });
+
+  it('executes copy_review_item + a storyline CELL write per language (never a block patch)', async () => {
+    const input = stackWithPackages();
+    const steps = buildPlan(input);
+    const { relay, calls } = mockRelay(l10nHandlers());
+    const bodies: { url: string; payload: Record<string, unknown> }[] = [];
+    const spy: typeof relay = async (spec) => {
+      if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
+      return relay(spec);
+    };
+    const res = await executePlan(steps, {
+      input,
+      relay: spy,
+      readAsset,
+      mintId: counterMint(),
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.ok).toBe(true);
+    expect(res.storylineAttached).toBe(2);
+
+    // one copy_review_item per language, each with the TARGET block id
+    const copies = bodies.filter((b) => b.url.includes('copy_review_item'));
+    expect(copies).toHaveLength(2);
+    expect(copies.map((c) => c.payload.reviewPrefix)).toEqual([
+      'review/items/slEN000000000000',
+      'review/items/slRU000000000000',
+    ]);
+    expect(copies[0]!.payload.id).toBe('NEWCOURSE');
+    expect(typeof copies[0]!.payload.jobId).toBe('string');
+
+    // the storyline CELLS point at the TARGET course prefix, per language
+    const cellWrites = bodies
+      .filter((b) => b.url.endsWith('/l10n/UPDATE_L10N_BATCH'))
+      .flatMap((b) => (b.payload.payload as { changes: Record<string, unknown>[] }).changes)
+      .filter((c) => c.valueType === 'storyline');
+    expect(cellWrites).toHaveLength(2);
+    expect(cellWrites.map((c) => c.locale)).toEqual(['en-us', 'ru']);
+    for (const c of cellWrites) {
+      expect(c.l10nId).toBe('cccc3333-0000-4000-8000-000000000009');
+      expect(c.lessonId).toBeTruthy(); // lesson-scoped add
+      const sl = (c.value as { storyline: { contentPrefix: string; src: string } }).storyline;
+      expect(sl.contentPrefix).toMatch(/^rise\/courses\/NEWCOURSE\//);
+      expect(sl.src).toBe(`${sl.contentPrefix}/story.html`);
+    }
+    // per-language prefixes stay distinct (EN ≠ RU bundle)
+    const prefixes = cellWrites.map(
+      (c) => (c.value as { storyline: { contentPrefix: string } }).storyline.contentPrefix,
+    );
+    expect(new Set(prefixes).size).toBe(2);
+
+    // no block patch ever carries a storyline media object: the block keeps its
+    // {l10nId} ref (patching it would clobber every language's binding)
+    const blockPatches = bodies.filter((b) => b.url.endsWith('/lessons/UPDATE_BLOCK_DEBOUNCE'));
+    for (const p of blockPatches) {
+      expect(JSON.stringify(p.payload)).not.toContain('"storyline"');
+    }
+    // …and the created storyline block carried the ref verbatim
+    const created = bodies
+      .filter((b) => b.url.endsWith('/lessons/CREATE_BLOCKS'))
+      .map((b) => JSON.stringify((b.payload.payload as { blocks: unknown }).blocks))
+      .join(' ');
+    expect(created).toContain('"media":{"l10nId":"cccc3333-0000-4000-8000-000000000009"}');
+    // …and no source contentPrefix ever shipped
+    const all = JSON.stringify(bodies);
+    expect(all).not.toContain('rise/courses/stackCourse000000000000000000000/slEN');
+    expect(all).not.toContain('rise/courses/stackCourse000000000000000000000/slRU');
   });
 });

@@ -8,8 +8,8 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
-> changed a behavior they describe, this top section wins. Current: **v0.6.0**,
-> **540 Vitest tests**, `compile` / `test` green.
+> changed a behavior they describe, this top section wins. Current: **v0.6.1**,
+> **547 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -41,16 +41,19 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
   reports carry the standing **"never click Update translation"** warning.
 - **"Ready to import?"**: rough pre-run estimate (paced envelopes × pacing +
   upload bytes + 90 s per stack) shown for any selection in step C.
-- **Storyline in a stack** (capture2aug): a storyline block's package lives in
-  the cell tables, so each language can carry its OWN package. v0.6.0 does NOT
-  copy those cells — the source `contentPrefix` belongs to the source course and
-  storyline keys are exempt from the foreign-key invariant, so a verbatim copy
-  would ship a dead reference silently. The block is recreated bare, every
-  language is flagged for a manual Review-360 attach, and `attach-storyline` is
-  suppressed on stacks (patching block media would clobber the `{l10nId}` ref
-  and every language's binding). Per-language attach automation → v0.6.1
-  (needs the export side to resolve storyline refs through the tables so each
-  language's leaf gets staged).
+- **Storyline in a stack — per-language, end-to-end (v0.6.1)**: a storyline
+  block's package lives in the cell tables, so each language can carry its OWN
+  bundle (capture2aug). Export (`findStorylineBlocks`) resolves the block's
+  `{l10nId}` media ref through the tables and yields one ref per language,
+  staging one zip per DISTINCT leaf (shared bundles staged once) with
+  `locale`/`l10nId` in the storyline manifest. Import emits
+  `attach-storyline-l10n` per language: `copy_review_item` (target block id) +
+  the storyline cell write for that locale. The block is created copy-faithful
+  with its ref and **never patched** — patching `items[0].media` would replace
+  the ref and destroy every language's binding. Cells are never copied verbatim
+  (the source `contentPrefix` is source-owned and storyline keys are exempt from
+  the foreign-key invariant); languages with no staged package are flagged, and
+  a block with no package in any language is flagged block-level.
 - **Draw-from-bank in a stack** (capture2aug): banks are NOT localized — bank
   questions are plain strings, `INSERT_QUESTION_BANK_QUESTIONS` carries no
   `translationChanges`, and Rise mints fresh question cells when it materializes

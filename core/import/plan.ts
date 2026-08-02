@@ -92,6 +92,14 @@ export interface PlanInput {
    *  + media patch) instead of a manual flag. Built by the orchestrator from the
    *  course's storyline manifest (only entries whose package has been uploaded). */
   storylineAttach?: Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>;
+  /** STACK only (docs/rise-multilang.md §4.3b): `${sourceBlockId}|${locale}` →
+   *  the uploaded package for THAT language. Each entry becomes a
+   *  copy_review_item + a storyline cell write; languages with no uploaded
+   *  package are flagged instead. */
+  storylineAttachL10n?: Map<
+    string,
+    { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
+  >;
 }
 
 export type PlanStep =
@@ -339,6 +347,22 @@ export type PlanStep =
       locales: string[];
       title?: string;
       summary: string;
+    }
+  | {
+      // STACK per-language Storyline attach (docs/rise-multilang.md §4.3b):
+      // copy_review_item for THIS language's package, then write the storyline
+      // cell for that locale. The block itself already carries the {l10nId} ref
+      // (copy-faithful), so no block patch — patching would clobber the ref.
+      kind: 'attach-storyline-l10n';
+      sourceLessonId: string;
+      sourceBlockId: string;
+      /** The cell to write (source l10nId, kept verbatim on the target). */
+      l10nId: string;
+      locale: string;
+      reviewPrefix: string;
+      meta?: unknown;
+      title?: string;
+      summary: string;
     };
 
 const STORYLINE = new Set(['360/storyline']);
@@ -402,6 +426,16 @@ export function courseMediaImageKey(img: unknown): string | null {
 }
 
 /** Is this block a Storyline / Mighty block (conditional, flagged manual)? */
+/** The l10n cell id behind a STACK storyline block's `items[0].media` ref. */
+function storylineCellId(b: Block): string | null {
+  const items = Array.isArray(b.items) ? b.items : [];
+  const first = items.find((i) => i && typeof i === 'object') as
+    | { media?: unknown }
+    | undefined;
+  const media = first?.media;
+  return isL10nRef(media) ? media.l10nId : null;
+}
+
 function isStoryline(b: Block): boolean {
   return STORYLINE.has(`${b.family}/${b.variant}`) || b.variant === 'storyline';
 }
@@ -477,6 +511,24 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     (matCourse as Record<string, unknown>).lessons,
   );
   const matTitle = (idx: number): string => lessonTitle(matLessons[idx] ?? lessons[idx] ?? {});
+
+  // STACK Storyline bookkeeping (docs/rise-multilang.md §4.3b): which locales
+  // hold a package per cell, and which of those the plan actually attaches —
+  // the rest are flagged. Filled by the block loop, read by the flag sweep.
+  const stackStorylineCells = new Map<string, string[]>();
+  const stackStorylineAttached = new Map<string, Set<string>>();
+  if (stack) {
+    for (const cell of storylineCells(input.course)) {
+      const locales = stackStorylineCells.get(cell.l10nId) ?? [];
+      locales.push(cell.locale);
+      stackStorylineCells.set(cell.l10nId, locales);
+      if (!stackStorylineAttached.has(cell.l10nId)) {
+        stackStorylineAttached.set(cell.l10nId, new Set());
+      }
+    }
+  }
+  const storylineCellLocales = (l10nId: string): string[] =>
+    stackStorylineCells.get(l10nId) ?? [];
 
   const assetByKey = new Map(input.assets.map((a) => [a.key, a]));
   // Keys attached to a recreatable block (uploaded or orphan-flagged). Anything
@@ -678,12 +730,47 @@ export function buildPlan(input: PlanInput): PlanStep[] {
 
       if (isStoryline(block)) {
         const attach = input.storylineAttach?.get(sourceBlockId);
-        // On a STACK the block's media is an {l10nId} ref and the package lives
-        // in the cell tables (docs/rise-multilang.md §4.3b): attaching via
-        // UPDATE_BLOCK_DEBOUNCE would overwrite that ref with a plain storyline
-        // object and destroy every language's binding. Flag instead until the
-        // per-language cell attach lands (v0.6.1).
-        if (attach && !stack) {
+        // On a STACK the block's media is an {l10nId} ref and each language's
+        // package lives in its own cell (docs/rise-multilang.md §4.3b). Attach
+        // per language: copy_review_item + a storyline cell write. NEVER patch
+        // the block's media — that would overwrite the ref and destroy every
+        // language's binding. Languages with no staged package are flagged by
+        // the flag-l10n-storyline sweep (which skips the ones attached here).
+        if (stack) {
+          const cellId = storylineCellId(block);
+          const attached = cellId ? stackStorylineAttached.get(cellId) : undefined;
+          const cellLocales = cellId ? storylineCellLocales(cellId) : [];
+          for (const locale of cellLocales) {
+            const pkg = input.storylineAttachL10n?.get(`${sourceBlockId}|${locale}`);
+            if (!pkg || !cellId) continue;
+            steps.push({
+              kind: 'attach-storyline-l10n',
+              sourceLessonId,
+              sourceBlockId,
+              l10nId: cellId,
+              locale,
+              reviewPrefix: pkg.reviewPrefix,
+              meta: pkg.meta,
+              title: pkg.title,
+              summary: `Attach Storyline [${locale}] from ${pkg.reviewPrefix}`,
+            });
+            attached?.add(locale);
+          }
+          // No package in ANY language (an empty/never-attached block, or a ref
+          // we could not resolve): the flag-l10n-storyline sweep has nothing to
+          // report for it, so flag the block itself — never stay silent about a
+          // storyline block.
+          if (cellLocales.length === 0) {
+            steps.push({
+              kind: 'flag-storyline',
+              sourceLessonId,
+              sourceBlockId,
+              summary: `⚠ Storyline/Mighty block (multi-language) has no package to copy — check it manually`,
+            });
+          }
+          continue;
+        }
+        if (attach) {
           steps.push({
             kind: 'attach-storyline',
             sourceLessonId,
@@ -1004,12 +1091,16 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       slByRef.set(c.l10nId, entry);
     }
     for (const [l10nId, entry] of slByRef) {
+      // Languages this plan attaches automatically (staged package) need no flag.
+      const done = stackStorylineAttached.get(l10nId) ?? new Set<string>();
+      const pending = entry.locales.filter((l) => !done.has(l));
+      if (pending.length === 0) continue;
       steps.push({
         kind: 'flag-l10n-storyline',
         l10nId,
-        locales: entry.locales,
+        locales: pending,
         ...(entry.title ? { title: entry.title } : {}),
-        summary: `⚠ Storyline in a stack${entry.title ? ` ("${entry.title}")` : ''} — attach manually per language (${entry.locales.join(', ')})`,
+        summary: `⚠ Storyline in a stack${entry.title ? ` ("${entry.title}")` : ''} — attach manually for: ${pending.join(', ')}`,
       });
     }
     const batches = planCellWrites(collectCells(doc), { skip: inlineSkip });
@@ -1174,7 +1265,7 @@ export function planStats(steps: PlanStep[]): PlanStats {
     blocks,
     uploads:
       count('upload-asset') + count('upload-lesson-media') + count('upload-l10n-asset'),
-    storylineFlags: count('flag-storyline'),
+    storylineFlags: count('flag-storyline') + count('flag-l10n-storyline'),
     orphanFlags: count('flag-orphan-media'),
     drawFromBank: count('bind-draw-from-bank'),
     locales: awaitStep?.kind === 'await-stack' ? awaitStep.expectedLocales.length : 0,

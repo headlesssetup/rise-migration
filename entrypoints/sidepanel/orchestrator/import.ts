@@ -156,23 +156,55 @@ async function readCourseAssets(
 async function readStorylineAttach(
   storage: Storage,
   courseId: string,
-): Promise<Map<string, { reviewPrefix: string; meta?: unknown; title?: string }> | undefined> {
+): Promise<
+  | {
+      /** Monolingual: source block id → the uploaded package to attach. */
+      byBlock: Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>;
+      /** STACK (docs/rise-multilang.md §4.3b): `${blockId}|${locale}` → package,
+       *  one per language (each language can carry its own bundle). */
+      byBlockLocale: Map<
+        string,
+        { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
+      >;
+    }
+  | undefined
+> {
   const raw = await storage.readStorylineManifest(courseId);
   if (!raw) return undefined;
   try {
     const m = JSON.parse(raw) as {
-      blocks?: Array<{ blockId: string; leaf: string; meta?: unknown }>;
+      blocks?: Array<{
+        blockId: string;
+        leaf: string;
+        meta?: unknown;
+        locale?: string;
+        l10nId?: string;
+      }>;
       uploads?: Record<string, { reviewPrefix?: string }>;
     };
-    const map = new Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>();
+    const byBlock = new Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>();
+    const byBlockLocale = new Map<
+      string,
+      { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
+    >();
     for (const b of m.blocks ?? []) {
       const reviewPrefix = m.uploads?.[b.leaf]?.reviewPrefix;
       if (!reviewPrefix) continue;
       const title =
         b.meta && typeof b.meta === 'object' ? (b.meta as { title?: string }).title : undefined;
-      map.set(b.blockId, { reviewPrefix, meta: b.meta, title });
+      if (b.locale) {
+        byBlockLocale.set(`${b.blockId}|${b.locale}`, {
+          locale: b.locale,
+          l10nId: b.l10nId,
+          reviewPrefix,
+          meta: b.meta,
+          title,
+        });
+      } else {
+        byBlock.set(b.blockId, { reviewPrefix, meta: b.meta, title });
+      }
     }
-    return map.size ? map : undefined;
+    return byBlock.size || byBlockLocale.size ? { byBlock, byBlockLocale } : undefined;
   } catch {
     return undefined;
   }
@@ -560,11 +592,17 @@ export async function runImport(
       continue;
     }
     const banksById = await readReferencedBanks(storage, course);
-    const storylineAttach = await readStorylineAttach(storage, courseId);
-    if (storylineAttach) {
+    const storylineManifest = await readStorylineAttach(storage, courseId);
+    if (storylineManifest) {
+      const nBlocks = storylineManifest.byBlock.size;
+      const nLocalized = storylineManifest.byBlockLocale.size;
+      const parts = [
+        ...(nBlocks ? [`${nBlocks} block(s)`] : []),
+        ...(nLocalized ? [`${nLocalized} language-specific package(s)`] : []),
+      ];
       onEvent({
         kind: 'log',
-        message: `Storyline: ${storylineAttach.size} block(s) have uploaded packages → will attach (rest flagged).`,
+        message: `Storyline: ${parts.join(' + ')} uploaded → will attach (rest flagged).`,
       });
     }
 
@@ -598,7 +636,8 @@ export async function runImport(
       course,
       assets: entries,
       banksById,
-      storylineAttach,
+      storylineAttach: storylineManifest?.byBlock,
+      storylineAttachL10n: storylineManifest?.byBlockLocale,
       // The current account-local user (the `_articulate_user_id` owner), NOT the
       // Okta `sub` — same principal the folders API requires. Author of created
       // lessons/locks; keeps every created resource owned by the live account.

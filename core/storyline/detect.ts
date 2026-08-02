@@ -26,6 +26,15 @@ export interface StorylineBlockRef {
   meta?: StorylineMeta;
   /** JSON path of the block (diagnostics). */
   path: string;
+  /**
+   * Multi-language stacks only (docs/rise-multilang.md §4.3b): the block's
+   * `media` is an `{l10nId}` ref and each LOCALE may hold its own package, so
+   * one block yields one entry per locale that has one. `locale`/`l10nId` are
+   * set on those entries (absent on a plain monolingual block).
+   */
+  locale?: string;
+  /** The l10n cell holding this package (the import writes the cell by this id). */
+  l10nId?: string;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -36,23 +45,67 @@ function isStorylineBlock(o: Record<string, unknown>): boolean {
   return o.family === '360' && o.variant === 'storyline';
 }
 
-/** Pull `{leaf, meta, itemId}` from a block's `items[0].media.storyline`. */
-function readBlockMedia(block: Record<string, unknown>): {
-  itemId?: string;
+/** `{leaf, meta}` of one storyline package object (`{contentPrefix, meta…}`). */
+function readPackage(storyline: Record<string, unknown>): {
   leaf?: string;
   meta?: StorylineMeta;
 } {
-  const items = Array.isArray(block.items) ? block.items : [];
-  const first = items.find(isObject);
-  if (!first) return {};
-  const itemId = typeof first.id === 'string' ? first.id : undefined;
-  const media = isObject(first.media) ? first.media : undefined;
-  const storyline = media && isObject(media.storyline) ? media.storyline : undefined;
-  if (!storyline) return { itemId };
   const contentPrefix = typeof storyline.contentPrefix === 'string' ? storyline.contentPrefix : '';
   const leaf = contentPrefix ? contentPrefix.split('/').filter(Boolean).pop() : undefined;
   const meta = isObject(storyline.meta) ? (storyline.meta as StorylineMeta) : undefined;
-  return { itemId, leaf, meta };
+  return { leaf, meta };
+}
+
+/** Per-locale translation tables of a stack doc (empty for a plain course). */
+function tablesOf(doc: unknown): Record<string, Record<string, unknown>> {
+  if (!isObject(doc)) return {};
+  const l10n = isObject(doc.l10n) ? doc.l10n : undefined;
+  const t = l10n && isObject(l10n.translations) ? l10n.translations : undefined;
+  if (!t) return {};
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [locale, table] of Object.entries(t)) {
+    if (isObject(table)) out[locale] = table as Record<string, unknown>;
+  }
+  return out;
+}
+
+/**
+ * Pull the package reference(s) from a block's `items[0].media`. Monolingual:
+ * one entry from `media.storyline`. STACK: `media` is `{l10nId}` and the
+ * package objects live in the per-locale tables — one entry per locale that
+ * holds one (docs/rise-multilang.md §4.3b).
+ */
+function readBlockMedia(
+  block: Record<string, unknown>,
+  tables: Record<string, Record<string, unknown>>,
+): {
+  itemId?: string;
+  packages: { leaf?: string; meta?: StorylineMeta; locale?: string; l10nId?: string }[];
+} {
+  const items = Array.isArray(block.items) ? block.items : [];
+  const first = items.find(isObject);
+  if (!first) return { packages: [] };
+  const itemId = typeof first.id === 'string' ? first.id : undefined;
+  const media = isObject(first.media) ? first.media : undefined;
+  if (!media) return { itemId, packages: [] };
+
+  // Stack: media is an l10n ref → resolve each locale's cell.
+  const l10nId = typeof media.l10nId === 'string' ? media.l10nId : undefined;
+  if (l10nId) {
+    const packages: { leaf?: string; meta?: StorylineMeta; locale?: string; l10nId: string }[] = [];
+    for (const [locale, table] of Object.entries(tables)) {
+      const cell = table[l10nId];
+      if (!isObject(cell)) continue;
+      const storyline = isObject(cell.storyline) ? cell.storyline : undefined;
+      if (!storyline) continue;
+      packages.push({ ...readPackage(storyline), locale, l10nId });
+    }
+    return { itemId, packages };
+  }
+
+  const storyline = isObject(media.storyline) ? media.storyline : undefined;
+  if (!storyline) return { itemId, packages: [] };
+  return { itemId, packages: [readPackage(storyline)] };
 }
 
 /**
@@ -62,6 +115,7 @@ function readBlockMedia(block: Record<string, unknown>): {
  */
 export function findStorylineBlocks(doc: unknown): StorylineBlockRef[] {
   const out: StorylineBlockRef[] = [];
+  const tables = tablesOf(doc);
 
   const walkBlocks = (lessonId: string, node: unknown, path: string): void => {
     if (Array.isArray(node)) {
@@ -71,8 +125,15 @@ export function findStorylineBlocks(doc: unknown): StorylineBlockRef[] {
     if (!isObject(node)) return;
     if (typeof node.family === 'string' && typeof node.variant === 'string' && isStorylineBlock(node)) {
       const blockId = typeof node.id === 'string' ? node.id : '';
-      const { itemId, leaf, meta } = readBlockMedia(node);
-      out.push({ blockId, lessonId, itemId, family: node.family, variant: node.variant, leaf, meta, path });
+      const base = { blockId, lessonId, family: node.family, variant: node.variant, path };
+      const { itemId, packages } = readBlockMedia(node, tables);
+      if (packages.length === 0) {
+        // Never-attached placeholder (or an unresolvable ref): one entry, no leaf.
+        out.push({ ...base, itemId });
+      } else {
+        // One entry per package: monolingual → exactly one; STACK → one per locale.
+        for (const pkg of packages) out.push({ ...base, itemId, ...pkg });
+      }
     }
     for (const [k, v] of Object.entries(node)) walkBlocks(lessonId, v, `${path}.${k}`);
   };
@@ -98,18 +159,27 @@ export function findStorylineBlocks(doc: unknown): StorylineBlockRef[] {
   };
 
   walk(doc, '$');
-  // De-dupe by BLOCK ID (a block reachable by two paths is still one block —
-  // keying on the path used to defeat this, yielding duplicate manifest entries
-  // and duplicate attach steps). The FIRST path found is kept for diagnostics.
+  // De-dupe by BLOCK ID *and locale* (a block reachable by two paths is still
+  // one block — keying on the path used to defeat this, yielding duplicate
+  // manifest entries and duplicate attach steps — but on a stack the SAME block
+  // legitimately yields one entry per locale, so the locale is part of the key).
   // A block with no id (malformed) falls back to lesson+path so distinct
   // id-less blocks are not collapsed into one.
   const seen = new Set<string>();
   return out.filter((b) => {
-    const key = b.blockId || `${b.lessonId}/${b.path}`;
+    const key = `${b.blockId || `${b.lessonId}/${b.path}`}|${b.locale ?? ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+/** Distinct package leaves in a course (the unit the export pass repackages —
+ *  a leaf shared by several locales/blocks is staged once). */
+export function storylineLeaves(refs: StorylineBlockRef[]): string[] {
+  const seen = new Set<string>();
+  for (const r of refs) if (r.leaf) seen.add(r.leaf);
+  return [...seen];
 }
 
 /** True if the course contains at least one storyline block (→ needs the export

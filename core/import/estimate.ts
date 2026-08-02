@@ -43,6 +43,8 @@ function pacedEnvelopes(step: PlanStep): number {
       return 1; // GET_YURL is paced; the S3 PUT itself is byte-time (below)
     case 'attach-storyline':
       return 2; // copy_review_item + media patch
+    case 'attach-storyline-l10n':
+      return 2; // copy_review_item + the storyline cell write (per language)
     case 'set-locale-labelset':
       return 3; // CREATE_LABEL_SET + UPDATE_LABELS + UPDATE_LOCALE
     case 'set-stack-titles':
