@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **551 Vitest tests**, `compile` / `test` green.
+> **572 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -70,6 +70,21 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
 - Other known gaps (rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR` payload
   (manual flag), glossaries out of scope, monolingual course-level label sets
   still unmigrated.
+
+### Built-in ("library") assets — copied + probed (v0.6.2)
+
+Rise stock media (sample-course covers, theme covers, block defaults) is not
+account media: nothing to re-upload, and it appears either as a host-relative
+`assets/rise/…` key or an absolute `cdn|images[.eu].articulate.com/assets/…` url.
+Fixed: a course image with no *uploadable* key was treated as "no image" and
+silently dropped (sample-course covers were lost; on a stack it also produced a
+spurious `l10n-ref` flag). Now copied verbatim, and — because plane parity of the
+two libraries is UNVERIFIED (a region may lack an asset for licensing reasons) —
+each distinct reference is HEAD-probed on the TARGET plane (deduped by resolved
+url, cached run-wide, outside pacing). Absent/inconclusive → still shipped plus a
+`builtin-asset` flag; no host is ever rewritten without a passing probe.
+Residency note: US→EU keeps source-plane absolute urls (correct rendering beats an
+unverified rewrite) — the flags make it visible. `core/import/builtin-assets.ts`.
 
 ### Roadmap → v0.7.0 (recorded, not designed)
 

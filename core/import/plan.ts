@@ -6,6 +6,7 @@
 // or draw-from-bank bind → unlock.
 
 import { collectAssetKeys } from '@/core/assets/keys';
+import { courseImageKind } from './builtin-assets';
 import {
   cellKey,
   collectCells,
@@ -549,7 +550,17 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     // (it may also nest an uncropped `originalImage` with its own key/crushedKey —
     // all handled keys are marked below so none survives as a source key).
     const headerKey = coverCardImageKey(c.lessonHeaderImage);
-    if (!coverKey && !cardKey && !mediaKey && !headerKey) return;
+    // BUILT-IN (library/CDN) images have no uploadable key but are perfectly
+    // copyable — the sample courses' covers are `assets/rise/…` library keys.
+    // Treating "no uploaded key" as "no image" silently DROPPED them (the target
+    // kept whatever random built-in cover Rise assigned, and on a stack the
+    // conversion then had no ref to localize). Ship those objects verbatim.
+    const builtinCover = !coverKey && courseImageKind(c.coverImage) === 'builtin';
+    const builtinCard = !cardKey && courseImageKind(c.cardImage) === 'builtin';
+    const builtinMedia = !mediaKey && courseImageKind(c.media) === 'builtin';
+    const builtinHeader = !headerKey && courseImageKind(c.lessonHeaderImage) === 'builtin';
+    const anyBuiltin = builtinCover || builtinCard || builtinMedia || builtinHeader;
+    if (!coverKey && !cardKey && !mediaKey && !headerKey && !anyBuiltin) return;
     // Orphaned course-image keys (deleted at source, no archived bytes) are
     // flagged BEFORE the set-course-images step, mirroring block/lesson media:
     // the executor blanks them (keyMap → '') so UPDATE_COURSE ships without the
@@ -577,13 +588,27 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         }
       }
     }
+    const has = {
+      cover: !!coverKey || builtinCover,
+      card: !!cardKey || builtinCard,
+      media: !!mediaKey || builtinMedia,
+      header: !!headerKey || builtinHeader,
+    };
+    const label = [
+      has.cover && `cover${builtinCover ? ' (built-in)' : ''}`,
+      has.card && `card${builtinCard ? ' (built-in)' : ''}`,
+      has.media && `logo${builtinMedia ? ' (built-in)' : ''}`,
+      has.header && `lesson-header${builtinHeader ? ' (built-in)' : ''}`,
+    ]
+      .filter(Boolean)
+      .join(' + ');
     steps.push({
       kind: 'set-course-images',
-      hasCover: !!coverKey,
-      hasCard: !!cardKey,
-      hasMedia: !!mediaKey,
-      hasLessonHeader: !!headerKey,
-      summary: `Set course ${[coverKey && 'cover', cardKey && 'card', mediaKey && 'logo', headerKey && 'lesson-header'].filter(Boolean).join(' + ')} image`,
+      hasCover: has.cover,
+      hasCard: has.card,
+      hasMedia: has.media,
+      hasLessonHeader: has.header,
+      summary: `Set course ${label} image`,
     });
   };
 

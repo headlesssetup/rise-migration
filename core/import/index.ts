@@ -4,6 +4,7 @@
 
 export * from './ids';
 export * from './remap';
+export * from './builtin-assets';
 export * from './envelopes';
 export * from './plan';
 export * from './executor';

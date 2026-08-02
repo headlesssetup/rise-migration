@@ -28,6 +28,7 @@ import {
   remapMediaKeys,
   findForeignMediaKeys,
 } from './remap';
+import { collectBuiltinRefs, hasBuiltinRef, probeBuiltinRefs } from './builtin-assets';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
 import { findBankRef, MAX_UPLOAD_BASE64, type PlanStep, type PlanInput, type SourceBank } from './plan';
@@ -129,6 +130,50 @@ export async function executePlan(
       value: remapMediaKeys(value as never, keyMap) as typeof value,
       valueType: valueTypeOf(value),
     };
+  };
+
+  /**
+   * A built-in (library/CDN) reference is copied verbatim — but whether the
+   * TARGET plane actually serves it is unverified (the libraries of the two
+   * planes are not known to be identical; a region may lack an asset for
+   * licensing reasons). Probe the target plane once per distinct value and flag
+   * anything not confirmed, so a silently-broken image is impossible. With no
+   * prober wired (tests, dry-run) the references are flagged as unverified.
+   */
+  const noteBuiltins = async (img: unknown, where: string): Promise<void> => {
+    const refs = collectBuiltinRefs(img);
+    if (refs.length === 0) return;
+    const probe = deps.probeBuiltinAsset;
+    const plane = deps.targetPlane;
+    if (!probe || !plane) {
+      for (const r of refs) {
+        result.flags.push({
+          kind: 'builtin-asset',
+          detail: `${where}: built-in asset "${r.value}" copied as-is, availability on the target plane NOT checked`,
+        });
+      }
+      return;
+    }
+    const probed = await probeBuiltinRefs(
+      refs.map((r) => r.value),
+      plane,
+      probe,
+      deps.builtinProbeCache,
+    );
+    for (const p of probed) {
+      if (p.available === true) continue;
+      const why =
+        p.available === false
+          ? `is NOT served by the ${plane.toUpperCase()} plane (HTTP ${p.status})`
+          : 'could not be verified on the target plane';
+      result.flags.push({
+        kind: 'builtin-asset',
+        detail:
+          `${where}: built-in asset "${p.value}" ${why} — copied as-is, so it may not render. ` +
+          'Replace it in the target course, or re-upload the file as course media.',
+      });
+      log(`${pfx()} ⚠ FLAG built-in asset ${why}: ${p.value}`);
+    }
   };
 
   // Progress: a 1-based step counter (set in the loop) → `[i/N]` log prefix.
@@ -418,7 +463,7 @@ export async function executePlan(
           // lessonHeaderImage which may nest an uncropped `originalImage`). Upload
           // EVERY course/bank key found anywhere in the object — key, crushedKey,
           // originalImage.* — so none survives as a source key, then remap.
-          const build = async (img: unknown): Promise<unknown | undefined> => {
+          const build = async (img: unknown, where: string): Promise<unknown | undefined> => {
             const keys = new Set<string>();
             const walk = (o: unknown): void => {
               if (typeof o === 'string') {
@@ -430,7 +475,17 @@ export async function executePlan(
               }
             };
             walk(img);
-            if (keys.size === 0) return undefined;
+            if (keys.size === 0) {
+              // No account media — but a BUILT-IN (library/CDN) reference is
+              // copyable as-is: ship the object verbatim. Nothing to upload; a
+              // library asset has no per-account copy, and inventing one for a
+              // possibly region-restricted asset is not ours to decide.
+              if (hasBuiltinRef(img)) {
+                await noteBuiltins(img, where);
+                return img;
+              }
+              return undefined;
+            }
             const km = new Map<string, string>();
             for (const k of keys) {
               // null = no archived bytes → flagged + blanked (keyMap → '') by
@@ -442,10 +497,16 @@ export async function executePlan(
             if (![...km.values()].some(Boolean)) return undefined;
             return remapMediaKeys(img, km);
           };
-          const coverImage = step.hasCover ? await build(course.coverImage) : undefined;
-          const cardImage = step.hasCard ? await build(course.cardImage) : undefined;
-          const media = step.hasMedia ? await build(course.media) : undefined;
-          const lessonHeaderImage = step.hasLessonHeader ? await build(course.lessonHeaderImage) : undefined;
+          const coverImage = step.hasCover
+            ? await build(course.coverImage, 'course cover image')
+            : undefined;
+          const cardImage = step.hasCard
+            ? await build(course.cardImage, 'course card image')
+            : undefined;
+          const media = step.hasMedia ? await build(course.media, 'course logo') : undefined;
+          const lessonHeaderImage = step.hasLessonHeader
+            ? await build(course.lessonHeaderImage, 'course lesson-header image')
+            : undefined;
           if (
             coverImage !== undefined ||
             cardImage !== undefined ||

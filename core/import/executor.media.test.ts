@@ -731,3 +731,80 @@ describe('executePlan — lesson header image', () => {
   });
 });
 
+
+describe('built-in (library) course images — copied, probed, flagged', () => {
+  const LIB = 'assets/rise/assets/getting-started-with-rise-360-sample-course/cover.jpg';
+
+  function builtinCoverCourse(): PlanInput {
+    const input = imageCourse();
+    input.course.course!.coverImage = { media: { image: { key: LIB, isSquare: false } } };
+    return input;
+  }
+
+  it('plans set-course-images even with NO uploadable key (was silently dropped)', () => {
+    const steps = buildPlan(builtinCoverCourse());
+    const step = steps.find((s) => s.kind === 'set-course-images');
+    expect(step).toMatchObject({ hasCover: true });
+    expect(step!.summary).toContain('built-in');
+  });
+
+  it('ships the object VERBATIM (no GET_YURL for a library key) and flags nothing when the target serves it', async () => {
+    const input = builtinCoverCourse();
+    const bodies: { url: string; body: string }[] = [];
+    const { relay } = mockRelay(happyHandlers);
+    const probed: string[] = [];
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: async (spec) => {
+        if (spec.body) bodies.push({ url: spec.url, body: spec.body });
+        return relay(spec);
+      },
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+      targetPlane: 'eu',
+      probeBuiltinAsset: async (url) => {
+        probed.push(url);
+        return { ok: true, status: 200 };
+      },
+    });
+    expect(res.ok).toBe(true);
+    // probed on the TARGET plane
+    expect(probed).toEqual([`https://cdn.eu.articulate.com/${LIB}`]);
+    // the cover rode UPDATE_COURSE with the library key intact
+    const setImages = bodies.find((b) => b.body.includes('coverImage'));
+    expect(setImages).toBeDefined();
+    expect(setImages!.body).toContain(LIB);
+    // available → no flag
+    expect(res.flags.some((f) => f.kind === 'builtin-asset')).toBe(false);
+  });
+
+  it('flags (but still ships) an asset the target plane does not serve', async () => {
+    const input = builtinCoverCourse();
+    const { relay } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+      targetPlane: 'eu',
+      probeBuiltinAsset: async () => ({ ok: false, status: 404 }),
+    });
+    expect(res.ok).toBe(true); // a built-in is not an account key → never blocks success
+    const flag = res.flags.find((f) => f.kind === 'builtin-asset');
+    expect(flag?.detail).toContain('NOT served by the EU plane');
+    expect(flag?.detail).toContain(LIB);
+  });
+
+  it('flags as UNVERIFIED when no prober is wired (never silently trusted)', async () => {
+    const input = builtinCoverCourse();
+    const { relay } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+    });
+    const flag = res.flags.find((f) => f.kind === 'builtin-asset');
+    expect(flag?.detail).toMatch(/NOT checked/);
+  });
+});

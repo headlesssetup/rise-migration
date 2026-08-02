@@ -141,6 +141,12 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'Enable the learner language selector manually (the source course shows it; the toggle has no captured envelope yet).',
       };
+    case 'builtin-asset':
+      return {
+        itemType: 'Built-in Rise asset',
+        action:
+          'A Rise library/CDN image (theme cover, sample-course art, block default) was copied as-is because there is nothing to re-upload, but the target plane is not confirmed to serve it. Open the course and check the image; if it is missing, pick a replacement or upload the file as course media.',
+      };
     case 'l10n-storyline':
       return {
         itemType: 'Storyline in a multi-language course',
@@ -165,6 +171,7 @@ function categoryLocation(kind: ManualFlag['kind']): string {
   if (kind === 'locale-selector' || kind === 'l10n-ref' || kind === 'l10n-storyline') {
     return 'Languages';
   }
+  if (kind === 'builtin-asset') return 'Built-in assets';
   return 'Course-level';
 }
 

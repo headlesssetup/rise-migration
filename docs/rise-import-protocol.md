@@ -282,6 +282,42 @@ images stay as references. The `GET_YURL→S3 PUT` upload is capture-confirmed; 
   no uploaded media (text, divider, html/inline, continue, etc.) are **done** after
   `CREATE_BLOCKS` — nothing else to do.
 
+### Built-in ("library") assets vs account uploads
+
+Rise's own stock media is NOT account media and has nothing to re-upload. It
+appears in two shapes (`core/import/builtin-assets.ts`):
+
+| Shape | Example | Plane behavior |
+|---|---|---|
+| host-**relative** library key | `assets/rise/assets/getting-started-with-rise-360-sample-course/cover.jpg` (sample-course covers, block defaults) | resolved by the runtime against **its own** plane's CDN |
+| **absolute** url | `https://cdn.eu.articulate.com/assets/rise/assets/themes/organic/cover-image/cover-image-0.jpg` (theme covers, thumbnails/posters), `images[.eu].articulate.com/...` | hard-codes a plane |
+
+Rules:
+
+1. **Copy verbatim.** Both shapes are shipped exactly as the source has them —
+   including as course cover/card/logo/lesson-header objects. (Before v0.6.2 a
+   course image with no *uploadable* key was treated as "no image" and silently
+   DROPPED, so sample-course covers were lost — and on a stack the conversion
+   then had no ref to localize, producing a spurious `l10n-ref` flag.)
+2. **Never re-upload one.** There is no account-owned copy to move, and a
+   library asset a region does not serve may be absent for licensing reasons —
+   copying it into that account is an operator's decision, not the migrator's.
+3. **Never rewrite a host on faith.** Whether both planes serve the same library
+   paths is UNVERIFIED (every built-in url captured so far is EU-plane). A blind
+   `cdn.articulate.com` → `cdn.eu.articulate.com` rewrite could turn a working
+   reference into a silent 404.
+4. **Probe, then flag.** Each distinct reference is HEAD-probed on the TARGET
+   plane (public CDN → outside the pacing invariant; deduped by resolved url and
+   cached run-wide). `2xx` = available (no flag); `403/404` = absent; anything
+   else = inconclusive. Absent/inconclusive → the value is still shipped (so the
+   course renders as it did at the source) plus a `builtin-asset` manual flag
+   naming the asset and what to do. With no prober wired, references are flagged
+   as *unchecked* — never silently trusted.
+
+Residency note (US→EU): absolute source-plane urls copied verbatim mean an EU
+course fetching chrome from a US host. That is deliberate for now — correct
+rendering beats an unverified rewrite — and the flags make it visible.
+
 ---
 
 ## 4. Question banks + draw-from-bank cross-ref

@@ -506,6 +506,25 @@ export async function runImport(
     }
   }
 
+  // --- Built-in (library/CDN) assets: verify on the TARGET plane -------------
+  // These are copied verbatim (nothing to re-upload), but the two planes' asset
+  // libraries are not known to be identical — a region may not serve a given
+  // file. Probe once per distinct reference, run-wide, and let the executor flag
+  // whatever it cannot confirm. A public CDN request: outside the pacing
+  // invariant, and `no-store` so a probe never poisons the browser cache.
+  const builtinProbeCache = new Map<
+    string,
+    { value: string; available: boolean | null; probedUrl: string; status?: number }
+  >();
+  const probeBuiltinAsset = async (url: string): Promise<{ ok: boolean; status: number }> => {
+    try {
+      const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+      return { ok: r.ok, status: r.status };
+    } catch {
+      return { ok: false, status: 0 };
+    }
+  };
+
   // --- Multi-language stacks (docs/rise-multilang.md): run-level state ---
   // Account-scoped label sets recreated once per run (source set id → target id).
   const labelSetCache = new Map<string, string>();
@@ -760,6 +779,9 @@ export async function runImport(
       onProgress: (done, total) => emitStatus(i, done, total),
       shouldStop: opts.shouldStop,
       labelSetCache,
+      targetPlane: target?.plane ?? undefined,
+      probeBuiltinAsset,
+      builtinProbeCache,
     });
 
     // Place the new course into its mapped folder (the course was created at

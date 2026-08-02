@@ -76,6 +76,16 @@ export interface ExecutorDeps {
    *  stops issuing further steps and returns cleanly with `stopped: true` and the
    *  partial id-map, so the course stays resumable (no rollback). */
   shouldStop?: () => boolean;
+  /** Target plane — needed to probe built-in (library/CDN) assets on the side the
+   *  course is being built. Omit to skip probing (references are then flagged as
+   *  unverified rather than silently trusted). */
+  targetPlane?: 'us' | 'eu';
+  /** HEAD/GET a public CDN url (direct panel fetch: a byte transfer, outside the
+   *  pacing invariant). Injected so the executor stays I/O-free. */
+  probeBuiltinAsset?: (url: string) => Promise<{ ok: boolean; status: number }>;
+  /** Run-wide probe cache (value → result) so N courses sharing a library asset
+   *  cost one request. */
+  builtinProbeCache?: Map<string, { value: string; available: boolean | null; probedUrl: string; status?: number }>;
 }
 
 export interface ManualFlag {
@@ -91,6 +101,7 @@ export interface ManualFlag {
     // Multi-language stacks (docs/rise-multilang.md):
     | 'locale-selector' // learner language selector must be enabled manually
     | 'l10n-storyline' // stack cell holds a Storyline package → manual per-language attach
+    | 'builtin-asset' // Rise library/CDN asset copied as-is, unverified on the target plane
     | 'l10n-ref'; // a source course-level l10n ref had no target counterpart
   sourceBlockId?: string;
   sourceKey?: string;
