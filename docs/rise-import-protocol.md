@@ -309,6 +309,36 @@ Rules:
 - Everything that addresses a source block — the source index, `blockMeta`, plan
   follow-up steps — is keyed by **`lessonId` + `blockId`** (`blockKey()`).
 
+### Read-back verification (what the import checks against the SERVER)
+
+Three read-backs per course, all against real `GET_COURSE` responses:
+
+1. **Creation handshake** — immediately after `POST /manage/api/content`, before
+   any write (the creation invariant; up to 3 paced attempts).
+2. **Post-conversion** (stacks) — confirms the course is l10n-ified and learns
+   the target's own course-level refs.
+3. **End-of-course parity** (`verifyParity` + `findForeignMediaKeys` unfiltered
+   + `verifyL10nParity` on stacks):
+   - **course fields** (v0.6.4): a canonicalized diff of an explicit list —
+     `title`, `description`, `theme`, the four course image objects,
+     `blockBackgroundImage`, `overlayNavigationImage`, and the settings scalars
+     (`sidebarMode`, `navigationMode`, `showLessonCount`, `showNavigationButtons`,
+     `allowSearch`, `allowCopy`, `animateBlockEntrance`, `markComplete`,
+     `enableVideoPlaybackSpeed`, `color`, `aiTutorConfig`). Remapped media keys
+     and typeface/l10n ids tokenize equal; empty shapes (`null`/`''`/`{}`) are
+     equivalent; a field holding a flagged key reports as *expected*. Kind:
+     `course-field-changed`, path `course.<field>`.
+     ⚠ KNOWN GAP made visible by this check: the importer does not yet MIGRATE
+     the settings scalars — a source with non-default settings (e.g.
+     `sidebarMode: "closed"`, `markComplete: true`) reports honest divergences.
+     The write is small (`UPDATE_COURSE_DEBOUNCE {id, settings:{…}}` /
+     `UPDATE_COURSE` field writes — the settings envelope is captured in
+     `capture1aug.mitm`, `aiTutorEnabled` toggle) — implement when prioritized.
+     `labelSetId` is deliberately NOT compared (documented label-set gap; noise).
+   - lessons/blocks, media keys, l10n cells — as before.
+   Parity divergences are REPORTED (log + report md/json), they do not change the
+   course status; foreign media keys and l10n-cell failures DO (→ `partial`).
+
 ### Built-in ("library") assets vs account uploads
 
 Rise's own stock media is NOT account media and has nothing to re-upload. It

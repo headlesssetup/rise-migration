@@ -281,3 +281,96 @@ describe('verifyL10nParity (multi-language stacks)', () => {
     expect(r.cells).toEqual({ source: 0, target: 0, compared: 0 });
   });
 });
+
+describe('verifyParity — course-field read-back (theme, images, settings)', () => {
+  const base = (over: Record<string, unknown> = {}): GetCourseDocument =>
+    ({
+      course: {
+        id: 'X',
+        title: 'My Course',
+        description: '<p>About</p>',
+        theme: {
+          themeId: 'classic',
+          colorAccent: '#ff631e',
+          navigationType: 'SIDEBAR',
+          uiTypefaceId: 't1Nkx9Ab7dQb4z_F5v8EgdA0Q11M3_If',
+        },
+        coverImage: { media: { image: { key: 'rise/courses/X/cover.jpg', type: 'image' } } },
+        cardImage: null,
+        media: {},
+        sidebarMode: 'open',
+        markComplete: false,
+        lessons: [],
+        ...over,
+      },
+      lessons: [],
+    }) as never;
+
+  it('passes when fields match modulo remapped ids/media and empty-shape noise', () => {
+    const target = base({
+      id: 'Y',
+      // remapped media key + a DIFFERENT (target) typeface id + {} vs null
+      coverImage: { media: { image: { key: 'rise/courses/Y/new.jpg', type: 'image' } } },
+      theme: {
+        themeId: 'classic',
+        colorAccent: '#ff631e',
+        navigationType: 'SIDEBAR',
+        uiTypefaceId: 'Zt9Qx1Ab7dQb4z_F5v8EgdA0Q11M3_Zz',
+      },
+      cardImage: {},
+      media: null,
+    });
+    const r = verifyParity(base(), target);
+    expect(r.issues).toEqual([]);
+  });
+
+  it('catches a dropped cover image (the built-in-cover bug class)', () => {
+    const target = base({ coverImage: {} });
+    const r = verifyParity(base(), target);
+    expect(r.issues).toEqual([
+      expect.objectContaining({ kind: 'course-field-changed', path: 'course.coverImage' }),
+    ]);
+  });
+
+  it('catches a leftover !importing: title', () => {
+    const target = base({ title: '!importing: My Course' });
+    const r = verifyParity(base(), target);
+    expect(r.issues.map((i) => i.path)).toContain('course.title');
+  });
+
+  it('reports unmigrated settings honestly (sidebarMode, markComplete, theme)', () => {
+    const source = base({
+      sidebarMode: 'closed',
+      markComplete: true,
+      theme: { themeId: 'classic', colorAccent: '#123456' },
+    });
+    const target = base(); // fresh-course defaults
+    const r = verifyParity(source, target);
+    const paths = r.issues.map((i) => i.path).sort();
+    expect(paths).toEqual(['course.markComplete', 'course.sidebarMode', 'course.theme']);
+  });
+
+  it('stack refs on both sides canonicalize equal (different l10nIds)', () => {
+    const source = base({
+      title: { l10nId: 'aaaa1111-0000-4000-8000-000000000001' },
+      description: { l10nId: 'aaaa1111-0000-4000-8000-000000000002' },
+    });
+    const target = base({
+      title: { l10nId: 'bbbb2222-0000-4000-8000-00000000000a' },
+      description: { l10nId: 'bbbb2222-0000-4000-8000-00000000000b' },
+    });
+    expect(verifyParity(source, target).issues).toEqual([]);
+  });
+
+  it('marks a divergence EXPECTED when the field holds a flagged key', () => {
+    const source = base();
+    const target = base({ coverImage: {} });
+    const r = verifyParity(source, target, [
+      { kind: 'orphan-media', sourceKey: 'rise/courses/X/cover.jpg', detail: 'deleted at source' },
+    ]);
+    expect(r.issues).toEqual([]);
+    expect(r.expectedDivergences).toEqual([
+      expect.objectContaining({ kind: 'course-field-changed', expected: true }),
+    ]);
+  });
+});

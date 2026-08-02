@@ -96,7 +96,8 @@ export type ParityKind =
   | 'extra-block'
   | 'block-type-changed'
   | 'content-changed'
-  | 'media-missing';
+  | 'media-missing'
+  | 'course-field-changed';
 
 export interface ParityIssue {
   kind: ParityKind;
@@ -126,6 +127,89 @@ function orderedLessons(doc: GetCourseDocument): Lesson[] {
   const ls = Array.isArray(doc.lessons) ? doc.lessons : [];
   const orderField = (doc.course as Record<string, unknown> | undefined)?.lessons;
   return orderLessons(ls, orderField);
+}
+
+/**
+ * Course-level fields the read-back verifies, one canonicalized diff each.
+ * Everything the importer WRITES is here (title, description, theme, the four
+ * image objects) plus the course settings scalars — which the importer does NOT
+ * migrate yet, so a source with non-default settings reports honest
+ * `course-field-changed` divergences instead of passing silently.
+ *
+ * Deliberately absent:
+ *  - `labelSetId` — documented gap (monolingual label sets unmigrated); pure noise.
+ *  - `l10n.showLocaleSelector` — already a manual flag (`locale-selector`).
+ *  - `exportSettings`, `fonts`, `typefaces`, `lessons`, ids/timestamps — target
+ *    lifecycle / covered elsewhere (typeface ids canonicalize to #id anyway).
+ */
+const COURSE_FIELDS = [
+  'title',
+  'description',
+  'theme',
+  'coverImage',
+  'cardImage',
+  'media', // the cover-page logo
+  'lessonHeaderImage',
+  'blockBackgroundImage',
+  'overlayNavigationImage',
+  // Settings scalars (not yet migrated — divergences here are real):
+  'sidebarMode',
+  'navigationMode',
+  'showLessonCount',
+  'showNavigationButtons',
+  'allowSearch',
+  'allowCopy',
+  'animateBlockEntrance',
+  'markComplete',
+  'enableVideoPlaybackSpeed',
+  'color',
+  'aiTutorConfig',
+] as const;
+
+/** Empty-equivalence for course fields: a fresh course carries `{}`/null/'' in
+ *  slots the source may hold as any OTHER of those — none is a divergence. An
+ *  object/array is empty when every leaf is. */
+function isDeepEmpty(v: unknown): boolean {
+  if (v === null || v === undefined || v === '') return true;
+  if (Array.isArray(v)) return v.every(isDeepEmpty);
+  if (typeof v === 'object') {
+    return Object.values(v as Record<string, unknown>).every(isDeepEmpty);
+  }
+  return false;
+}
+
+/** The course-field pass of verifyParity (see COURSE_FIELDS). */
+function compareCourseFields(
+  source: GetCourseDocument,
+  target: GetCourseDocument,
+  flaggedKeys: string[],
+  issues: ParityIssue[],
+  expected: ParityIssue[],
+): void {
+  const sc = (source.course ?? {}) as Record<string, unknown>;
+  const tc = (target.course ?? {}) as Record<string, unknown>;
+  for (const f of COURSE_FIELDS) {
+    const sv = sc[f];
+    const tv = tc[f];
+    if (isDeepEmpty(sv) && isDeepEmpty(tv)) continue;
+    const a = canonicalize(sv);
+    const b = canonicalize(tv);
+    if (JSON.stringify(a) === JSON.stringify(b)) continue;
+    const raw = JSON.stringify(sv ?? null);
+    const isExpected = flaggedKeys.some((k) => raw.includes(k));
+    const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
+    collectLeafDiffs(a, b, f, diffs);
+    const detailPaths = [...diffs.changed, ...diffs.mediaMissing];
+    (isExpected ? expected : issues).push({
+      kind: 'course-field-changed',
+      path: `course.${f}`,
+      detail:
+        detailPaths.length > 0
+          ? `${detailPaths.length} field(s) differ: ${detailPaths.slice(0, 6).join(', ')}${detailPaths.length > 6 ? ', …' : ''}`
+          : `source ${JSON.stringify(a)?.slice(0, 80)} → target ${JSON.stringify(b)?.slice(0, 80)}`,
+      ...(isExpected ? { expected: true } : {}),
+    });
+  }
 }
 
 function blockKey(b: Block): string {
@@ -196,6 +280,10 @@ export function verifyParity(
     .map((f) => f.sourceKey)
     .filter((k): k is string => !!k);
 
+  // Course-level fields first (theme, images, settings, title/description) —
+  // the lesson/block walk below never sees them.
+  compareCourseFields(source, target, flaggedKeys, issues, expected);
+
   let blocksSource = 0;
   let blocksTarget = 0;
   let compared = 0;
@@ -204,7 +292,7 @@ export function verifyParity(
   for (let i = 0; i < nL; i++) {
     const s = sl[i];
     const t = tl[i];
-    const label = `lessons[${i}]${s?.title ? ` (${s.title})` : ''}`;
+    const label = `lessons[${i}]${typeof s?.title === 'string' && s.title ? ` (${s.title})` : ''}`;
     if (s && !t) {
       issues.push({ kind: 'missing-lesson', path: label, detail: 'lesson absent on target' });
       blocksSource += (s.items?.length ?? 0);

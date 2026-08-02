@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **579 Vitest tests**, `compile` / `test` green.
+> **588 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -70,6 +70,20 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
 - Other known gaps (rise-multilang.md §7): `TOGGLE_LOCALE_SELECTOR` payload
   (manual flag), glossaries out of scope, monolingual course-level label sets
   still unmigrated.
+
+### Course-field read-back (v0.6.4)
+
+`verifyParity` now also diffs course-level fields against the server read-back:
+title/description (catches a leftover `!importing:` marker), theme (typeface ids
+tokenized), the four course image objects (catches a dropped cover — the exact
+class of the v0.6.2 built-in-cover bug), `blockBackgroundImage`/
+`overlayNavigationImage`, and the settings scalars. NEW KNOWN GAP made visible:
+course settings (`sidebarMode`, `navigationMode`, `markComplete`, `allowSearch`,
+`color`, `aiTutorConfig`…) are not migrated at all — non-default sources now
+report honest `course-field-changed` divergences. The write to close it is small
+and its envelope is captured (`UPDATE_COURSE_DEBOUNCE {id, settings:{…}}`,
+capture1aug). Stack lesson labels in parity reports no longer print
+`[object Object]`.
 
 ### Duplicate client ids across lessons — FIXED (v0.6.3)
 
