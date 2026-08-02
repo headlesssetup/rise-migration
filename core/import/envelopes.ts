@@ -522,6 +522,15 @@ export function createTranslations(
 /** GET /manage/api/content/{id}/translations — the stack's state: stackItems[]
  *  with per-language status (queued→preparing→translating→applying→finalizing→
  *  complete). 204/empty body = not a stack. Used to poll the conversion. */
+/** GET one question bank (questions inline) — the bank import's read-back. */
+export function getQuestionBank(bankId: string): WriteSpec {
+  return {
+    url: `/api/rise-authoring/question_banks/${encodeURIComponent(bankId)}`,
+    method: 'GET',
+    label: `GET /api/rise-authoring/question_banks/${bankId}`,
+  };
+}
+
 export function getTranslations(courseId: string): WriteSpec {
   return {
     url: `/manage/api/content/${encodeURIComponent(courseId)}/translations`,

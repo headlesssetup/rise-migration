@@ -20,6 +20,7 @@ import {
   type Relay,
   type RelayResponse,
   type WriteSpec,
+  verifyFolderMap,
 } from '@/core/import';
 import { pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
@@ -417,6 +418,39 @@ export async function setupFolders(
     kind: 'log',
     message: `Folders: ${created} created, ${reused} reused (${map.size} mapped).`,
   });
+
+  // Read-back (live only): re-list the target tree and confirm every mapped
+  // folder actually exists under its expected name. The POST's echoed id alone
+  // proved acceptance, not persistence.
+  if (!dryRun && created + reused > 0) {
+    await pacedDelay(pacing);
+    const check = await relay(fetchFolders());
+    if (!check.ok) {
+      onEvent({
+        kind: 'log',
+        message: `WARN folders read-back skipped: could not re-list target folders (HTTP ${check.status})`,
+      });
+    } else {
+      const listing = [...parseFolders(safeJson(check.text)).values()].map((f) => ({
+        id: f.id,
+        name: f.name,
+        parentFolderId: f.parentFolderId,
+      }));
+      const srcRows = [...source.values()].map((f) => ({
+        id: f.id,
+        name: f.name,
+        parentFolderId: f.parentFolderId,
+      }));
+      const rb = verifyFolderMap(map, srcRows, listing);
+      if (rb.ok) {
+        onEvent({ kind: 'log', message: `Folders read-back OK — ${map.size} mapping(s) verified.` });
+      } else {
+        for (const i of rb.issues) {
+          onEvent({ kind: 'log', message: `⚠ folders read-back: ${i.path} — ${i.detail}` });
+        }
+      }
+    }
+  }
   return map;
 }
 

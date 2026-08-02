@@ -163,7 +163,7 @@ describe('the run pin (C4) on the shared helpers', () => {
     );
     expect(map.get('sf1')).toBe('newF1');
     const reqs = sent();
-    expect(reqs).toHaveLength(2);
+    expect(reqs).toHaveLength(3); // folder read + create + read-back re-list
     for (const r of reqs) expect(r.pin).toEqual(PIN);
     // the create is the write that used to be able to land in the SOURCE account
     const create = reqs.find((r) => r.type === 'RELAY_WRITE' && r.spec.method === 'POST');
@@ -175,7 +175,7 @@ describe('the run pin (C4) on the shared helpers', () => {
     mockFolderBackground();
     const { onEvent } = sink();
     await setupFolders(storageWithFolders, { userId: 'u1' }, false, noPacing, onEvent);
-    expect(sent()).toHaveLength(2);
+    expect(sent()).toHaveLength(3); // read + create + read-back re-list
     for (const r of sent()) expect(r.pin).toBeUndefined();
   });
 

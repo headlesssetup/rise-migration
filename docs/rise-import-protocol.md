@@ -336,8 +336,34 @@ Three read-backs per course, all against real `GET_COURSE` responses:
      `capture1aug.mitm`, `aiTutorEnabled` toggle) — implement when prioritized.
      `labelSetId` is deliberately NOT compared (documented label-set gap; noise).
    - lessons/blocks, media keys, l10n cells — as before.
+   - **typeface IDENTITY** (v0.6.5): parity tokenizes ids, so it proves a font is
+     bound but not WHICH — the three binding slots are additionally resolved to
+     FONT NAMES on both sides (`course.typefaces` maps id → name in every
+     GET_COURSE) and compared; divergences downgrade to *expected* when the
+     import raised `typeface` flags.
+   - **per-language label-set bindings** (stacks, v0.6.5): every source locale
+     with a custom `labelSetId` must be bound on the target to the set this run
+     recreated for it (`l10n.locales[].labelSetId` vs the run's labelSetCache) —
+     kind `labelset-binding`, fails the language read-back.
+   - **storyline bundles** (v0.6.5): for every attached package the orchestrator
+     HEAD-probes `{contentPrefix}/story.html` on the target plane's usercontent
+     host (public read, outside pacing) — `copy_review_item`'s 200 proved only
+     that the copy was accepted.
    Parity divergences are REPORTED (log + report md/json), they do not change the
    course status; foreign media keys and l10n-cell failures DO (→ `partial`).
+
+Non-course surfaces (v0.6.5, `core/import/readback.ts`):
+
+- **Question banks**: after the PUT, the bank is GET back
+  (`/api/rise-authoring/question_banks/{id}`) and compared to what was sent —
+  title, question count, and per-question canonicalized content (ids tokenize).
+  A parity failure fails THAT BANK (it is not added to the bound map, so
+  draw-from-bank blocks fall back to safe unbound placeholders).
+- **Folders**: after creation the target tree is re-listed and every mapped
+  folder verified to exist under its expected name (pseudo roots `all`/`private`/
+  `shared` skipped). Failures WARN — folders are placement infrastructure, they
+  never abort the run.
+- Still response-trusted: the per-course folder MOVE (best-effort, warned).
 
 ### Built-in ("library") assets vs account uploads
 

@@ -128,6 +128,10 @@ export interface ExecResult {
   /** Storyline blocks attached from staged Review-360 packages (copy_review_item
    *  + media patch), as opposed to flagged for manual handling. */
   storylineAttached?: number;
+  /** contentPrefix of every attached bundle (mono + per-language) — the
+   *  orchestrator HEAD-probes `{prefix}/story.html` on usercontent (public
+   *  read) to confirm the copied bundle actually exists. */
+  storylinePrefixes?: string[];
   /** The resumable old→new id map (job log). */
   idMap: Record<string, string>;
   /** New course id once the shell is created. */

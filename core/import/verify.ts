@@ -413,7 +413,8 @@ export type L10nParityKind =
   | 'extra-locale'
   | 'missing-cell'
   | 'cell-changed'
-  | 'extra-cell';
+  | 'extra-cell'
+  | 'labelset-binding';
 
 export interface L10nParityIssue {
   kind: L10nParityKind;

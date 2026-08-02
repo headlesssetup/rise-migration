@@ -7,8 +7,10 @@ import {
   checkSourceNotTarget,
   IdMap,
   remapIds,
+  getQuestionBank,
   postBank,
   putBank,
+  verifyBankParity,
   type AccountIdentity,
   type SourceBank,
 } from '@/core/import';
@@ -192,6 +194,26 @@ export async function importBanks(
           }),
         );
         if (!presp.ok) throw new Error(`write questions failed (HTTP ${presp.status})`);
+
+        // Read-back: GET the bank we just wrote and compare it to the archive
+        // (title + questions, canonicalized). The PUT's 200 alone proved only
+        // that the request was accepted — not that the questions landed.
+        await pacedDelay(pacing);
+        const rb = await relay(getQuestionBank(newBankId));
+        if (!rb.ok) throw new Error(`read-back failed (HTTP ${rb.status})`);
+        const rbBank = safeJson(rb.text) as Record<string, unknown> | null;
+        const parity = verifyBankParity(
+          { id: bankId, title, questions: questions as unknown[] },
+          rbBank?.question_bank ?? rbBank,
+        );
+        if (!parity.ok) {
+          throw new Error(
+            `read-back parity failed: ${parity.issues
+              .map((i) => `${i.path}: ${i.detail}`)
+              .join('; ')}`,
+          );
+        }
+        onEvent({ kind: 'log', message: `  read-back OK (${qCount} question(s) verified)` });
       }
       bound.set(bankId, { newBankId, questionIds });
       outcomes.push({ sourceBankId: bankId, title, newBankId, questionCount: qCount, ok: true });

@@ -52,6 +52,7 @@ import {
   type ParityReport,
   type L10nParityReport,
   type RunCsvCourse,
+  verifyTypefaceBindings,
 } from '@/core/import';
 import { collectAssetKeys, isOrphanStatus } from '@/core/assets';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
@@ -857,6 +858,64 @@ export async function runImport(
           if (newBankId) targetOwners.add(newBankId);
         }
         readBackForeign = findForeignMediaKeys(targetDoc, targetOwners);
+
+        // Typeface IDENTITY: parity tokenizes ids, so it proves a font is bound
+        // but not WHICH — resolve the three binding slots to names on both
+        // sides (course.typefaces maps id → name in every GET_COURSE).
+        {
+          const hadTypefaceFlag = res.flags.some((f) => f.kind === 'typeface');
+          const tf = verifyTypefaceBindings(course, targetDoc, hadTypefaceFlag);
+          for (const i of tf.issues) {
+            parity.issues.push({ kind: 'course-field-changed', path: i.path, detail: i.detail });
+            parity.ok = false;
+          }
+          for (const i of tf.expected) {
+            parity.expectedDivergences.push({
+              kind: 'course-field-changed',
+              path: i.path,
+              detail: i.detail,
+              expected: true,
+            });
+          }
+          if (tf.issues.length) {
+            onEvent({
+              kind: 'log',
+              message: `${pfx} ⚠ typeface read-back: ${tf.issues.map((i) => `${i.path} (${i.detail})`).join('; ')}`,
+            });
+          }
+        }
+
+        // Storyline bundles: copy_review_item's 200 proved the copy request was
+        // accepted — HEAD the copied bundle's story.html on usercontent (public
+        // read, outside pacing) to confirm it actually exists and serves.
+        for (const prefix of res.storylinePrefixes ?? []) {
+          const base = target?.plane === 'eu'
+            ? 'https://articulateusercontent.eu/'
+            : 'https://articulateusercontent.com/';
+          let ok = false;
+          let status = 0;
+          try {
+            const r = await fetch(`${base}${prefix}/story.html`, { method: 'HEAD', cache: 'no-store' });
+            ok = r.ok;
+            status = r.status;
+          } catch {
+            /* network error → unverified */
+          }
+          if (ok) {
+            onEvent({ kind: 'log', message: `${pfx} storyline read-back OK — ${prefix}/story.html` });
+          } else {
+            parity.issues.push({
+              kind: 'media-missing',
+              path: `storyline ${prefix}/story.html`,
+              detail: `attached bundle not readable on usercontent (HTTP ${status})`,
+            });
+            parity.ok = false;
+            onEvent({
+              kind: 'log',
+              message: `${pfx} ⚠ storyline read-back: ${prefix}/story.html not readable (HTTP ${status})`,
+            });
+          }
+        }
         if (readBackForeign.length) {
           report.ok = false;
           report.survivingSourceKeys = [
@@ -878,6 +937,26 @@ export async function runImport(
             storylineCells(course).map((c) => `${c.l10nId} ${c.locale}`),
           );
           l10nParity = verifyL10nParity(course, targetDoc, { toleratedMissing });
+          // Per-language label-set bindings: every source locale with a CUSTOM
+          // set must be bound on the target to the set this run recreated for it.
+          for (const row of stackLocales(course)) {
+            const code = String(row.locale ?? '');
+            const srcSet = typeof row.labelSetId === 'string' ? row.labelSetId : null;
+            if (!code || !srcSet || code === defaultLocaleOf(course)) continue;
+            const expectedSet = labelSetCache.get(srcSet);
+            const tgtRow = stackLocales(targetDoc).find((r) => r.locale === code);
+            const actual = typeof tgtRow?.labelSetId === 'string' ? tgtRow.labelSetId : null;
+            if (!actual || (expectedSet && actual !== expectedSet)) {
+              l10nParity.issues.push({
+                kind: 'labelset-binding',
+                locale: code,
+                detail: actual
+                  ? `bound to ${actual}, expected ${expectedSet}`
+                  : 'custom label set not bound on the target',
+              });
+              l10nParity.ok = false;
+            }
+          }
           onEvent({
             kind: 'log',
             message: l10nParity.ok

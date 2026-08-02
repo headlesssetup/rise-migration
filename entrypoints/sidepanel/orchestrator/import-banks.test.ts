@@ -56,8 +56,26 @@ function mockBackground(pinOk: boolean): void {
           : { type: 'RISE_TAB_PIN', result: { ok: false, error: 'No open Rise tab' } };
       case 'REAUTH':
         return { type: 'REAUTH_RESULT', advanced: true, valid: true, identity: null };
-      case 'RELAY_WRITE':
+      case 'RELAY_WRITE': {
+        // The bank read-back GET must echo a bank matching what was PUT
+        // (canonicalized ids, so the source shape suffices).
+        const spec = (req as { spec?: { method?: string; url?: string } }).spec;
+        if (spec?.method === 'GET' && spec.url?.includes('/question_banks/')) {
+          return {
+            type: 'WRITE_RESULT',
+            result: {
+              ok: true,
+              status: 200,
+              text: JSON.stringify({
+                id: 'nb1',
+                title: 'Anatomy',
+                questions: [{ id: 'qX1', type: 'multipleChoice' }],
+              }),
+            },
+          };
+        }
         return { type: 'WRITE_RESULT', result: { ok: true, status: 200, text: '{"id":"nb1"}' } };
+      }
       default:
         throw new Error(`unexpected ${req.type}`);
     }
@@ -82,7 +100,7 @@ describe('importBanks — run tab pin (C4)', () => {
     expect(sent().filter((r) => r.type === 'PIN_RISE_TAB')).toHaveLength(1);
     // and every later message of the run names that tab
     for (const r of sent().slice(1)) expect(r.pin).toEqual(PIN);
-    expect(writes()).toHaveLength(2); // POST bank + PUT questions
+    expect(writes()).toHaveLength(3); // POST bank + PUT questions + read-back GET
   });
 
   it('BLOCKS a live run (writing nothing) when the tab cannot be pinned', async () => {

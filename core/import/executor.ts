@@ -817,6 +817,7 @@ export async function executePlan(
             step.kind,
           );
           result.storylineAttached = (result.storylineAttached ?? 0) + 1;
+          (result.storylinePrefixes ??= []).push(contentPrefix);
           log(`${pfx()} ✓ attached storyline → ${contentPrefix}`);
           break;
         }
@@ -1116,6 +1117,7 @@ export async function executePlan(
             step.kind,
           );
           result.storylineAttached = (result.storylineAttached ?? 0) + 1;
+          (result.storylinePrefixes ??= []).push(contentPrefix);
           log(`${pfx()} ✓ attached storyline [${step.locale}] → ${contentPrefix}`);
           break;
         }

@@ -9,7 +9,7 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
 > changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **590 Vitest tests**, `compile` / `test` green.
+> **599 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 
@@ -73,16 +73,19 @@ with locale→default→any fallback, cell/batch machinery); stack branch in
 
 ### Read-back coverage audit (v0.6.4)
 
-Per-surface truth: COURSES are verified against the server at three stages
-(creation handshake; post-conversion GET_COURSE on stacks; end-of-course parity —
-blocks + course fields + media keys + l10n cells + pending counts). Everything
-else is response-trusted with NO independent read-back: folders (created tree
-never re-listed; course→folder move unverified), question banks (no GET-back of
-questions after PUT), typefaces (binding verified, the FONT ids tokenize — a
-FETCH_TYPEFACES name compare would close it), per-language label-set bindings
-(`l10n.locales[].labelSetId` present in the read-back but unchecked), storyline
-attach (media slot verified as filled, not which bundle). Candidate next
-read-backs, by value: bank GET-back ≻ label-set binding ≻ typeface names.
+Per-surface truth (CLOSED in v0.6.5, `core/import/readback.ts`): COURSES are
+verified at three stages (creation handshake; post-conversion GET_COURSE on
+stacks; end-of-course parity — blocks + course fields + media keys + l10n cells
++ pending counts), now PLUS typeface identity by FONT NAME (ids tokenize, names
+must survive; downgraded to expected under a typeface flag), per-language
+label-set bindings (target `l10n.locales[].labelSetId` vs the run's recreated
+sets — fails the language read-back), and a HEAD probe of every attached
+storyline bundle's `story.html` on usercontent. QUESTION BANKS are GET back
+after the PUT and compared (title + canonicalized questions; a failure fails
+that bank and keeps it out of the bound map, so draw-from-bank stays safely
+unbound). FOLDERS are re-listed after creation and every mapping verified by
+name (WARN-only — placement infrastructure). Still response-trusted: the
+per-course folder move (best-effort, warned).
 FIXED in the same pass: `verifyL10nParity` treated the deliberately-not-copied
 (flagged) storyline cells as failures — a stack with an unattached storyline
 would have gone `partial` on its language read-back despite the flag announcing
