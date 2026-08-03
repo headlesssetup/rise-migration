@@ -935,7 +935,16 @@ export async function runImport(
         // accepted — HEAD the copied bundle's story.html on usercontent (public
         // read, outside pacing) to confirm it actually exists and serves.
         for (const prefix of res.storylinePrefixes ?? []) {
-          const base = target?.plane === 'eu'
+          // Plane-pinned probe only: with no known target plane, guessing a
+          // host would report a false "not readable" against the wrong CDN.
+          if (!target?.plane) {
+            onEvent({
+              kind: 'log',
+              message: `${pfx} ⚠ storyline read-back skipped for ${prefix}/story.html — target plane unknown, cannot pick a usercontent host`,
+            });
+            continue;
+          }
+          const base = target.plane === 'eu'
             ? 'https://articulateusercontent.eu/'
             : 'https://articulateusercontent.com/';
           let ok = false;
@@ -1097,6 +1106,21 @@ export async function runImport(
                   'differs, and it cannot be set via the API. Do NOT click "Update Translations" ' +
                   '(it would AI-translate them).' +
                   (mismatch ? ' ⚠ The count does NOT match the archive — investigate.' : ''),
+              });
+            }
+            // Symmetric check: the archive PREDICTS pending cells but Rise
+            // shows none for that locale — as anomalous as the reverse (e.g.
+            // an AI run fired on the target). Warn, don't stay silent.
+            const silentLocales = Object.entries(expected)
+              .filter(([c, v]) => v.total > 0 && !(c in l10nPending))
+              .map(([c, v]) => `${c}: expected ${v.total}, Rise shows 0`);
+            if (silentLocales.length) {
+              onEvent({
+                kind: 'log',
+                message:
+                  `${pfx} ⚠ Pending-count anomaly — ${silentLocales.join(', ')}. ` +
+                  'The archive predicts fallback cells for these languages but Rise reports no ' +
+                  'pending changes; a translation run may have fired on the target — investigate.',
               });
             }
           }
