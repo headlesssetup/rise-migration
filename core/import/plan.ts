@@ -873,6 +873,16 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       const uploadable: string[] = [];
       for (const ak of keys) {
         const entry = assetByKey.get(ak.key);
+        // Key already handled by an earlier sweep (the stack's table-media
+        // pass, or course images): no second upload step — but the block still
+        // needs its media PATCH, so the key stays in `uploadable` (the
+        // executor's keyMap already carries the remap by then).
+        const problematic =
+          entry?.orphaned || (entry && !entry.file) || exceedsUploadLimit(entry?.size);
+        if (!problematic && handledKeys.has(ak.key)) {
+          uploadable.push(ak.key);
+          continue;
+        }
         if (entry?.orphaned || (entry && !entry.file)) {
           handledKeys.add(ak.key);
           steps.push({
@@ -1137,6 +1147,12 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         const t = doc.l10n?.translations?.[defLocale]?.[lesson.title.l10nId];
         if (t !== undefined) inlineSkip.add(cellKey(lesson.title.l10nId, defLocale));
       }
+      // Items ride inline ONLY when planLessonBody actually emits create-blocks
+      // (it returns early for sections and empty lessons) — skipping their
+      // default cells here without an inline write would leave them unwritten,
+      // inverting the pending rule for every cell of that lesson.
+      const lType = typeof lesson.type === 'string' ? lesson.type : 'blocks';
+      if (lType === 'section' || (lesson.items ?? []).length === 0) return;
       for (const ch of inlineTranslationChanges(lesson.items ?? [], doc)) {
         inlineSkip.add(cellKey(ch.l10nId, defLocale));
       }

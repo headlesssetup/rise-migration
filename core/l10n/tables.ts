@@ -353,9 +353,16 @@ export function defaultOnlyCells(doc: GetCourseDocument): Record<
 
 /**
  * Target-side cells to DELETE after the import: l10nIds present in the target
- * tables that are neither source ids nor mapped target ids (`keep`). These are
- * the placeholder-era cells the AI conversion created. `delete` removes the id
+ * tables that are neither source ids nor mapped target ids (`keep`) NOR
+ * referenced anywhere in the target document itself. These are the
+ * placeholder-era cells the AI conversion created. `delete` removes the id
  * across ALL locales — restricted to provably-ours ids by construction.
+ *
+ * The referenced-by-target guard matters for the no-cover case: every new
+ * shell gets a random built-in cover, and if the SOURCE has no cover the
+ * conversion l10n-ifies the target's own cover into a cell that maps to
+ * nothing in the source. Deleting it would leave `course.coverImage` pointing
+ * at a dead l10nId — a cell the doc references is never junk.
  */
 export function junkCellIds(
   sourceDoc: GetCourseDocument,
@@ -367,10 +374,25 @@ export function junkCellIds(
     for (const id of Object.keys(table)) sourceIds.add(id);
   }
   const keepSet = new Set(keep);
+  const referenced = new Set<string>();
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return;
+    if (isL10nRef(node)) {
+      referenced.add(node.l10nId);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    for (const v of Object.values(node as Record<string, unknown>)) walk(v);
+  };
+  walk(targetDoc.course ?? {});
+  walk(targetDoc.lessons ?? []);
   const junk = new Set<string>();
   for (const table of Object.values(targetDoc.l10n?.translations ?? {})) {
     for (const id of Object.keys(table)) {
-      if (!sourceIds.has(id) && !keepSet.has(id)) junk.add(id);
+      if (!sourceIds.has(id) && !keepSet.has(id) && !referenced.has(id)) junk.add(id);
     }
   }
   return [...junk];

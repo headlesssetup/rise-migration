@@ -248,6 +248,28 @@ describe('junkCellIds', () => {
     };
     expect(junkCellIds(doc, target, ['tttt-title']).sort()).toEqual(['junk-1', 'junk-2']);
   });
+
+  it('never deletes a cell the target document still references (dangling-cover guard)', () => {
+    // Source has no cover → the target's random built-in cover was l10n-ified
+    // by the conversion into a cell that maps to nothing in the source.
+    // Deleting it would leave course.coverImage pointing at a dead l10nId.
+    const target: GetCourseDocument = {
+      course: {
+        id: 'T',
+        coverImage: { media: { l10nId: 'tgt-own-cover' } },
+      },
+      lessons: [],
+      l10n: {
+        translations: {
+          'en-us': {
+            'tgt-own-cover': { image: { key: 'assets/rise/builtin.jpg' } },
+            'junk-1': '!importing: x',
+          },
+        },
+      },
+    };
+    expect(junkCellIds(doc, target, [])).toEqual(['junk-1']);
+  });
 });
 
 describe('storyline cells (docs/rise-multilang.md §4.3b)', () => {

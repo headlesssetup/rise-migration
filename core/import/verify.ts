@@ -208,6 +208,11 @@ function compareCourseFields(
 ): void {
   const sc = (source.course ?? {}) as Record<string, unknown>;
   const tc = (target.course ?? {}) as Record<string, unknown>;
+  // The four course-image slots: every new shell gets a RANDOM built-in cover
+  // (capture-confirmed), and no captured write clears an image slot — so when
+  // the SOURCE has no image there, the target keeping Rise's default is
+  // unavoidable and expected, not a fidelity failure.
+  const IMAGE_FIELDS = new Set(['coverImage', 'cardImage', 'media', 'lessonHeaderImage']);
   for (const f of COURSE_FIELDS) {
     const sv = sc[f];
     const tv = tc[f];
@@ -217,7 +222,9 @@ function compareCourseFields(
     if (JSON.stringify(a) === JSON.stringify(b)) continue;
     const raw = JSON.stringify(sv ?? null);
     const isSettingsGap = COURSE_SETTINGS_FIELDS.has(f);
-    const isExpected = isSettingsGap || flaggedKeys.some((k) => raw.includes(k));
+    const isDefaultImage = IMAGE_FIELDS.has(f) && isDeepEmpty(sv) && !isDeepEmpty(tv);
+    const isExpected =
+      isSettingsGap || isDefaultImage || flaggedKeys.some((k) => raw.includes(k));
     const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
     collectLeafDiffs(a, b, f, diffs);
     const detailPaths = [...diffs.changed, ...diffs.mediaMissing];
@@ -230,7 +237,9 @@ function compareCourseFields(
       path: `course.${f}`,
       detail: isSettingsGap
         ? `${detail} (course settings are not migrated yet — known gap; set manually)`
-        : detail,
+        : isDefaultImage
+          ? `${detail} (source has no ${f}; the target keeps Rise's random default — no captured write clears an image slot)`
+          : detail,
       ...(isExpected ? { expected: true } : {}),
     });
   }
