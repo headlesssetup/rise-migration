@@ -4,7 +4,7 @@
 // media in the translation tables + a block-embedded attachment.
 import { describe, it, expect } from 'vitest';
 import { buildPlan, type PlanStep } from './plan';
-import { executePlan } from './executor';
+import { executePlan, blockKey } from './executor';
 import {
   counterMint,
   mockRelay,
@@ -325,7 +325,9 @@ describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => 
 
   it('flags only the languages with no staged package', () => {
     const input = stackWithPackages();
-    input.storylineAttachL10n!.delete('cblockSL00000000000000000|ru');
+    input.storylineAttachL10n!.delete(
+      `${blockKey('lessonB-0000000000000000000000', 'cblockSL00000000000000000')}|ru`,
+    );
     const steps = buildPlan(input);
     expect(
       steps.filter((s) => s.kind === 'attach-storyline-l10n').map((s) => (s as { locale: string }).locale),

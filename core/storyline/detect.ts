@@ -159,15 +159,20 @@ export function findStorylineBlocks(doc: unknown): StorylineBlockRef[] {
   };
 
   walk(doc, '$');
-  // De-dupe by BLOCK ID *and locale* (a block reachable by two paths is still
-  // one block — keying on the path used to defeat this, yielding duplicate
-  // manifest entries and duplicate attach steps — but on a stack the SAME block
-  // legitimately yields one entry per locale, so the locale is part of the key).
-  // A block with no id (malformed) falls back to lesson+path so distinct
-  // id-less blocks are not collapsed into one.
+  // De-dupe by LESSON + BLOCK ID *and locale*. A block reachable by two paths
+  // within its lesson is still one block (keying on the path used to defeat
+  // this, yielding duplicate manifest entries and duplicate attach steps), but
+  // block ids are CLIENT-GENERATED and real courses reuse them across lessons
+  // (Rise's sample courses number blocks "1","2","3" in EVERY lesson — the
+  // v0.6.3 id-collision class), so the lesson id must be part of the key or
+  // two different storyline blocks silently collapse into one and both get the
+  // SAME package attached. On a stack the same block legitimately yields one
+  // entry per locale, so the locale is part of the key too. A block with no id
+  // (malformed) falls back to its path so distinct id-less blocks are not
+  // collapsed into one.
   const seen = new Set<string>();
   return out.filter((b) => {
-    const key = `${b.blockId || `${b.lessonId}/${b.path}`}|${b.locale ?? ''}`;
+    const key = `${b.lessonId}|${b.blockId || b.path}|${b.locale ?? ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

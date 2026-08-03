@@ -7,6 +7,8 @@
 
 import { collectAssetKeys } from '@/core/assets/keys';
 import { courseImageKind } from './builtin-assets';
+// Type-only imports back from executor-types keep this cycle-free at runtime.
+import { blockKey } from './executor-types';
 import {
   cellKey,
   collectCells,
@@ -90,15 +92,19 @@ export interface PlanInput {
    *  its question ids already exist on the target. Supersedes `recreateBanks`. */
   boundBanks?: Map<string, { newBankId: string; questionIds: string[] }>;
   /** Staged Storyline packages already uploaded to the TARGET Review 360, keyed
-   *  by SOURCE block id → its `review/items/{leaf}` prefix + meta/title. When an
-   *  entry exists for a storyline block, the plan emits an ATTACH (copy_review_item
-   *  + media patch) instead of a manual flag. Built by the orchestrator from the
-   *  course's storyline manifest (only entries whose package has been uploaded). */
+   *  by `blockKey(sourceLessonId, sourceBlockId)` → its `review/items/{leaf}`
+   *  prefix + meta/title. When an entry exists for a storyline block, the plan
+   *  emits an ATTACH (copy_review_item + media patch) instead of a manual flag.
+   *  Built by the orchestrator from the course's storyline manifest (only
+   *  entries whose package has been uploaded). Lesson+block keyed — block ids
+   *  repeat across lessons (v0.6.3), so a blockId-only key would attach one
+   *  package to every same-id block. */
   storylineAttach?: Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>;
-  /** STACK only (docs/rise-multilang.md §4.3b): `${sourceBlockId}|${locale}` →
-   *  the uploaded package for THAT language. Each entry becomes a
-   *  copy_review_item + a storyline cell write; languages with no uploaded
-   *  package are flagged instead. */
+  /** STACK only (docs/rise-multilang.md §4.3b):
+   *  `${blockKey(sourceLessonId, sourceBlockId)}|${locale}` → the uploaded
+   *  package for THAT language. Each entry becomes a copy_review_item + a
+   *  storyline cell write; languages with no uploaded package are flagged
+   *  instead. */
   storylineAttachL10n?: Map<
     string,
     { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
@@ -770,7 +776,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       const variant = String(block.variant ?? '');
 
       if (isStoryline(block)) {
-        const attach = input.storylineAttach?.get(sourceBlockId);
+        const attach = input.storylineAttach?.get(blockKey(sourceLessonId, sourceBlockId));
         // On a STACK the block's media is an {l10nId} ref and each language's
         // package lives in its own cell (docs/rise-multilang.md §4.3b). Attach
         // per language: copy_review_item + a storyline cell write. NEVER patch
@@ -782,7 +788,9 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           const attached = cellId ? stackStorylineAttached.get(cellId) : undefined;
           const cellLocales = cellId ? storylineCellLocales(cellId) : [];
           for (const locale of cellLocales) {
-            const pkg = input.storylineAttachL10n?.get(`${sourceBlockId}|${locale}`);
+            const pkg = input.storylineAttachL10n?.get(
+              `${blockKey(sourceLessonId, sourceBlockId)}|${locale}`,
+            );
             if (!pkg || !cellId) continue;
             steps.push({
               kind: 'attach-storyline-l10n',

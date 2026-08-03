@@ -18,6 +18,7 @@ import {
   stackLocales,
 } from '@/core/l10n';
 import {
+  blockKey,
   buildPlan,
   executePlan,
   buildFidelityReport,
@@ -173,18 +174,22 @@ async function readCourseAssets(
 }
 
 /** Build the storyline attach map for a source course from its storyline
- *  manifest: SOURCE block id → {reviewPrefix, meta, title}, but ONLY for blocks
- *  whose package has been uploaded (manifest.uploads[leaf].reviewPrefix exists).
- *  Blocks without an uploaded package are left to the manual flag path. */
+ *  manifest: `blockKey(lessonId, blockId)` → {reviewPrefix, meta, title}, but
+ *  ONLY for blocks whose package has been uploaded
+ *  (manifest.uploads[leaf].reviewPrefix exists). Blocks without an uploaded
+ *  package are left to the manual flag path. Keyed by LESSON + BLOCK id —
+ *  block ids are client-generated and real courses reuse them across lessons
+ *  (the v0.6.3 collision class), so a blockId-only key would attach the same
+ *  package to every same-id block. */
 async function readStorylineAttach(
   storage: Storage,
   courseId: string,
 ): Promise<
   | {
-      /** Monolingual: source block id → the uploaded package to attach. */
+      /** Monolingual: blockKey(lessonId, blockId) → the uploaded package. */
       byBlock: Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>;
-      /** STACK (docs/rise-multilang.md §4.3b): `${blockId}|${locale}` → package,
-       *  one per language (each language can carry its own bundle). */
+      /** STACK (docs/rise-multilang.md §4.3b): `${blockKey}|${locale}` →
+       *  package, one per language (each language can carry its own bundle). */
       byBlockLocale: Map<
         string,
         { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
@@ -198,6 +203,7 @@ async function readStorylineAttach(
     const m = JSON.parse(raw) as {
       blocks?: Array<{
         blockId: string;
+        lessonId?: string;
         leaf: string;
         meta?: unknown;
         locale?: string;
@@ -213,10 +219,15 @@ async function readStorylineAttach(
     for (const b of m.blocks ?? []) {
       const reviewPrefix = m.uploads?.[b.leaf]?.reviewPrefix;
       if (!reviewPrefix) continue;
+      // Every manifest since Stage D records lessonId; an entry without one
+      // cannot be joined safely, so it's skipped here and the plan flags that
+      // block for manual attach (loud in the report, never a wrong attach).
+      if (!b.lessonId) continue;
+      const key = blockKey(b.lessonId, b.blockId);
       const title =
         b.meta && typeof b.meta === 'object' ? (b.meta as { title?: string }).title : undefined;
       if (b.locale) {
-        byBlockLocale.set(`${b.blockId}|${b.locale}`, {
+        byBlockLocale.set(`${key}|${b.locale}`, {
           locale: b.locale,
           l10nId: b.l10nId,
           reviewPrefix,
@@ -224,7 +235,7 @@ async function readStorylineAttach(
           title,
         });
       } else {
-        byBlock.set(b.blockId, { reviewPrefix, meta: b.meta, title });
+        byBlock.set(key, { reviewPrefix, meta: b.meta, title });
       }
     }
     return byBlock.size || byBlockLocale.size ? { byBlock, byBlockLocale } : undefined;

@@ -3,6 +3,7 @@
 // supplies the deterministic id minter, the scripted relay, and a canonical
 // image-course input + happy-path handler map used across the split test files.
 import type { Relay, RelayResponse } from './executor';
+import { blockKey } from './executor-types';
 import type { PlanInput } from './plan';
 
 // A deterministic id minter for stable assertions.
@@ -122,9 +123,11 @@ export function l10nStorylineAttach(): Map<
   { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
 > {
   const cell = 'cccc3333-0000-4000-8000-000000000009';
+  // Keys are `${blockKey(lessonId, blockId)}|${locale}` — lesson-qualified,
+  // because block ids repeat across lessons (v0.6.3 collision class).
   return new Map([
     [
-      'cblockSL00000000000000000|en-us',
+      `${blockKey('lessonB-0000000000000000000000', 'cblockSL00000000000000000')}|en-us`,
       {
         locale: 'en-us',
         l10nId: cell,
@@ -134,7 +137,7 @@ export function l10nStorylineAttach(): Map<
       },
     ],
     [
-      'cblockSL00000000000000000|ru',
+      `${blockKey('lessonB-0000000000000000000000', 'cblockSL00000000000000000')}|ru`,
       {
         locale: 'ru',
         l10nId: cell,

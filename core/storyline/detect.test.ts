@@ -96,6 +96,33 @@ describe('findStorylineBlocks', () => {
     };
     expect(findStorylineBlocks(doc)).toHaveLength(2);
   });
+
+  it('does NOT collapse same-id blocks in DIFFERENT lessons (ids repeat across lessons)', () => {
+    // v0.6.3 collision class: Rise sample courses reuse client block ids
+    // ("1","2","3") in every lesson. Two storyline blocks with the same id in
+    // different lessons are DIFFERENT blocks with different packages — a
+    // blockId-only dedupe silently dropped one, staging one zip and attaching
+    // it to both blocks.
+    const mk = (leaf: string) => ({
+      id: '1',
+      family: '360',
+      variant: 'storyline',
+      items: [
+        { id: 'i', media: { storyline: { contentPrefix: `rise/courses/C1/${leaf}` } } },
+      ],
+    });
+    const doc = {
+      lessons: [
+        { id: 'les_a', items: [mk('LEAFA00000000000')] },
+        { id: 'les_b', items: [mk('LEAFB00000000000')] },
+      ],
+    };
+    const refs = findStorylineBlocks(doc);
+    expect(refs.map((r) => [r.lessonId, r.leaf])).toEqual([
+      ['les_a', 'LEAFA00000000000'],
+      ['les_b', 'LEAFB00000000000'],
+    ]);
+  });
 });
 
 describe('findStorylineBlocks — multi-language stacks (docs/rise-multilang.md §4.3b)', () => {

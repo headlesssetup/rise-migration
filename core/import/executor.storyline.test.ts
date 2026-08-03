@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { executePlan } from './executor';
+import { executePlan, blockKey } from './executor';
 import { buildPlan, type PlanInput } from './plan';
 import { IdMap } from './ids';
 import { counterMint, mockRelay, happyHandlers } from './executor.fixtures';
@@ -36,7 +36,12 @@ function storylineCourse(attach: PlanInput['storylineAttach']): PlanInput {
 describe('executePlan — storyline attach', () => {
   it('copies the review item then patches media.storyline (no manual flag)', async () => {
     const input = storylineCourse(
-      new Map([['cblock00000000000000000000', { reviewPrefix: 'review/items/LEAF1', meta: { title: 'S1' }, title: 'S1' }]]),
+      new Map([
+        [
+          blockKey('L1', 'cblock00000000000000000000'),
+          { reviewPrefix: 'review/items/LEAF1', meta: { title: 'S1' }, title: 'S1' },
+        ],
+      ]),
     );
     const steps = buildPlan(input);
     let copyBody: any;

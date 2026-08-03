@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPlan, summarizePlan, planStats, findBankRef, type PlanInput } from './plan';
+import { blockKey } from './executor-types';
 
 function input(overrides: Partial<PlanInput> = {}): PlanInput {
   return {
@@ -454,7 +455,10 @@ describe('buildPlan media + flags', () => {
       input({
         course,
         storylineAttach: new Map([
-          ['cb1', { reviewPrefix: 'review/items/LEAF1', meta: { title: 'S1' }, title: 'S1' }],
+          [
+            blockKey('L1', 'cb1'),
+            { reviewPrefix: 'review/items/LEAF1', meta: { title: 'S1' }, title: 'S1' },
+          ],
         ]),
       }),
     );
@@ -463,6 +467,39 @@ describe('buildPlan media + flags', () => {
     // cb2 has no uploaded package → still flagged
     expect(steps.some((s) => s.kind === 'flag-storyline' && s.sourceBlockId === 'cb2')).toBe(true);
     expect(steps.some((s) => s.kind === 'attach-storyline' && s.sourceBlockId === 'cb2')).toBe(false);
+  });
+
+  it('joins storyline packages by LESSON + block id (ids repeat across lessons)', () => {
+    // The v0.6.3 collision class: Rise sample courses reuse block ids ("1",
+    // "2") in every lesson. Two storyline blocks sharing an id must each get
+    // their OWN package — a blockId-only join attached the same bundle twice.
+    const slBlock = { id: '1', family: '360', variant: 'storyline', items: [{ id: 'i' }] };
+    const course = {
+      course: { id: 'SRC', title: 'C' },
+      lessons: [
+        { id: 'L1', position: 0, type: 'blocks', title: 'A', items: [{ ...slBlock }] },
+        { id: 'L2', position: 1, type: 'blocks', title: 'B', items: [{ ...slBlock }] },
+      ],
+    };
+    const steps = buildPlan(
+      input({
+        course,
+        storylineAttach: new Map([
+          [blockKey('L1', '1'), { reviewPrefix: 'review/items/LEAF-A', title: 'A' }],
+          [blockKey('L2', '1'), { reviewPrefix: 'review/items/LEAF-B', title: 'B' }],
+        ]),
+      }),
+    );
+    const attaches = steps.filter((s) => s.kind === 'attach-storyline') as Array<{
+      sourceLessonId: string;
+      reviewPrefix: string;
+    }>;
+    expect(
+      attaches.map((a) => [a.sourceLessonId, a.reviewPrefix]),
+    ).toEqual([
+      ['L1', 'review/items/LEAF-A'],
+      ['L2', 'review/items/LEAF-B'],
+    ]);
   });
 });
 

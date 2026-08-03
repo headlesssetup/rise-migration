@@ -56,6 +56,7 @@ import type { GetCourseDocument } from '@/shared/types/rise';
 // Re-export the executor contracts/types so `@/core/import` keeps the same
 // surface after they moved to ./executor-types (see that file's header).
 export {
+  blockKey,
   summarizeFlags,
   WriteError,
   type RelayResponse,
