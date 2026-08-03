@@ -33,8 +33,12 @@ export interface MaterializedCourse {
 /**
  * Resolve every {l10nId} ref in `doc` to the given locale's value (default:
  * the stack's default locale). Strips `l10n`, `course.localizationMetadata`
- * and `course.defaultLocaleId` from the copy. A non-stack doc round-trips as a
- * plain deep copy with `locale` = '' and no unresolved entries.
+ * and `course.defaultLocaleId` from the copy — UNCONDITIONALLY, including on
+ * a non-stack doc (real monolingual GET_COURSE payloads carry an `l10n` key
+ * holding only `languageCodeMetadata`, and it is stripped too). Everything
+ * else of a non-stack doc round-trips as a plain deep copy with `locale` = ''
+ * and no unresolved entries. Fine for the census/display consumers this
+ * serves; do not use the output where the `l10n` key must survive.
  */
 export function materializeLocale(
   doc: GetCourseDocument,

@@ -248,6 +248,118 @@ describe('executePlan — stack live run (scripted relay)', () => {
     expect(allWritten).not.toContain('slRU000000000000');
   });
 
+  it('blanks an orphaned TABLE-media key inside the cell value (flagged, no survivor)', async () => {
+    const input = l10nCourse();
+    // The ru per-locale hero override: 403/deleted at source → no bytes.
+    const orphanKey = 'rise/courses/stackCourse000000000000000000000/heroRU0000000000.jpg';
+    input.assets = input.assets.map((a) =>
+      a.key === orphanKey ? { key: a.key, kind: a.kind, orphaned: true } : a,
+    );
+    const bodies: Record<string, unknown>[] = [];
+    const { relay } = mockRelay(l10nHandlers());
+    const spyRelay: typeof relay = async (spec) => {
+      if (spec.body) bodies.push(JSON.parse(spec.body) as Record<string, unknown>);
+      return relay(spec);
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: spyRelay,
+      readAsset,
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.survivingKeys).toEqual([]); // the unfiltered final scan stays clean
+    expect(res.flags.some((f) => f.kind === 'orphan-media' && f.sourceKey === orphanKey)).toBe(
+      true,
+    );
+    // The ru cell was still written — with the dead key BLANKED inside the value.
+    const cellValues = bodies
+      .filter((b) => (b as { type?: string }).type === 'rise/l10n/UPDATE_L10N_BATCH')
+      .flatMap((b) => ((b.payload as { changes: { value?: unknown }[] }).changes ?? []))
+      .map((c) => JSON.stringify(c.value ?? ''));
+    expect(cellValues.some((v) => v.includes(orphanKey))).toBe(false);
+  });
+
+  it('aborts loudly when the post-conversion GET_COURSE is not l10n-ified', async () => {
+    const input = l10nCourse();
+    const handlers = l10nHandlers();
+    // Every GET_COURSE returns a PLAIN shell — the conversion "completed" per
+    // the poll, but the course never actually l10n-ified.
+    handlers['GET_COURSE'] = () => ({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } });
+    const { relay } = mockRelay(handlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset,
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/not l10n-ified/);
+  });
+
+  it('flags an unmatched course-level ref (l10n-ref) and ships no orphan cells for it', async () => {
+    const input = l10nCourse();
+    const handlers = l10nHandlers();
+    // Converted target WITHOUT a description ref: the source's description
+    // cell has no counterpart — it must be flagged, and its cells must NOT be
+    // written under the source id (orphan rows junk-cleanup can't remove).
+    let getCourseCalls = 0;
+    const convertedNoDesc = {
+      course: {
+        id: 'NEWCOURSE',
+        title: { l10nId: 'tgt-title' },
+        media: { l10nId: 'tgt-logo' },
+        coverImage: { media: { l10nId: 'tgt-cover' } },
+        defaultLocaleId: 'tgt-row-en',
+        localizationMetadata: { isLocalized: true, localizedAt: 't' },
+        lessons: ['NEWLESSON1'],
+      },
+      lessons: [{ id: 'NEWLESSON1', title: { l10nId: 'tgt-l1title' }, items: [] }],
+      l10n: {
+        defaultLocale: 'en-us',
+        showLocaleSelector: false,
+        locales: [
+          { id: 'tgt-row-en', locale: 'en-us' },
+          { id: 'tgt-row-ru', locale: 'ru' },
+          { id: 'tgt-row-ar', locale: 'ar' },
+        ],
+        translations: {
+          'en-us': { 'tgt-title': '!importing: x', 'tgt-l1title': 'Lesson One' },
+          ru: { 'tgt-title': 'AI', 'tgt-l1title': 'AI' },
+          ar: { 'tgt-title': 'AI', 'tgt-l1title': 'AI' },
+        },
+      },
+    };
+    handlers['GET_COURSE'] = () => {
+      getCourseCalls++;
+      return getCourseCalls === 1
+        ? { payload: { course: { id: 'NEWCOURSE', lessons: [] } } }
+        : { payload: convertedNoDesc };
+    };
+    const bodies: Record<string, unknown>[] = [];
+    const { relay } = mockRelay(handlers);
+    const spyRelay: typeof relay = async (spec) => {
+      if (spec.body) bodies.push(JSON.parse(spec.body) as Record<string, unknown>);
+      return relay(spec);
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: spyRelay,
+      readAsset,
+      mintId: counterMint(),
+    });
+    expect(res.flags.some((f) => f.kind === 'l10n-ref' && f.detail.includes('description'))).toBe(
+      true,
+    );
+    // The source description cell id must appear in NO batch write.
+    const srcDescId = 'aaaa1111-0000-4000-8000-000000000002';
+    const shippedIds = bodies
+      .filter((b) => (b as { type?: string }).type === 'rise/l10n/UPDATE_L10N_BATCH')
+      .flatMap((b) => ((b.payload as { changes: { l10nId?: string }[] }).changes ?? []))
+      .map((c) => c.l10nId);
+    expect(shippedIds).not.toContain(srcDescId);
+  });
+
   it('fails loudly when the conversion never completes (poll timeout)', async () => {
     const input = l10nCourse();
     const steps = buildPlan(input);

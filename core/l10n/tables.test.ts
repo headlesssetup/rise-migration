@@ -293,17 +293,17 @@ describe('storyline cells (docs/rise-multilang.md §4.3b)', () => {
 });
 
 describe('defaultOnlyCells — the "N source changes detected" badge', () => {
-  it('counts per target locale, split media vs text', () => {
-    const counts = defaultOnlyCells(doc);
-    // fixture: en-us default; ru has most cells, ar has few
-    expect(Object.keys(counts).sort()).toEqual(['ar', 'ru']);
-    for (const [, v] of Object.entries(counts)) {
-      expect(v.total).toBe(v.media + v.text);
-    }
-    // ar holds only the title cell → everything else is default-only for ar
-    expect(counts.ar!.total).toBeGreaterThan(counts.ru!.total);
-    // the fixture's default-only set includes media (logo/cover/hero)
-    expect(counts.ru!.media).toBeGreaterThan(0);
+  it('counts per target locale, split media vs text (pinned to the fixture)', () => {
+    // This function is the operator's benign-vs-broken discriminator for the
+    // "N source changes detected" badge — the counts are pinned exactly, not
+    // as inequalities (a counting bug must not slip through). Fixture math:
+    // ar holds 4 cells (title, desc, lesson titles) → 7 of the 11 default
+    // cells are default-only for ar (4 media + 3 text); ru holds all but 3
+    // (2 media + 1 text).
+    expect(defaultOnlyCells(doc)).toEqual({
+      ru: { total: 3, media: 2, text: 1 },
+      ar: { total: 7, media: 4, text: 3 },
+    });
   });
 
   it('is empty when every locale mirrors the default', () => {

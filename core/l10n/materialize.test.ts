@@ -82,6 +82,20 @@ describe('materializeLocale', () => {
     expect(unresolved).toEqual([]);
   });
 
+  it('strips the l10n key of a MONOLINGUAL doc too (languageCodeMetadata)', () => {
+    // Real monolingual GET_COURSE payloads carry l10n.languageCodeMetadata —
+    // the strip is unconditional (documented contract); everything else
+    // round-trips.
+    const plain = {
+      course: { id: 'c1', title: 'Plain' },
+      lessons: [],
+      l10n: { languageCodeMetadata: { 'en-us': { name: 'English' } } },
+    } as unknown as GetCourseDocument;
+    const { doc: m } = materializeLocale(plain);
+    expect((m as Record<string, unknown>).l10n).toBeUndefined();
+    expect(m.course).toEqual(plain.course);
+  });
+
   it('materialized stacks produce no l10nId field paths in the census scan', () => {
     const { doc: m } = materializeLocale(doc);
     const scan = scanCourse(m as Parameters<typeof scanCourse>[0]);
