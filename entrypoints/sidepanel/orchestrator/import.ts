@@ -367,10 +367,18 @@ function parsePriorReport(raw: string | null | undefined): PriorCourseReport | n
 export async function estimateCourses(
   storage: Storage,
   courseIds: string[],
-): Promise<{ estimate: ImportEstimate; stacks: number; missing: number }> {
+): Promise<{
+  estimate: ImportEstimate;
+  stacks: number;
+  missing: number;
+  /** Archived but unusable: the course read/plan threw (a malformed archive or
+   *  a plan-level refusal) — distinct from `missing` (not in the archive). */
+  unreadable: number;
+}> {
   const per: ImportEstimate[] = [];
   let stacks = 0;
   let missing = 0;
+  let unreadable = 0;
   for (const courseId of courseIds) {
     const raw = await storage.readCourse(courseId);
     if (!raw) {
@@ -389,10 +397,10 @@ export async function estimateCourses(
       });
       per.push(estimateImportSeconds(steps, entries));
     } catch {
-      missing++;
+      unreadable++;
     }
   }
-  return { estimate: sumEstimates(per), stacks, missing };
+  return { estimate: sumEstimates(per), stacks, missing, unreadable };
 }
 
 export async function runImport(
@@ -487,14 +495,22 @@ export async function runImport(
   // "Download assets" is a separate export step and easy to forget; without it
   // every course with media dies on its first upload AFTER the course (and, for a
   // stack, its languages) already exist. Warn once, up front, naming the courses.
+  // The per-id result is memoized (missingByCourse) so the per-course skip
+  // check in the run loop below doesn't redo the same archive reads + scan.
+  const missingByCourse = new Map<string, number>();
   {
     const short: { id: string; title?: string; missing: number }[] = [];
-    for (const id of courseIds) {
+    for (const [idx, id] of courseIds.entries()) {
+      onEvent({
+        kind: 'log',
+        message: `[${idx + 1}/${courseIds.length} preflight] checking archived assets…`,
+      });
       const raw = await storage.readCourse(id);
       if (!raw) continue;
       const doc = unwrap(raw);
       const { entries } = await readCourseAssets(storage, id);
       const missing = missingAssetKeys(doc, id, entries);
+      missingByCourse.set(id, missing.length);
       if (missing.length) {
         short.push({
           id,
@@ -542,46 +558,53 @@ export async function runImport(
   // --- Multi-language stacks (docs/rise-multilang.md): run-level state ---
   // Account-scoped label sets recreated once per run (source set id → target id).
   const labelSetCache = new Map<string, string>();
-  // Target's supported translation codes — fetched lazily, once, only when the
-  // run contains a stack. Localization is free on every subscription; this is
-  // purely a locale-code sanity check (cross-plane drift), so a fetch failure
-  // downgrades to a warning (POST /translations still fails loudly if wrong).
-  let availableTargetLangs: Set<string> | null | undefined;
-  const fetchAvailableLangs = async (): Promise<Set<string> | null> => {
-    if (availableTargetLangs !== undefined) return availableTargetLangs;
+  // Target's supported translation pairs, keyed by SOURCE language — fetched
+  // lazily, once, only when the run contains a stack. Localization is free on
+  // every subscription; this is purely a locale-code sanity check (cross-plane
+  // drift), so a fetch failure downgrades to a warning (POST /translations
+  // still fails loudly if wrong). Capture-confirmed shapes (capture_31july):
+  //   GET /manage/api/subscription → {…, subscription: {subscription_id, …}}
+  //   GET …/available-languages → {languagesInfo: {sourceLangs: [...],
+  //     targetLangsIndexedBySourceLang: {<src>: [{targetLang, …}, …]}}}
+  let availableBySource: Map<string, Set<string>> | null | undefined;
+  const fetchAvailableLangs = async (): Promise<Map<string, Set<string>> | null> => {
+    if (availableBySource !== undefined) return availableBySource;
     try {
+      await pacedDelay(pacing); // paced like every other authoring-plane read
       const sub = await relay(getSubscription());
       const subBody = sub.ok ? (safeJson(sub.text) as Record<string, unknown>) : {};
-      const subId = String(subBody?.id ?? '');
+      const subscription = (subBody?.subscription ?? {}) as Record<string, unknown>;
+      const subId = String(subscription.subscription_id ?? '');
       if (!subId) throw new Error(`subscription id unavailable (HTTP ${sub.status})`);
       await pacedDelay(pacing);
       const al = await relay(getAvailableLanguages(subId));
       if (!al.ok) throw new Error(`available-languages HTTP ${al.status}`);
       const body = safeJson(al.text) as Record<string, unknown>;
       const info = (body?.languagesInfo ?? {}) as Record<string, unknown>;
-      const rawTargets = Array.isArray(info.targetLangs) ? info.targetLangs : [];
-      const codes = rawTargets
-        .map((t) =>
-          typeof t === 'string'
-            ? t
-            : String((t as Record<string, unknown>)?.targetLang ?? ''),
-        )
-        .filter(Boolean);
-      availableTargetLangs = codes.length ? new Set(codes) : null;
-      if (!availableTargetLangs) {
+      const indexed = (info.targetLangsIndexedBySourceLang ?? {}) as Record<string, unknown>;
+      const map = new Map<string, Set<string>>();
+      for (const [src, arr] of Object.entries(indexed)) {
+        if (!Array.isArray(arr)) continue;
+        const codes = arr
+          .map((t) => String((t as Record<string, unknown>)?.targetLang ?? ''))
+          .filter(Boolean);
+        if (codes.length) map.set(src, new Set(codes));
+      }
+      availableBySource = map.size ? map : null;
+      if (!availableBySource) {
         onEvent({
           kind: 'log',
           message: 'WARN available-languages returned no target list — skipping the locale-code sanity check',
         });
       }
     } catch (e) {
-      availableTargetLangs = null;
+      availableBySource = null;
       onEvent({
         kind: 'log',
         message: `WARN could not read available-languages (${(e as Error).message}) — skipping the locale-code sanity check`,
       });
     }
-    return availableTargetLangs;
+    return availableBySource;
   };
 
   // ETA: project remaining time from elapsed wall-clock and the fraction of work
@@ -685,7 +708,10 @@ export async function runImport(
     // almost always a forgotten "Download assets". Refuse BEFORE the first write —
     // otherwise the course (and, for a stack, its AI-converted languages) exists
     // and the run dies on the first upload, leaving a partial to delete by hand.
-    const absent = missingAssetKeys(course, courseId, entries);
+    // (The run-start preflight already scanned this course; recompute the key
+    // list only when it found something, to name an example in the error.)
+    const absent =
+      missingByCourse.get(courseId) === 0 ? [] : missingAssetKeys(course, courseId, entries);
     if (absent.length && !opts.dryRun) {
       const error =
         `${absent.length} referenced asset(s) are not in the archive (e.g. ${absent[0]}) — ` +
@@ -724,8 +750,17 @@ export async function runImport(
       if (!opts.dryRun) {
         const avail = await fetchAvailableLangs();
         const def = defaultLocaleOf(course);
-        const missing = avail
-          ? langs.filter((c) => c !== def && !avail.has(c))
+        const forSource = avail && def ? avail.get(def) : undefined;
+        if (avail && def && !forSource) {
+          const error = `Target plane does not support "${def}" as a translation SOURCE language — stack cannot be recreated (nothing was written)`;
+          onEvent({ kind: 'log', message: `${pfx} FAILED "${courseTitle ?? courseId}": ${error}` });
+          const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
+          outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
+          csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });
+          continue;
+        }
+        const missing = forSource
+          ? langs.filter((c) => c !== def && !forSource.has(c))
           : [];
         if (missing.length) {
           const error = `Target plane does not offer translation into: ${missing.join(', ')} — stack cannot be recreated (nothing was written)`;

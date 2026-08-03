@@ -534,13 +534,16 @@ function CoursesSection({
     setEstimate('estimating…');
     const t = setTimeout(async () => {
       try {
-        const { estimate: e, stacks, missing } = await estimateCourses(storage, [...selected]);
+        const { estimate: e, stacks, missing, unreadable } = await estimateCourses(storage, [
+          ...selected,
+        ]);
         if (!alive) return;
         const parts = [
           `${selected.size} course(s)${stacks ? ` (${stacks} multi-language)` : ''}`,
           `${formatEstimate(e.seconds)} (rough)`,
         ];
         if (missing) parts.push(`${missing} not in archive`);
+        if (unreadable) parts.push(`${unreadable} unreadable/plan error`);
         setEstimate(parts.join(' · '));
       } catch {
         if (alive) setEstimate(null);

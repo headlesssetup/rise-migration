@@ -540,7 +540,13 @@ export function getTranslations(courseId: string): WriteSpec {
 }
 
 /** GET /manage/api/subscription/{subId}/available-languages — supported
- *  source/target language codes + (informational) AI-credit plan info.
+ *  translation pairs + (informational) AI-credit plan info. Response shape
+ *  (capture-confirmed, capture_31july): {subscriptionId, authorId, planInfo:
+ *  {creditLimit, creditsUsed, plan, remainingCredits, status, termEnd,
+ *  termStart, translationTier}, languagesInfo: {sourceLangs: [codes…],
+ *  targetLangsIndexedBySourceLang: {<src>: [{targetLang, supportsGlossary,
+ *  supportsFormality, experimental, rightToLeft, provider}, …]}}} — note there
+ *  is NO flat `targetLangs` list; targets are indexed per source language.
  *  Localization is free on every subscription; this is a pre-write sanity check
  *  that the source stack's locale codes exist on the target plane. */
 export function getAvailableLanguages(subscriptionId: string): WriteSpec {
@@ -551,8 +557,12 @@ export function getAvailableLanguages(subscriptionId: string): WriteSpec {
   };
 }
 
-/** GET /manage/api/subscription — the target account's subscription (its `id`
- *  feeds {@link getAvailableLanguages}). */
+/** GET /manage/api/subscription — the target account's subscription. Response
+ *  (capture-confirmed, capture_31july): {features, subscription:
+ *  {subscription_id, plan, status, …}, ai, localization:{status,
+ *  canTranslateContent, …}, reach}. The id feeding
+ *  {@link getAvailableLanguages} is `subscription.subscription_id` — NOT a
+ *  top-level `id` (parsing that was why the preflight always warn-skipped). */
 export function getSubscription(): WriteSpec {
   return {
     url: '/manage/api/subscription',
