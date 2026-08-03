@@ -1111,8 +1111,9 @@ export async function runImport(
             // Symmetric check: the archive PREDICTS pending cells but Rise
             // shows none for that locale — as anomalous as the reverse (e.g.
             // an AI run fired on the target). Warn, don't stay silent.
+            const pendingByLocale = l10nPending ?? {};
             const silentLocales = Object.entries(expected)
-              .filter(([c, v]) => v.total > 0 && !(c in l10nPending))
+              .filter(([c, v]) => v.total > 0 && !(c in pendingByLocale))
               .map(([c, v]) => `${c}: expected ${v.total}, Rise shows 0`);
             if (silentLocales.length) {
               onEvent({
