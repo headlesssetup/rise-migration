@@ -159,9 +159,13 @@ export async function executePlan(
    * anything not confirmed, so a silently-broken image is impossible. With no
    * prober wired (tests, dry-run) the references are flagged as unverified.
    */
+  // Values already probed/flagged this run — dedupes the flag itself (the
+  // network probe is deduped separately via deps.builtinProbeCache).
+  const notedBuiltinValues = new Set<string>();
   const noteBuiltins = async (img: unknown, where: string): Promise<void> => {
-    const refs = collectBuiltinRefs(img);
+    const refs = collectBuiltinRefs(img).filter((r) => !notedBuiltinValues.has(r.value));
     if (refs.length === 0) return;
+    for (const r of refs) notedBuiltinValues.add(r.value);
     const probe = deps.probeBuiltinAsset;
     const plane = deps.targetPlane;
     if (!probe || !plane) {
@@ -1221,6 +1225,15 @@ export async function executePlan(
       result.idMap = ids.toJSON();
       return result;
     }
+
+    // CLAUDE.md invariant: "each distinct [built-in] reference is HEAD-probed
+    // on the TARGET plane" — EVERY reference, not just course images. Built-in
+    // refs ship verbatim, so a sweep of the SOURCE doc covers everything the
+    // target received: block defaults (posters/thumbnails), theme images, and
+    // a stack's table cells. Values already probed by set-course-images are
+    // deduped by notedBuiltinValues; probes by the run-wide cache. Live runs
+    // only — a dry run must not burst HEAD requests at the CDN.
+    if (!dryRun) await noteBuiltins(deps.input.course, 'course document');
 
     // Final invariant (protocol §8/§12): every uploaded media key in the rebuilt
     // course must belong to a TARGET owner (new course id / new bank ids) — any

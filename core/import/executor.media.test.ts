@@ -807,6 +807,49 @@ describe('built-in (library) course images — copied, probed, flagged', () => {
     const flag = res.flags.find((f) => f.kind === 'builtin-asset');
     expect(flag?.detail).toMatch(/NOT checked/);
   });
+
+  it('probes BLOCK-level built-in refs too (whole-doc sweep, invariant coverage)', async () => {
+    // A built-in default poster inside a block — previously shipped verbatim
+    // with no probe and no flag; the invariant says EVERY distinct reference
+    // is HEAD-probed on the target plane.
+    const BLOCK_LIB = 'assets/rise/video-posters/default.jpg';
+    const input = imageCourse();
+    (input.course.lessons![0]!.items![0] as Record<string, unknown>).poster = BLOCK_LIB;
+    const probed: string[] = [];
+    const { relay } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+      targetPlane: 'eu',
+      probeBuiltinAsset: async (url) => {
+        probed.push(url);
+        return { ok: false, status: 404 };
+      },
+    });
+    expect(probed.some((u) => u.includes(BLOCK_LIB))).toBe(true);
+    const flag = res.flags.find(
+      (f) => f.kind === 'builtin-asset' && f.detail.includes(BLOCK_LIB),
+    );
+    expect(flag?.detail).toContain('NOT served by the EU plane');
+  });
+
+  it('does not double-flag a value probed by both course images and the doc sweep', async () => {
+    const input = builtinCoverCourse();
+    const { relay } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'Zm9v', contentType: 'image/jpeg' }),
+      mintId: counterMint(),
+      targetPlane: 'eu',
+      probeBuiltinAsset: async () => ({ ok: false, status: 404 }),
+    });
+    const flags = res.flags.filter((f) => f.kind === 'builtin-asset');
+    const values = flags.map((f) => f.detail.match(/"([^"]+)"/)?.[1]);
+    expect(new Set(values).size).toBe(values.length); // one flag per distinct value
+  });
 });
 
 describe('duplicate block ids across lessons (Rise sample courses)', () => {
