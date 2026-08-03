@@ -19,6 +19,7 @@ import {
   lessonIdByRef,
   materializeLocale,
   valueTypeOf,
+  writableLocaleCodes,
   type L10nChange,
 } from '@/core/l10n';
 import {
@@ -1058,9 +1059,15 @@ export async function executePlan(
           // (default first — write-order invariant) onto the target's own refs.
           const course = deps.input.course.course ?? {};
           const refs = [course.title, course.description].filter(isL10nRef);
+          // Writable locales only: an archived/row-less locale's table was
+          // skipped everywhere else (flag-l10n-locale) — writing its title
+          // cell here would hit a locale the target course doesn't have.
+          const writable = writableLocaleCodes(deps.input.course);
           const locales = [
             srcDefaultLocale,
-            ...Object.keys(srcTables).filter((c) => c !== srcDefaultLocale),
+            ...Object.keys(srcTables).filter(
+              (c) => c !== srcDefaultLocale && writable.has(c),
+            ),
           ];
           for (const locale of locales) {
             const changes: L10nChange[] = [];
@@ -1131,6 +1138,19 @@ export async function executePlan(
           });
           log(
             `${pfx()} ⚠ FLAG storyline in stack — cell ${step.l10nId} not copied; attach per language (${step.locales.join(', ')})`,
+          );
+          break;
+        }
+        case 'flag-l10n-locale': {
+          // Skipped table for an archived/row-less locale (see plan): the data
+          // stays in the archive; the operator restores the language at the
+          // source and re-exports if they want it migrated.
+          result.flags.push({
+            kind: 'l10n-locale',
+            detail: `${step.cells} cell(s) for locale "${step.locale}" not migrated (${step.reason})`,
+          });
+          log(
+            `${pfx()} ⚠ FLAG locale "${step.locale}" (${step.reason}) — ${step.cells} cell(s) stay in the archive`,
           );
           break;
         }

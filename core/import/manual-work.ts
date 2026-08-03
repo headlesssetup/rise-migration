@@ -159,6 +159,12 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'A course-level localized value (e.g. cover/logo/description) had no counterpart on the target — set it manually in each language.',
       };
+    case 'l10n-locale':
+      return {
+        itemType: 'Untransferable language data',
+        action:
+          'The source holds translation data for a language that is archived (or has no locale row), so the target cannot have it. To migrate it, restore the language on the source course, re-export, and re-import.',
+      };
     default:
       return { itemType: String(kind), action: 'Manual handling required.' };
   }
@@ -168,7 +174,12 @@ function categoryLocation(kind: ManualFlag['kind']): string {
   if (kind === 'title') return 'Course-level';
   if (kind === 'typeface') return 'Theme / fonts';
   if (kind === 'orphan-bank') return 'Question banks';
-  if (kind === 'locale-selector' || kind === 'l10n-ref' || kind === 'l10n-storyline') {
+  if (
+    kind === 'locale-selector' ||
+    kind === 'l10n-ref' ||
+    kind === 'l10n-storyline' ||
+    kind === 'l10n-locale'
+  ) {
     return 'Languages';
   }
   if (kind === 'builtin-asset') return 'Built-in assets';

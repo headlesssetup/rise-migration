@@ -10,6 +10,7 @@ import {
   isStorylineCell,
   junkCellIds,
   lessonIdByRef,
+  orphanLocaleTables,
   planCellWrites,
   storylineCells,
   valueTypeOf,
@@ -50,6 +51,34 @@ describe('collectCells', () => {
     expect((ruHero!.value as { image: { translationOverride: boolean } }).image
       .translationOverride).toBe(true);
   });
+
+  it('excludes archived and row-less locale tables (orphanLocaleTables reports them)', () => {
+    // The target can only have the default + live locales (convert-stack
+    // recreates exactly those) — cells for an archived or row-less locale
+    // would ship UPDATE_L10N_BATCH for a locale the target doesn't know.
+    const stack = {
+      l10n: {
+        defaultLocale: 'en-us',
+        locales: [
+          { id: 'L1', locale: 'en-us', deletedAt: null },
+          { id: 'L2', locale: 'ru', deletedAt: null },
+          { id: 'L3', locale: 'ar', deletedAt: '2026-08-01T00:00:00Z' },
+        ],
+        translations: {
+          'en-us': { a: 'x' },
+          ru: { a: 'х' },
+          ar: { a: 'أ', b: 'ب' },
+          lv: { a: 'ā' },
+        },
+      },
+    } as never;
+    const locales = new Set(collectCells(stack).map((c) => c.locale));
+    expect(locales).toEqual(new Set(['en-us', 'ru']));
+    expect(orphanLocaleTables(stack)).toEqual([
+      { locale: 'ar', reason: 'archived', cells: 2 },
+      { locale: 'lv', reason: 'no-locale-row', cells: 1 },
+    ]);
+  });
 });
 
 describe('lessonIdByRef', () => {
@@ -86,10 +115,37 @@ describe('courseRefMap', () => {
 
   it('flags source refs with no target counterpart', () => {
     const { unmatched } = courseRefMap(doc, { course: { title: { l10nId: 't' } } });
-    expect(unmatched.map((u) => u.path)).toEqual(
-      expect.arrayContaining(['course.description', 'course.media.l10nId'].slice(0, 1)),
-    );
-    expect(unmatched).toHaveLength(3);
+    expect(unmatched.map((u) => u.path).sort()).toEqual([
+      'course.coverImage.media',
+      'course.description',
+      'course.media',
+    ]);
+  });
+
+  it('recurses into arrays on both sides (positional pairing)', () => {
+    const source = {
+      course: {
+        banners: [{ media: { l10nId: 's-0' } }, { media: { l10nId: 's-1' } }],
+      },
+    } as unknown as GetCourseDocument;
+    const target = {
+      course: {
+        banners: [{ media: { l10nId: 't-0' } }],
+      },
+    } as unknown as GetCourseDocument;
+    const { map, unmatched } = courseRefMap(source, target);
+    expect(map.get('s-0')).toBe('t-0');
+    // source overhang (no target counterpart) is reported, never dropped
+    expect(unmatched).toEqual([{ path: 'course.banners[1].media', l10nId: 's-1' }]);
+  });
+
+  it('reports refs inside arrays when the whole subtree is absent on target', () => {
+    const source = {
+      course: { gallery: { items: [{ media: { l10nId: 's-g0' } }] } },
+    } as unknown as GetCourseDocument;
+    const { map, unmatched } = courseRefMap(source, { course: {} });
+    expect(map.size).toBe(0);
+    expect(unmatched).toEqual([{ path: 'course.gallery.items[0].media', l10nId: 's-g0' }]);
   });
 });
 
@@ -232,10 +288,37 @@ describe('defaultOnlyCells — the "N source changes detected" badge', () => {
     const full = {
       l10n: {
         defaultLocale: 'en-us',
+        locales: [
+          { id: 'L1', locale: 'en-us', deletedAt: null },
+          { id: 'L2', locale: 'ru', deletedAt: null },
+        ],
         translations: { 'en-us': { a: 'x', b: 'y' }, ru: { a: 'х', b: 'у' } },
       },
     } as never;
     expect(defaultOnlyCells(full)).toEqual({ ru: { total: 0, media: 0, text: 0 } });
+  });
+
+  it('excludes archived (deletedAt) and row-less locales from the prediction', () => {
+    // Rise's badge counts pending cells per LIVE stack item only: an archived
+    // language is not on the target, so counting it would make the predicted
+    // number disagree with Rise on every import (a false "real signal").
+    const doc = {
+      l10n: {
+        defaultLocale: 'en-us',
+        locales: [
+          { id: 'L1', locale: 'en-us', deletedAt: null },
+          { id: 'L2', locale: 'ru', deletedAt: null },
+          { id: 'L3', locale: 'ar', deletedAt: '2026-08-01T00:00:00Z' },
+        ],
+        translations: {
+          'en-us': { a: 'x', b: { image: { key: 'k' } } },
+          ru: { a: 'х' },
+          ar: {}, // archived — would otherwise predict 2 pending cells
+          lv: {}, // no locale row at all — same
+        },
+      },
+    } as never;
+    expect(defaultOnlyCells(doc)).toEqual({ ru: { total: 1, media: 1, text: 0 } });
   });
 
   it('is empty for a monolingual course', () => {

@@ -34,6 +34,23 @@ export function defaultLocaleOf(doc: GetCourseDocument | undefined | null): stri
   return undefined;
 }
 
+/**
+ * The default locale, or throw: a stack whose default locale cannot be resolved
+ * (no `l10n.defaultLocale`, no resolvable `defaultLocaleId`) is malformed, and
+ * proceeding would silently break the write-order invariant (the default
+ * locale's cells must be written FIRST or every cell imports as "pending").
+ * Loud failure per CLAUDE.md — the course aborts instead of degrading.
+ */
+export function requireDefaultLocale(doc: GetCourseDocument | undefined | null): string {
+  const def = defaultLocaleOf(doc);
+  if (!def) {
+    throw new Error(
+      'stack has no resolvable default locale (l10n.defaultLocale and course.defaultLocaleId both unusable) — aborting this course',
+    );
+  }
+  return def;
+}
+
 /** Locale rows of a stack, default locale first, archived (deletedAt) excluded. */
 export function stackLocales(doc: GetCourseDocument | undefined | null): L10nLocale[] {
   const rows = (doc?.l10n?.locales ?? []).filter((l) => !l.deletedAt);
@@ -43,6 +60,25 @@ export function stackLocales(doc: GetCourseDocument | undefined | null): L10nLoc
     if (b.locale === def && a.locale !== def) return 1;
     return String(a.locale ?? '').localeCompare(String(b.locale ?? ''));
   });
+}
+
+/**
+ * Locale codes that exist as LIVE (non-archived) rows, plus the default locale.
+ * This is the set of languages the import can actually create on the target
+ * (`convert-stack` runs one POST per formality group over these rows) — table
+ * data for any OTHER locale (an archived row, or a table with no row at all)
+ * cannot be written to the target and must be skipped + flagged, never shipped
+ * to a locale the server doesn't know about.
+ */
+export function writableLocaleCodes(doc: GetCourseDocument | undefined | null): Set<string> {
+  const codes = new Set<string>();
+  const def = defaultLocaleOf(doc);
+  if (def) codes.add(def);
+  for (const row of stackLocales(doc)) {
+    const code = typeof row.locale === 'string' ? row.locale : '';
+    if (code) codes.add(code);
+  }
+  return codes;
 }
 
 /** Locale codes from a content/search listing row, default first (listing rows

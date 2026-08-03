@@ -10,7 +10,7 @@
 // newer than target row, or target row missing).
 
 import type { GetCourseDocument, L10nValue } from '@/shared/types/rise';
-import { defaultLocaleOf, stackLocales } from './stack';
+import { defaultLocaleOf, stackLocales, writableLocaleCodes } from './stack';
 import { isL10nRef } from './materialize';
 
 /** One (l10nId, locale) → value cell of the source tables. */
@@ -39,7 +39,8 @@ export interface L10nChange {
   l10nId: string;
   locale?: string;
   value?: L10nValue;
-  /** 'plain' | 'rich' | 'mediaRecord' — required on `add` (capture-observed). */
+  /** 'plain' | 'rich' | 'mediaRecord' | 'storyline' — required on `add`
+   *  (capture-observed; see valueTypeOf). */
   valueType?: string;
   /** The owning lesson, sent on `add` for lesson-scoped cells (capture-observed). */
   lessonId?: string;
@@ -47,7 +48,11 @@ export interface L10nChange {
 
 /** Capture-observed value types: bare strings are 'plain', HTML is 'rich',
  *  Storyline objects are 'storyline' (capture2aug §4.3b), other media objects
- *  are 'mediaRecord'. */
+ *  are 'mediaRecord'. NOTE the string plain/rich split is a HEURISTIC (how the
+ *  editor decides is uncaptured): rich cells in every capture are full HTML
+ *  (`<div…`/`<p…`), which this regex matches; a plain string containing a
+ *  bare `<` followed by a letter (e.g. "if a<b then stop") would misclassify
+ *  as rich. Revisit if a capture ever shows the editor's own rule. */
 export function valueTypeOf(value: L10nValue): 'plain' | 'rich' | 'mediaRecord' | 'storyline' {
   if (typeof value === 'string') {
     return /<[a-z!/]/i.test(value) ? 'rich' : 'plain';
@@ -63,8 +68,15 @@ export function storylineCells(doc: GetCourseDocument): L10nCell[] {
 }
 
 /**
- * All source cells, ordered default locale first (write-order invariant),
- * then the other locales in stack order. Values verbatim.
+ * All WRITABLE source cells, ordered default locale first (write-order
+ * invariant), then the other live locales in stack order. Values verbatim.
+ *
+ * Only locales the target can actually have are included (default + live
+ * rows): the conversion creates exactly those, so cells for an ARCHIVED
+ * (deletedAt) locale or a table with no locale row at all have nowhere to go —
+ * writing them would send UPDATE_L10N_BATCH for a locale the target course
+ * doesn't know (untested server behavior). Those tables are surfaced by
+ * `orphanLocaleTables` and flagged by the planner, never shipped silently.
  */
 export function collectCells(doc: GetCourseDocument): L10nCell[] {
   const tables = doc.l10n?.translations ?? {};
@@ -74,10 +86,6 @@ export function collectCells(doc: GetCourseDocument): L10nCell[] {
     ...stackLocales(doc)
       .map((l) => String(l.locale ?? ''))
       .filter((c) => c && c !== def && tables[c]),
-    // tables for locales missing a locale row (defensive): still copy them
-    ...Object.keys(tables).filter(
-      (c) => c !== def && !stackLocales(doc).some((l) => l.locale === c),
-    ),
   ];
   const cells: L10nCell[] = [];
   for (const locale of order) {
@@ -86,6 +94,32 @@ export function collectCells(doc: GetCourseDocument): L10nCell[] {
     }
   }
   return cells;
+}
+
+/**
+ * Translation tables the import CANNOT transfer: locales whose row is archived
+ * (`deletedAt` set — the language is not recreated on the target) or whose
+ * table has no locale row at all. The planner flags each one loudly so the
+ * operator knows that language's data stayed behind (restore the language at
+ * the source and re-export to migrate it).
+ */
+export function orphanLocaleTables(
+  doc: GetCourseDocument,
+): { locale: string; reason: 'archived' | 'no-locale-row'; cells: number }[] {
+  const tables = doc.l10n?.translations ?? {};
+  const writable = writableLocaleCodes(doc);
+  const rows = doc.l10n?.locales ?? [];
+  const out: { locale: string; reason: 'archived' | 'no-locale-row'; cells: number }[] = [];
+  for (const [locale, table] of Object.entries(tables)) {
+    if (writable.has(locale)) continue;
+    const hasRow = rows.some((l) => l.locale === locale);
+    out.push({
+      locale,
+      reason: hasRow ? 'archived' : 'no-locale-row',
+      cells: Object.keys(table ?? {}).length,
+    });
+  }
+  return out;
 }
 
 /** Map l10nId → owning lesson id, from the refs found inside each lesson's
@@ -124,26 +158,39 @@ export function courseRefMap(
 ): { map: Map<string, string>; unmatched: { path: string; l10nId: string }[] } {
   const map = new Map<string, string>();
   const unmatched: { path: string; l10nId: string }[] = [];
+  // Source subtree with no target counterpart: every ref inside (objects AND
+  // arrays) is unmatched — silence here would violate loud failure.
+  const collect = (node: unknown, p: string): void => {
+    if (isL10nRef(node)) {
+      unmatched.push({ path: p, l10nId: node.l10nId });
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((v, i) => collect(v, `${p}[${i}]`));
+      return;
+    }
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      collect(v, `${p}.${k}`);
+    }
+  };
   const walk = (s: unknown, t: unknown, path: string): void => {
     if (isL10nRef(s)) {
       if (isL10nRef(t)) map.set(s.l10nId, t.l10nId);
       else unmatched.push({ path, l10nId: s.l10nId });
       return;
     }
-    if (s === null || typeof s !== 'object' || Array.isArray(s)) return;
+    if (s === null || typeof s !== 'object') return;
+    if (Array.isArray(s)) {
+      // Pair array elements positionally; source overhang is unmatched.
+      const ta = Array.isArray(t) ? t : [];
+      s.forEach((v, i) => {
+        if (i < ta.length) walk(v, ta[i], `${path}[${i}]`);
+        else collect(v, `${path}[${i}]`);
+      });
+      return;
+    }
     if (t === null || typeof t !== 'object' || Array.isArray(t)) {
-      // Source object subtree absent on target: any refs inside are unmatched.
-      const collect = (node: unknown, p: string): void => {
-        if (isL10nRef(node)) {
-          unmatched.push({ path: p, l10nId: node.l10nId });
-          return;
-        }
-        if (node && typeof node === 'object' && !Array.isArray(node)) {
-          for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-            collect(v, `${p}.${k}`);
-          }
-        }
-      };
       collect(s, path);
       return;
     }
@@ -284,9 +331,14 @@ export function defaultOnlyCells(doc: GetCourseDocument): Record<
   const tables = doc.l10n?.translations ?? {};
   const def = defaultLocaleOf(doc) ?? '';
   const defTable = tables[def] ?? {};
+  const writable = writableLocaleCodes(doc);
   const out: Record<string, { total: number; media: number; text: number }> = {};
   for (const [locale, table] of Object.entries(tables)) {
     if (locale === def) continue;
+    // Rise's badge counts pending cells per LIVE stack item only — archived
+    // locales (and row-less tables) are not languages on the target, so
+    // counting them would make the prediction disagree with Rise every time.
+    if (!writable.has(locale)) continue;
     let media = 0;
     let text = 0;
     for (const [id, value] of Object.entries(defTable)) {

@@ -10,16 +10,18 @@ import { courseImageKind } from './builtin-assets';
 import {
   cellKey,
   collectCells,
-  defaultLocaleOf,
   formalityGroups,
   inlineTranslationChanges,
   isL10nRef,
   isLocalizedStack,
   materializeLocale,
+  orphanLocaleTables,
   planCellWrites,
+  requireDefaultLocale,
   resolveStackTitle,
   stackLocales,
   storylineCells,
+  writableLocaleCodes,
 } from '@/core/l10n';
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 
@@ -347,6 +349,20 @@ export type PlanStep =
       l10nId: string;
       locales: string[];
       title?: string;
+      summary: string;
+    }
+  | {
+      // A source translation table exists for a locale the target can never
+      // have: the locale row is ARCHIVED (deletedAt — convert-stack recreates
+      // live languages only) or the table has no locale row at all. Writing
+      // its cells would send UPDATE_L10N_BATCH for a locale unknown to the
+      // target course (untested server behavior), so the data is skipped and
+      // flagged loudly instead — restore the language at the source and
+      // re-export to migrate it.
+      kind: 'flag-l10n-locale';
+      locale: string;
+      reason: 'archived' | 'no-locale-row';
+      cells: number;
       summary: string;
     }
   | {
@@ -956,7 +972,9 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   } else {
     // ------ STACK SEQUENCE (docs/rise-multilang.md §"import algorithm") ------
     const doc = input.course;
-    const defLocale = defaultLocaleOf(doc) ?? 'en-us';
+    // Loud failure: a stack whose default locale can't be resolved is malformed
+    // — silently guessing would break the write-order invariant for every cell.
+    const defLocale = requireDefaultLocale(doc);
     const locales = stackLocales(doc);
     const localeCodes = locales
       .map((l) => String(l.locale ?? ''))
@@ -1020,11 +1038,30 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: `Wait for the stack shape (${localeCodes.join(', ')}) to finish`,
     });
 
+    // Tables for locales the target can never have (archived rows / row-less
+    // tables) are not transferable — skipped from every write and flagged
+    // loudly so nothing leaves the archive unseen.
+    const orphanLocales = orphanLocaleTables(doc);
+    for (const o of orphanLocales) {
+      steps.push({
+        kind: 'flag-l10n-locale',
+        locale: o.locale,
+        reason: o.reason,
+        cells: o.cells,
+        summary: `⚠ ${o.cells} cell(s) for locale "${o.locale}" cannot be migrated (${o.reason === 'archived' ? 'language is archived at the source' : 'no locale row'}) — restore the language and re-export to migrate it`,
+      });
+    }
+    const writableCodes = writableLocaleCodes(doc);
+
     // 3e. Table-only media (the bulk of a stack's media lives in the l10n
     // tables, incl. per-language overrides) — upload BEFORE any cell write so
     // values carry remapped keys. Block-embedded media (e.g. attachments) rides
-    // the normal per-block loop below.
-    const tables = doc.l10n?.translations ?? {};
+    // the normal per-block loop below. Orphan-locale tables are excluded: their
+    // cells are never written, so their media would be unreferenced uploads.
+    const allTables = doc.l10n?.translations ?? {};
+    const tables = Object.fromEntries(
+      Object.entries(allTables).filter(([code]) => writableCodes.has(code)),
+    );
     for (const [locale, table] of Object.entries(tables)) {
       for (const ak of collectAssetKeys(table, sourceCourseId)) {
         if (handledKeys.has(ak.key)) continue;

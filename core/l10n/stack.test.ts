@@ -4,7 +4,9 @@ import type { GetCourseDocument, SearchResultItem } from '@/shared/types/rise';
 import {
   isLocalizedStack,
   defaultLocaleOf,
+  requireDefaultLocale,
   stackLocales,
+  writableLocaleCodes,
   listingLocales,
   formatLocales,
   archiveIsStaleForLocales,
@@ -61,6 +63,20 @@ describe('defaultLocaleOf / stackLocales', () => {
     });
     const codes = stackLocales(withArchived).map((l) => l.locale);
     expect(codes).toEqual(['en-us', 'ar', 'ru']);
+    // the writable set mirrors it (default + live rows, archived excluded)
+    expect(writableLocaleCodes(withArchived)).toEqual(new Set(['en-us', 'ar', 'ru']));
+  });
+
+  it('requireDefaultLocale throws loudly on a malformed stack', () => {
+    expect(requireDefaultLocale(doc)).toBe('en-us');
+    // No defaultLocale and an unresolvable defaultLocaleId: guessing would
+    // break the write-order invariant, so this must abort the course.
+    expect(() =>
+      requireDefaultLocale({
+        course: { defaultLocaleId: 'row-ghost' },
+        l10n: { locales: [{ id: 'row-1', locale: 'fr-fr' }], translations: {} },
+      }),
+    ).toThrow(/no resolvable default locale/);
   });
 });
 
