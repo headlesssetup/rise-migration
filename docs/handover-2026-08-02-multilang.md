@@ -1,5 +1,14 @@
 # Handover — multi-language stacks (session 2026-08-02)
 
+> **SUPERSEDED IN PART by the 2026-08-03 verification pass (v0.6.6)** — see
+> `docs/STATUS.md` §"Verification pass". That pass re-verified this session's
+> work against the raw captures (verdict: genuine; 3 doc errors corrected in
+> `rise-multilang.md`) and FIXED, among others: gap 6 below (the real
+> `available-languages` shape — the preflight now works), the storyline
+> blockId-only keying, archived-locale table leaks, and surviving placeholder
+> cells (now surfaced, resolution policy still pending). §1 below (the badge
+> decision) is UNCHANGED and still awaits the operator test.
+
 Branch `claude/multilang-v0.6.0`, 15 commits ahead of `master`, **not pushed**.
 `v0.6.5`, 599 tests pass, `tsc` clean, builds (manifest 0.6.5). Working tree clean.
 

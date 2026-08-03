@@ -175,7 +175,7 @@ export function createLesson(args: {
   position: number;
   /** Plain string on a monolingual course. On a stack, an {l10nId} ref object —
    *  the editor sends the ref plus a matching `translationChanges` add
-   *  (capture-confirmed, docs/rise-multilang.md §4.4). */
+   *  (capture-confirmed, docs/rise-multilang.md §4.2). */
   title: string | { l10nId: string };
   type?: string | null;
   /** Stack only: inline default-locale cell adds riding the create
@@ -232,7 +232,7 @@ export function createBlocks(args: {
   blocks: unknown[];
   /** Stack only: inline default-locale cell adds for the {l10nId} refs inside
    *  `blocks` ({action:'add', l10nId, lessonId, locale, value, valueType} —
-   *  capture-confirmed, docs/rise-multilang.md §4.4). */
+   *  capture-confirmed, docs/rise-multilang.md §4.2). */
   translationChanges?: unknown[];
 }): WriteSpec {
   return ducks('lessons', 'CREATE_BLOCKS', {
@@ -519,9 +519,6 @@ export function createTranslations(
   };
 }
 
-/** GET /manage/api/content/{id}/translations — the stack's state: stackItems[]
- *  with per-language status (queued→preparing→translating→applying→finalizing→
- *  complete). 204/empty body = not a stack. Used to poll the conversion. */
 /** GET one question bank (questions inline) — the bank import's read-back. */
 export function getQuestionBank(bankId: string): WriteSpec {
   return {
@@ -531,6 +528,11 @@ export function getQuestionBank(bankId: string): WriteSpec {
   };
 }
 
+/** GET /manage/api/content/{id}/translations — the stack's state: stackItems[]
+ *  with per-language status (queued→preparing→translating→applying→finalizing→
+ *  complete). NOT a stack = 200 with stackItems:[] + defaultLocaleId:null
+ *  (capture-verified across all four captures; no 204 was ever observed).
+ *  Used to poll the conversion. */
 export function getTranslations(courseId: string): WriteSpec {
   return {
     url: `/manage/api/content/${encodeURIComponent(courseId)}/translations`,

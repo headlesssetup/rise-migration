@@ -448,7 +448,6 @@ export function courseMediaImageKey(img: unknown): string | null {
   return typeof k === 'string' && /^rise\/(?:courses|questionBanks)\//.test(k) ? k : null;
 }
 
-/** Is this block a Storyline / Mighty block (conditional, flagged manual)? */
 /** The l10n cell id behind a STACK storyline block's `items[0].media` ref. */
 function storylineCellId(b: Block): string | null {
   const items = Array.isArray(b.items) ? b.items : [];
@@ -459,6 +458,8 @@ function storylineCellId(b: Block): string | null {
   return isL10nRef(media) ? media.l10nId : null;
 }
 
+/** Is this block a Storyline / Mighty block (attach from a staged package, else
+ *  flagged for manual handling)? */
 function isStoryline(b: Block): boolean {
   return STORYLINE.has(`${b.family}/${b.variant}`) || b.variant === 'storyline';
 }

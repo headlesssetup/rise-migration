@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-08-02 (v0.6.0 — multi-language stacks: export, inventory, full import). Keep this current at each phase boundary._
+_Last updated: 2026-08-03 (v0.6.6 — independent verification pass over the multi-language work: capture re-verification + fix set). Keep this current at each phase boundary._
 
 **Session handover (2026-08-02, multi-language):**
 `docs/handover-2026-08-02-multilang.md` — what shipped, the ONE open decision
@@ -8,14 +8,58 @@ _Last updated: 2026-08-02 (v0.6.0 — multi-language stacks: export, inventory, 
 updates-run is the only remaining route pending a 1-minute operator test), the
 gap list, and the leftover test-run state to clean up.
 
+## Verification pass (2026-08-03, v0.6.6)
+
+The v0.6.0–0.6.5 multilang work was independently re-verified against the raw
+mitm captures (mitmdump re-extraction) plus a four-way code review. Verdict:
+**the protocol doc and code are genuine** — 10 of 12 capture claims confirmed
+byte-for-byte (incl. the two-language Storyline attach and the pending-updates
+shape). Three doc errors found and corrected in `rise-multilang.md` (each marked
+"capture-verified 2026-08-03"): not-a-stack is **200 + `stackItems:[]`**, never
+204; `available-languages` uses **`targetLangsIndexedBySourceLang`** (no flat
+`targetLangs`) and the subscription id lives at
+`subscription.subscription_id` — this was the real cause of the "preflight
+sanity check never runs" gap, now FIXED and functional; the l10n lock's write
+transport is NOT capture-proven (only `GET_LOCKS` socket broadcasts show it).
+
+Fixes shipped in the same pass (all with regression tests; 615 tests):
+- **Storyline chain joins on `lessonId+blockId`** (detect dedupe, manifest
+  maps, plan lookups) — blockId-only keying collapsed same-id blocks across
+  lessons (the v0.6.3 class) and silently attached one package to both.
+- **Archived (`deletedAt`) / row-less locale tables are never written** —
+  skipped + `flag-l10n-locale`; badge prediction counts live locales only.
+- **Read-back honesty**: surviving conversion placeholders (AI'd
+  `!importing:`/`.` in fallback locales) surfaced as `placeholder-cell` +
+  `l10n-placeholder` flag (status-neutral, policy pending — no per-locale
+  delete exists); tolerated absences scoped to ANNOUNCED ones only (an
+  attached storyline cell missing on read-back fails again); structural/
+  course-field parity failures now mark `partial` (course-settings gap +
+  unavoidable default-cover ride the EXPECTED bucket).
+- **Executor**: captured attach sequence mirrored exactly (2nd language =
+  bare `update`); Stop between convert/await no longer risks clobbering the
+  title ref; unmatched-ref cells not shipped as orphans; draw-from-bank bind
+  loud-fails on missing block meta.
+- **Plan**: junk cleanup never deletes a cell the target doc references
+  (dangling-cover); duplicate upload steps deduped; section-lesson inlineSkip
+  inversion fixed.
+- **Built-in probe covers the whole doc** (blocks/theme/tables), matching the
+  CLAUDE.md invariant — was course images only.
+- Misc: `[i/N preflight]` progress, estimate splits missing vs unreadable,
+  no US-host fallback for the storyline probe on unknown plane, symmetric
+  badge-prediction warning, comment rot.
+
+Still open (unchanged): the §6b badge decision (operator test pending), course
+settings migration (highest-value next), `TOGGLE_LOCALE_SELECTOR` payload,
+monolingual course-level label sets, glossaries.
+
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
 `docs/rise-question-banks.md`, `docs/rise-folders.md`.
 
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
-> changed a behavior they describe, this top section wins. Current: **v0.6.1**,
-> **599 Vitest tests**, `compile` / `test` green.
+> changed a behavior they describe, this top section wins. Current: **v0.6.6**,
+> **615 Vitest tests**, `compile` / `test` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 

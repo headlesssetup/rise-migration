@@ -120,10 +120,16 @@ Facts that drive the migration design:
 ## 3. Stack metadata (manage/api)
 
 `GET /manage/api/content/{courseId}/translations` — the stack state (the
-"Manage languages" screen at `/manage/locales/{courseId}` polls it). **204 /
-empty body = not a stack.** 200 body: `authorPermissions` (incl. the `l10n:*`
-family), `type:"single-course"` (even for stacks), `defaultLocaleId`,
-`canPublishToReview`, `reviewStackExists`, `glossaries`, and `stackItems[]`:
+"Manage languages" screen at `/manage/locales/{courseId}` polls it). **NOT a
+stack = 200 with `stackItems: []` + `defaultLocaleId: null`** (capture-verified
+2026-08-03 across all four captures: the 99 captured `/translations*` responses
+are only 200/304 — a 204 was never observed; an earlier revision of this doc
+claimed "204/empty = not a stack", which was wrong). 200 body:
+`authorPermissions` (incl. the `l10n:*` family), `type:"single-course"` (even
+for stacks), `defaultLocaleId`, `canPublishToReview`, `reviewStackExists`,
+`glossaries`, `srcCourseId`/`srcCourseTitle`/`srcCourseUpdatedAt`/
+`srcCourseContentUpdatedAt`/`srcCourseLabelSetLocale`/`srcCourseRoleId`,
+`shareInfo`, `version`, `hasImportedReviewChanges`, and `stackItems[]`:
 `{id, locale, title, status, formality, translateAction, glossary*,
 reviewImportStatus, hasTranslations, pendingChangesCount, deletedAt, …}` with
 status lifecycle `queued → preparing → translating → applying → finalizing →
@@ -143,11 +149,21 @@ Related:
   off it (see the pending rule, §2).
 - `GET /manage/api/translations/recent` → `{"recentTranslations":["ar","lv"]}`.
 - `GET /manage/api/translations/language-code-metadata` — the code table.
-- `GET /manage/api/subscription/{subId}/available-languages` —
-  `{planInfo:{creditLimit, creditsUsed, remainingCredits, translationTier},
-  languagesInfo:{sourceLangs:[…], targetLangs:[{targetLang,…}], formalities…}}`.
-  Informational (localization is free); the import uses it only as a pre-write
-  locale-code sanity check.
+- `GET /manage/api/subscription` → `{features, subscription:{subscription_id,
+  plan, status, …}, ai, localization:{status, canTranslateContent, …}, reach}` —
+  the id feeding the call below is **`subscription.subscription_id`** (an
+  earlier revision guessed a top-level `id`, which is why the preflight parse
+  failed live).
+- `GET /manage/api/subscription/{subId}/available-languages` →
+  `{subscriptionId, authorId, planInfo:{creditLimit, creditsUsed, plan,
+  remainingCredits, status, termEnd, termStart, translationTier},
+  languagesInfo:{sourceLangs:[…], targetLangsIndexedBySourceLang:{<src>:
+  [{targetLang, supportsGlossary, supportsFormality, experimental, rightToLeft,
+  provider}, …]}}}` (capture-verified 2026-08-03 — there is **no flat
+  `targetLangs` list and no `formalities` field**; targets are indexed per
+  source language, which is also the right place to validate formality
+  support). Informational (localization is free); the import uses it as a
+  pre-write locale-code sanity check keyed by the stack's default locale.
 
 ## 4. Writes
 
@@ -195,9 +211,14 @@ POST /api/rise-runtime/ducks/rise/l10n/UPDATE_L10N_BATCH
 
 Object (media) values are accepted (per-locale overrides carry
 `translationOverride:true`). Every captured envelope is single-locale — the
-migrator keeps that. Editing a translated string holds a lock
-`l10n/{courseId}/{l10nId}` (normal PUT_LOCK/DEL_LOCK); success mirrors on the
-socket as `UPDATE_L10N_BATCH_SUCCESS`.
+migrator keeps that. While a translated string is edited, a lock named
+`l10n/{courseId}/{l10nId}` is visible in the conveyor socket's
+`rise/locks/GET_LOCKS` broadcasts — but **its write transport is NOT
+capture-proven**: no captured HTTP `PUT_LOCK`/`DEL_LOCK` ever carries an
+`l10n/…` id, and no client socket frame creates it (byte-level hunt,
+2026-08-03; an earlier revision guessed "normal PUT_LOCK/DEL_LOCK"). The
+migrator never takes l10n locks, so this is documentation-only. Success
+mirrors on the socket as `UPDATE_L10N_BATCH_SUCCESS`.
 
 ### 4.3b Storyline blocks in a stack — per-language attach (capture2aug)
 
@@ -225,8 +246,10 @@ Storyline package**. The editor's attach sequence per language is:
 
 Attaching a DIFFERENT package for another language repeats steps 2 + 4 only
 (same block, same l10nId, `action:"update"`, `locale:"ru"`, a new
-`contentPrefix`/`leaf`/`meta`) — no block write. So per-language Storyline is
-exactly the image-override pattern, with `valueType:"storyline"` and one extra
+`contentPrefix`/`leaf`/`meta`) — no block write, and the update change carries
+ONLY `{action, l10nId, locale, value}` (**no `lessonId`, no `valueType`** —
+byte-verified 2026-08-03; only the first language's `add` has them). So
+per-language Storyline is exactly the image-override pattern, with one extra
 `copy_review_item` per distinct package.
 
 **Prerequisite (operator-confirmed).** The export side needs Rise's web export,
@@ -298,7 +321,8 @@ carries `copyTranslationData` (duplicate WITH translations) and `ejectLocaleId`
 
 ### 4.6 XLIFF (NON-stack courses only)
 
-`GET /api/rise-runtime/export_course_translation/{courseId}` → XLIFF 1.2 body
+`GET /api/rise-runtime/export_course_translation/{courseId}?srcLang=en-us` →
+XLIFF 1.2 body
 (file per course + per lesson; `<g>` wraps HTML). Import: `GET_YURL
 {assetPath:"translations/", filename:"x.xlf"}` → presigned S3 PUT → ducks
 `rise/courses/IMPORT_TRANSLATION {id, key}` → replaces the course's text in
@@ -329,8 +353,16 @@ whole stack (language switcher in Review); poll `POST
 ## 6. Import algorithm (implemented; core/import plan+executor stack branch)
 
 0. **Preflight** (orchestrator, zero writes): every non-default source locale
-   code must appear in the target's `available-languages.targetLangs`
-   (sanity check only; a fetch failure downgrades to a warning).
+   code must appear in the target's
+   `available-languages.targetLangsIndexedBySourceLang[<default locale>]`,
+   and the default locale itself must be a supported SOURCE language (sanity
+   check only; a fetch failure downgrades to a warning). Tables for a locale
+   the target can never have — an ARCHIVED (`deletedAt`) row, or a table with
+   no locale row — are skipped from every write and flagged
+   (`flag-l10n-locale`): convert-stack recreates live languages only, and
+   writing cells for a locale unknown to the target is untested server
+   behavior. The badge prediction (`defaultOnlyCells`) counts live locales
+   only, for the same reason.
 1. Shell (`POST /manage/api/content` + GET_COURSE handshake) → **placeholder
    lesson** (plain-string title = source lesson 1's default-locale title; it IS
    the future lesson 1) → provisional `!importing:` title → placeholder
@@ -376,9 +408,25 @@ whole stack (language switcher in Review); poll `POST
 
 **Read-back**: unfiltered `findForeignMediaKeys` over the target GET_COURSE
 (covers tables) + `verifyL10nParity` (locale sets; cell-by-cell equality modulo
-media tokens/volatile fields; extra-cell detection) + per-language
-`pendingChangesCount` recorded in the report with the standing warning. Any
-divergence → the course is `partial`, never `imported`.
+media tokens/volatile fields; extra-cell detection; tolerated absences are ONLY
+the announced ones — flagged storyline cells and unmatched course refs) +
+structural/course-field parity + per-language `pendingChangesCount` recorded in
+the report with the standing warning. Any unexpected divergence → the course is
+`partial`, never `imported`; known-gap divergences (course settings, the random
+default cover on a no-cover source) ride the EXPECTED bucket.
+
+**Known artifact — surviving placeholder cells.** The conversion AI-translates
+the provisional `!importing:` title / `.` description / placeholder lesson-1
+title into EVERY locale, and step 9 overwrites only the locales the SOURCE
+holds — a locale the source serves by default-language fallback keeps the AI'd
+placeholder VISIBLY (the captured cell-delete removes an id across ALL locales;
+there is no per-locale delete to clean it with). The read-back surfaces these
+as `placeholder-cell` entries + an `l10n-placeholder` manual flag (report +
+log), status-neutral until the resolution policy is decided (overwrite with the
+default-locale value — a scoped form of mirroring — vs. hand-fix per language;
+NOTE an AI updates-run, §6b, would also overwrite them since the clean default
+row is newer). Rare in practice: a source whose own AI run processed its
+title/description has rows in every locale.
 
 **Resume** policy is unchanged (course granularity): a stack that failed
 mid-build keeps its `!importing:`/`!unfinished:` marker and is re-imported from
