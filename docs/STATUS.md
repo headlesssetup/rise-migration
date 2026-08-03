@@ -52,6 +52,46 @@ Still open (unchanged): the §6b badge decision (operator test pending), course
 settings migration (highest-value next), `TOGGLE_LOCALE_SELECTOR` payload,
 monolingual course-level label sets, glossaries.
 
+### Operator ideas 2026-08-03 (recorded, NOT built — decide after the 0.6.6 live test)
+
+Sergey's three ideas for the placeholder-junk / badge problem, with analysis:
+
+1. **Delete the temporary cells (all languages) and recreate clean ones.**
+   Works only where ref re-pointing is captured (blocks/lessons). The junk
+   lives in COURSE-level cells (title/description; + lesson-1 title): their
+   refs are minted server-side by the conversion, deleting a cell across all
+   locales leaves the ref dangling, and no captured envelope re-points
+   `course.title`/`course.description` at a new ref. Partial variant that DOES
+   work: delete the placeholder lesson post-conversion and create lesson 1
+   fresh like lessons 2+ (kills the lesson-1-title junk; needs a captured
+   DELETE-lesson envelope check). Title/description junk remains.
+2. **Build the FULL course in the default language first, convert THEN, and
+   overwrite the AI target rows with the source's proofread rows.** The
+   strongest idea — it replays the SOURCE's own history (full course → AI run →
+   human proofreading), so it kills BOTH problems: no placeholders exist, and
+   the badge goes ~0 **using only the capture-proven initial-run behavior**
+   (translateAll stamps media cells without creating target rows) — no
+   unproven incremental-run assumption. Default rows are never rewritten
+   post-conversion; only target rows are overwritten (newer-than-default ⇒
+   quiet). Costs/risks: a substantial plan/executor rework (drop the
+   placeholder machinery + source-id-verbatim cells; pair source↔target refs
+   by structural path after conversion — block ids are ours and survive
+   conversion in place); AI text PERSISTS in default-only TEXT cells (source
+   falls back to the default language there; ~4 cells on the test course —
+   same caveat as the updates-run variant B); full-course conversion
+   time/credit behavior for LARGE courses unverified (capture_31july converted
+   a real course fine; minimal conversions were 15–70 s/language).
+3. **Automate the "retype by hand" fix** — correct, this is exactly option (a)
+   (overwrite the junk rows via UPDATE_L10N_BATCH with the source's
+   default-locale value): trivially buildable, fixes the junk only (not the
+   badge), and is the scoped form of mirroring (those few cells stop following
+   later default-language edits).
+
+Decision path: run the 0.6.6 live test + the §6b badge click (mitm on) first.
+If the updates-run stamps media → the cheap add-on route fixes badge AND junk
+on the current pipeline; if not → idea 2 is the principled long-term shape and
+idea 3 the quick junk-only patch.
+
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
 `docs/rise-question-banks.md`, `docs/rise-folders.md`.
