@@ -64,9 +64,16 @@ function mockBackground(pinOk: boolean): void {
       case 'SEARCH_COURSES':
         return { type: 'SEARCH_RESULT', result: { ok: true, status: 200, data: {} as never } };
       case 'GET_COURSE':
+        // Faithful read-back (title included): structural parity divergences
+        // now downgrade a course to `partial`, so an unfaithful mock would
+        // fail the status assertion — correctly.
         return {
           type: 'COURSE_RESULT',
-          result: { ok: true, status: 200, data: { raw: '{"course":{"id":"newC1"},"lessons":[]}' } },
+          result: {
+            ok: true,
+            status: 200,
+            data: { raw: '{"course":{"id":"newC1","title":"Geo 101"},"lessons":[]}' },
+          },
         };
       case 'RELAY_WRITE':
         // Serves both the create (`id`) and its GET_COURSE handshake (`course`).

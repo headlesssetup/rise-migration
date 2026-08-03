@@ -152,7 +152,7 @@ const COURSE_FIELDS = [
   'lessonHeaderImage',
   'blockBackgroundImage',
   'overlayNavigationImage',
-  // Settings scalars (not yet migrated — divergences here are real):
+  // Settings scalars — see COURSE_SETTINGS_FIELDS below:
   'sidebarMode',
   'navigationMode',
   'showLessonCount',
@@ -165,6 +165,26 @@ const COURSE_FIELDS = [
   'color',
   'aiTutorConfig',
 ] as const;
+
+/** Course settings the importer does NOT migrate yet (documented gap — the
+ *  write is captured, `UPDATE_COURSE_DEBOUNCE {id, settings}`, just not built).
+ *  Divergences here are verified and REPORTED, but routed to the expected
+ *  bucket: they are a known limitation of the tool, not an unexpected fidelity
+ *  failure, so they must not mark an otherwise-faithful course `partial`.
+ *  Remove a field from this list the moment its migration ships. */
+const COURSE_SETTINGS_FIELDS: ReadonlySet<string> = new Set([
+  'sidebarMode',
+  'navigationMode',
+  'showLessonCount',
+  'showNavigationButtons',
+  'allowSearch',
+  'allowCopy',
+  'animateBlockEntrance',
+  'markComplete',
+  'enableVideoPlaybackSpeed',
+  'color',
+  'aiTutorConfig',
+]);
 
 /** Empty-equivalence for course fields: a fresh course carries `{}`/null/'' in
  *  slots the source may hold as any OTHER of those — none is a divergence. An
@@ -196,17 +216,21 @@ function compareCourseFields(
     const b = canonicalize(tv);
     if (JSON.stringify(a) === JSON.stringify(b)) continue;
     const raw = JSON.stringify(sv ?? null);
-    const isExpected = flaggedKeys.some((k) => raw.includes(k));
+    const isSettingsGap = COURSE_SETTINGS_FIELDS.has(f);
+    const isExpected = isSettingsGap || flaggedKeys.some((k) => raw.includes(k));
     const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
     collectLeafDiffs(a, b, f, diffs);
     const detailPaths = [...diffs.changed, ...diffs.mediaMissing];
+    const detail =
+      detailPaths.length > 0
+        ? `${detailPaths.length} field(s) differ: ${detailPaths.slice(0, 6).join(', ')}${detailPaths.length > 6 ? ', …' : ''}`
+        : `source ${JSON.stringify(a)?.slice(0, 80)} → target ${JSON.stringify(b)?.slice(0, 80)}`;
     (isExpected ? expected : issues).push({
       kind: 'course-field-changed',
       path: `course.${f}`,
-      detail:
-        detailPaths.length > 0
-          ? `${detailPaths.length} field(s) differ: ${detailPaths.slice(0, 6).join(', ')}${detailPaths.length > 6 ? ', …' : ''}`
-          : `source ${JSON.stringify(a)?.slice(0, 80)} → target ${JSON.stringify(b)?.slice(0, 80)}`,
+      detail: isSettingsGap
+        ? `${detail} (course settings are not migrated yet — known gap; set manually)`
+        : detail,
       ...(isExpected ? { expected: true } : {}),
     });
   }
@@ -414,6 +438,7 @@ export type L10nParityKind =
   | 'missing-cell'
   | 'cell-changed'
   | 'extra-cell'
+  | 'placeholder-cell'
   | 'labelset-binding';
 
 export interface L10nParityIssue {
@@ -428,6 +453,18 @@ export interface L10nParityReport {
    *  import deliberately does not copy) — reported, but they never fail the
    *  course. Mirrors ParityReport.expectedDivergences. */
   expected?: L10nParityIssue[];
+  /** Conversion-era placeholder rows that survive in locales where the SOURCE
+   *  holds no row (`placeholder-cell`): the AI conversion translated the
+   *  `!importing:` title / `.` description / placeholder lesson-1 title into
+   *  EVERY locale, and `set-stack-titles` overwrites only the locales the
+   *  source actually has — the rest keep the AI'd placeholder text VISIBLY
+   *  (the source falls back to its default language there; the target shows
+   *  the junk instead). The captured cell-delete removes an id across ALL
+   *  locales, so there is no per-locale delete to clean these with — how to
+   *  resolve them (overwrite with the default-locale value vs. leave + fix by
+   *  hand) is an OPEN operator decision; until then they are surfaced here
+   *  and flagged, never hidden. */
+  placeholderJunk?: L10nParityIssue[];
   ok: boolean;
   locales: { source: string[]; target: string[] };
   cells: { source: number; target: number; compared: number };
@@ -545,11 +582,30 @@ export function verifyL10nParity(
   for (const table of Object.values(srcTables)) {
     for (const id of Object.keys(table)) srcIds.add(id);
   }
+  // Inverse of idMap, to trace a mapped target id back to its source id.
+  const srcIdByTarget = new Map<string, string>();
+  for (const [s, t] of idMap) srcIdByTarget.set(t, s);
+  const placeholderJunk: L10nParityIssue[] = [];
   for (const [code, table] of Object.entries(tgtTables)) {
-    for (const id of Object.keys(table)) {
+    for (const [id, tgtValue] of Object.entries(table)) {
       targetCells++;
       if (!srcIds.has(id) && !mappedTargets.has(id)) {
         issues.push({ kind: 'extra-cell', locale: code, l10nId: id });
+        continue;
+      }
+      // A known id, but in a locale the SOURCE has no row for: a conversion-era
+      // placeholder translation (AI'd "!importing:" title / "." description).
+      // The source renders that locale via default-locale fallback; the target
+      // shows this junk instead. Surfaced separately (see the report field's
+      // doc) — there is no captured per-locale delete to clean it with.
+      const srcId = srcIdByTarget.get(id) ?? (srcIds.has(id) ? id : undefined);
+      if (srcId !== undefined && srcTables[code]?.[srcId] === undefined) {
+        placeholderJunk.push({
+          kind: 'placeholder-cell',
+          locale: code,
+          l10nId: id,
+          detail: `target holds ${JSON.stringify(tgtValue).slice(0, 80)}; source falls back to its default language here`,
+        });
       }
     }
   }
@@ -560,6 +616,7 @@ export function verifyL10nParity(
     cells: { source: sourceCells, target: targetCells, compared },
     issues,
     ...(expected.length ? { expected } : {}),
+    ...(placeholderJunk.length ? { placeholderJunk } : {}),
   };
 }
 
@@ -570,6 +627,18 @@ export function l10nParityToMarkdown(r: L10nParityReport): string {
     lines.push(
       `- ${r.expected.length} expected absence(s) (flagged storyline cells — not copied by design)`,
     );
+  }
+  if (r.placeholderJunk?.length) {
+    lines.push(
+      `- **⚠ ${r.placeholderJunk.length} placeholder cell(s) survive** in languages the source serves by fallback: ` +
+        'the conversion AI-translated the provisional title/description into every language, and only the ' +
+        'languages the source actually holds were overwritten. Those languages VISIBLY show the placeholder ' +
+        'text (the source falls back to its default language there). Fix each by hand in the editor, or wait ' +
+        'for the pending tooling decision (no per-locale cell delete exists in the captured API).',
+    );
+    for (const x of r.placeholderJunk.slice(0, 15)) {
+      lines.push(`  - [${x.locale}] ${x.l10nId}${x.detail ? ` — ${x.detail}` : ''}`);
+    }
   }
   lines.push(
     `- Languages: ${r.locales.source.join(', ') || '—'} (source) / ${r.locales.target.join(', ') || '—'} (target)`,

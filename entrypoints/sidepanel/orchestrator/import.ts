@@ -13,7 +13,6 @@ import {
   defaultLocaleOf,
   defaultOnlyCells,
   isLocalizedStack,
-  storylineCells,
   resolveStackTitle,
   stackLocales,
 } from '@/core/l10n';
@@ -942,12 +941,46 @@ export async function runImport(
         // (locale sets, per-locale values modulo media remap) and read back the
         // per-language pending counts for the report.
         if (courseIsStack) {
-          // Flagged storyline cells are deliberately NOT copied — their absence
-          // on the target is announced, not a failure (docs/rise-multilang.md §4.3b).
-          const toleratedMissing = new Set(
-            storylineCells(course).map((c) => `${c.l10nId} ${c.locale}`),
-          );
+          // ONLY the FLAGGED storyline cells (flag-l10n-storyline: no staged
+          // package for that language) are deliberately not copied — their
+          // absence is announced, not a failure (docs/rise-multilang.md §4.3b).
+          // Cells the run ATTACHED are not tolerated: if an attached storyline
+          // cell is missing on read-back, the write was lost and that is a
+          // real divergence, not an expected absence.
+          const toleratedMissing = new Set<string>();
+          for (const s of steps) {
+            if (s.kind === 'flag-l10n-storyline') {
+              for (const loc of s.locales) toleratedMissing.add(`${s.l10nId} ${loc}`);
+            }
+          }
           l10nParity = verifyL10nParity(course, targetDoc, { toleratedMissing });
+          // Surviving conversion-era placeholder rows (locales the source
+          // serves by fallback): visible junk text — flag for manual work and
+          // warn loudly. Not a status-flipping failure YET: there is no
+          // captured per-locale delete, and the resolution policy (overwrite
+          // with default-locale values vs. hand-fix) is an open operator
+          // decision — see the report field's doc in core/import/verify.ts.
+          if (l10nParity.placeholderJunk?.length) {
+            const byLocale = new Map<string, number>();
+            for (const j of l10nParity.placeholderJunk) {
+              byLocale.set(j.locale ?? '?', (byLocale.get(j.locale ?? '?') ?? 0) + 1);
+            }
+            const summary = [...byLocale.entries()].map(([c, n]) => `${c}: ${n}`).join(', ');
+            res.flags.push({
+              kind: 'l10n-placeholder',
+              detail:
+                `${l10nParity.placeholderJunk.length} placeholder cell(s) survive in languages the ` +
+                `source serves by default-language fallback (${summary}) — those languages show the ` +
+                'AI-translated provisional title/description; fix by hand in the editor per language.',
+            });
+            onEvent({
+              kind: 'log',
+              message:
+                `${pfx} ⚠ ${l10nParity.placeholderJunk.length} placeholder cell(s) survive (${summary}) — ` +
+                'these languages VISIBLY show the provisional title/description (the source falls back ' +
+                `to its default language there); see ${courseId}.report.md`,
+            });
+          }
           // Per-language label-set bindings: every source locale with a CUSTOM
           // set must be bound on the target to the set this run recreated for it.
           for (const row of stackLocales(course)) {
@@ -1028,6 +1061,17 @@ export async function runImport(
       }
     }
 
+    // Structural / course-field parity: unexpected divergences fail the course
+    // too (docs/rise-multilang.md §6: any divergence → partial, never
+    // imported). Expected divergences (course-settings gap, flagged media,
+    // draw-from-bank randomness) ride the expected bucket and don't downgrade.
+    if (parity && !parity.ok) {
+      report.ok = false;
+      report.error =
+        report.error ??
+        `Parity read-back FAILED: ${parity.issues.length} unexpected divergence(s) on ${res.newCourseId}`;
+    }
+
     // Resolve every manual-handling flag to a real location (course/lesson/block
     // names + sequence numbers) and persist TWO consolidated files per course:
     //   .report.md   — brief, human, issue-focused (report + parity + manual work)
@@ -1052,14 +1096,22 @@ export async function runImport(
       }),
     );
 
+    // Any UNEXPECTED read-back divergence — a surviving foreign key, a
+    // translation-cell divergence, or a structural/course-field parity issue
+    // (missing/changed blocks, a leftover `!importing:` title) — means the
+    // course exists but is NOT faithful. Known-gap divergences (course
+    // settings, flagged media) ride the expected bucket and do not downgrade.
+    const readBackDiverged =
+      readBackForeign.length > 0 ||
+      (l10nParity && !l10nParity.ok) ||
+      (parity && !parity.ok);
     const status: CourseStatus = opts.dryRun
       ? 'planned'
       : res.stopped
         ? 'stopped'
-        : // A read-back survivor (foreign key OR translation divergence) means the
-          // course exists but is NOT faithful — never reported as imported; the
-          // course is kept and a re-run repairs it.
-          res.ok && (readBackForeign.length || (l10nParity && !l10nParity.ok))
+        : // A read-back divergence: never reported as imported; the course is
+          // kept and a re-run (or manual fix) repairs it.
+          res.ok && readBackDiverged
           ? 'partial'
           : res.ok
             ? 'imported'
@@ -1089,7 +1141,7 @@ export async function runImport(
     let msg: string;
     if (res.stopped) {
       msg = `STOPPED "${titleStr}" mid-course — partial, resumable on re-run (course ${res.newCourseId ?? '—'})`;
-    } else if (res.ok && (readBackForeign.length || (l10nParity && !l10nParity.ok))) {
+    } else if (res.ok && readBackDiverged) {
       msg = `PARTIAL "${titleStr}": ${report.error} — course ${res.newCourseId} kept (re-run to repair)`;
     } else if (res.ok) {
       msg = `${opts.dryRun ? 'Planned' : 'Imported'} "${titleStr}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`;

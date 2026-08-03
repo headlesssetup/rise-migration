@@ -165,6 +165,12 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'The source holds translation data for a language that is archived (or has no locale row), so the target cannot have it. To migrate it, restore the language on the source course, re-export, and re-import.',
       };
+    case 'l10n-placeholder':
+      return {
+        itemType: 'Placeholder text in some languages',
+        action:
+          'The conversion AI-translated the provisional title/description into every language, and the source only holds real values for some of them (the rest fall back to its default language). Those languages visibly show placeholder text on the target — open the course, switch to each listed language, and fix the title/description by hand.',
+      };
     default:
       return { itemType: String(kind), action: 'Manual handling required.' };
   }
@@ -178,7 +184,8 @@ function categoryLocation(kind: ManualFlag['kind']): string {
     kind === 'locale-selector' ||
     kind === 'l10n-ref' ||
     kind === 'l10n-storyline' ||
-    kind === 'l10n-locale'
+    kind === 'l10n-locale' ||
+    kind === 'l10n-placeholder'
   ) {
     return 'Languages';
   }

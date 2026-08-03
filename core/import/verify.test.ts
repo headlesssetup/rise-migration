@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalize, verifyParity, verifyL10nParity, parityReportToMarkdown } from './verify';
+import {
+  canonicalize,
+  verifyParity,
+  verifyL10nParity,
+  parityReportToMarkdown,
+  l10nParityToMarkdown,
+} from './verify';
 import type { GetCourseDocument } from '@/shared/types/rise';
 
 describe('canonicalize', () => {
@@ -338,7 +344,7 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     expect(r.issues.map((i) => i.path)).toContain('course.title');
   });
 
-  it('reports unmigrated settings honestly (sidebarMode, markComplete, theme)', () => {
+  it('reports unmigrated settings honestly as EXPECTED (known gap); theme stays a real issue', () => {
     const source = base({
       sidebarMode: 'closed',
       markComplete: true,
@@ -346,8 +352,16 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     });
     const target = base(); // fresh-course defaults
     const r = verifyParity(source, target);
-    const paths = r.issues.map((i) => i.path).sort();
-    expect(paths).toEqual(['course.markComplete', 'course.sidebarMode', 'course.theme']);
+    // Settings are verified + reported, but routed to the expected bucket: the
+    // tool documents it doesn't migrate them yet, so they must not mark an
+    // otherwise-faithful course partial. Theme IS written by the import — a
+    // theme divergence is a real, unexpected failure.
+    expect(r.issues.map((i) => i.path)).toEqual(['course.theme']);
+    const expectedPaths = r.expectedDivergences.map((i) => i.path).sort();
+    expect(expectedPaths).toEqual(['course.markComplete', 'course.sidebarMode']);
+    expect(
+      r.expectedDivergences.every((i) => i.detail?.includes('not migrated yet')),
+    ).toBe(true);
   });
 
   it('stack refs on both sides canonicalize equal (different l10nIds)', () => {
@@ -415,5 +429,73 @@ describe('verifyL10nParity — tolerated missing cells (flagged storyline)', () 
       'cell-sl en-us',
       'cell-sl ru',
     ]);
+  });
+});
+
+describe('verifyL10nParity — surviving placeholder cells (conversion junk)', () => {
+  // The conversion AI-translated the provisional title/description into EVERY
+  // locale; set-stack-titles overwrites only the locales the SOURCE holds.
+  // A target row under a mapped id, in a locale the source has no row for,
+  // is visible junk (the source falls back to its default language there).
+  const source = {
+    course: {
+      id: 'S',
+      title: { l10nId: 'src-title' },
+      description: { l10nId: 'src-desc' },
+    },
+    lessons: [],
+    l10n: {
+      defaultLocale: 'en-us',
+      translations: {
+        // description exists ONLY in the default locale (fallback cell)
+        'en-us': { 'src-title': 'Course', 'src-desc': 'Real description' },
+        ru: { 'src-title': 'Курс' },
+      },
+    },
+  } as never;
+  const target = {
+    course: {
+      id: 'T',
+      title: { l10nId: 'tgt-title' },
+      description: { l10nId: 'tgt-desc' },
+    },
+    lessons: [],
+    l10n: {
+      defaultLocale: 'en-us',
+      translations: {
+        'en-us': { 'tgt-title': 'Course', 'tgt-desc': 'Real description' },
+        // the ru description row is the AI translation of the '.' placeholder
+        ru: { 'tgt-title': 'Курс', 'tgt-desc': '.' },
+      },
+    },
+  } as never;
+
+  it('surfaces target-only locale rows under mapped ids as placeholderJunk', () => {
+    const r = verifyL10nParity(source, target);
+    expect(r.issues).toEqual([]); // no unexpected structural divergence
+    expect(r.placeholderJunk).toHaveLength(1);
+    expect(r.placeholderJunk![0]).toMatchObject({
+      kind: 'placeholder-cell',
+      locale: 'ru',
+      l10nId: 'tgt-desc',
+    });
+    // Not status-flipping (policy pending; no per-locale delete exists) but
+    // never hidden: the markdown renders it loudly.
+    expect(r.ok).toBe(true);
+    expect(l10nParityToMarkdown(r)).toMatch(/placeholder cell\(s\) survive/);
+  });
+
+  it('is empty when the source holds every locale the target does', () => {
+    const fullSource = JSON.parse(JSON.stringify(source)) as {
+      l10n: { translations: Record<string, Record<string, unknown>> };
+    };
+    fullSource.l10n.translations['ru']!['src-desc'] = 'Настоящее описание';
+    const fullTarget = JSON.parse(JSON.stringify(target)) as {
+      l10n: { translations: Record<string, Record<string, unknown>> };
+    };
+    fullTarget.l10n.translations['ru']!['tgt-desc'] = 'Настоящее описание';
+    const r = verifyL10nParity(fullSource as never, fullTarget as never);
+    expect(r.placeholderJunk).toBeUndefined();
+    expect(r.ok).toBe(true);
   });
 });
