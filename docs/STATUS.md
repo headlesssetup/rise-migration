@@ -84,13 +84,30 @@ Sergey's three ideas for the placeholder-junk / badge problem, with analysis:
 3. **Automate the "retype by hand" fix** — correct, this is exactly option (a)
    (overwrite the junk rows via UPDATE_L10N_BATCH with the source's
    default-locale value): trivially buildable, fixes the junk only (not the
-   badge), and is the scoped form of mirroring (those few cells stop following
-   later default-language edits).
+   badge). **The mirroring objection does NOT apply here** (corrected
+   2026-08-03 after operator push-back): creating a TARGET row for a TEXT cell
+   doesn't disconnect it — it moves it into the standard flag-and-retranslate
+   workflow (source edit → "untranslated" flag; target edit → no flag —
+   operator-verified). The rejected-mirroring failure mode is specific to
+   MEDIA (target-language edit disconnects the asset per Articulate's docs,
+   and no image revert affordance exists); the junk cells are always text.
+   Remaining caveat: while the "never click Update Translations" warning
+   stands, a later-stale junk-fixed cell must be corrected manually.
+
+Idea-2 refinements (2026-08-03): the only content divergence is the TEXT
+subset of `defaultOnlyCells` (AI text where the source falls back to the
+default language) — predictable per course pre-import and listable in the
+report; media provably lands in the source's exact state (the initial run
+creates no media rows). The source's own pending markers vanish (badge 0) —
+record the source's per-language pendingChangesCount in the report so that
+isn't silently dropped. Hidden benefit: everything ends up STAMPED, so
+"Update Translations" becomes SAFE again — the standing warning disappears
+and the migrated stack returns to normal Rise maintenance workflows.
 
 Decision path: run the 0.6.6 live test + the §6b badge click (mitm on) first.
 If the updates-run stamps media → the cheap add-on route fixes badge AND junk
-on the current pipeline; if not → idea 2 is the principled long-term shape and
-idea 3 the quick junk-only patch.
+on the current pipeline (same end-state as idea 2); if not → idea 2 is the
+principled long-term shape and idea 3 the quick junk-only patch.
 
 The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 `CLAUDE.md`. Block/question/folder schemas: `docs/rise-block-catalog.md`,
