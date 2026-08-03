@@ -110,6 +110,14 @@ export async function executePlan(
   // Source course-level l10nId → the TARGET's own ref id (title/description/
   // cover… — created by the conversion; learned at await-stack from GET_COURSE).
   const stackRefMap = new Map<string, string>();
+  // True once the first convert-stack POST fired: from then until await-stack
+  // fills stackRefMap, the target may already be converted server-side, so a
+  // plain-string title write could clobber the title ref (see the stop path).
+  let stackConversionStarted = false;
+  // Storyline cells already written once (attach-storyline-l10n): the first
+  // language's write is an `add`, further languages on the same cell are
+  // `update`s (captured two-language sequence, capture2aug).
+  const storylineCellsWritten = new Set<string>();
   // Target GET_COURSE snapshot taken at await-stack (pre-content) — the baseline
   // for junk-cell cleanup (only placeholder-era cells can be in it).
   let targetStackDoc: GetCourseDocument | null = null;
@@ -120,10 +128,17 @@ export async function executePlan(
   // for the pre-conversion writes).
   const matDoc = stack ? materializeLocale(deps.input.course).doc : deps.input.course;
 
+  // Course-level source refs that had NO counterpart on the converted target
+  // (flagged l10n-ref at await-stack). Their cells are skipped: written under
+  // the source id they would be orphan rows nothing references — and being
+  // source ids, the junk cleanup can never remove them.
+  const unmatchedCourseRefs = new Set<string>();
+
   /** Remap media keys inside a cell value + map ids/lessons for one batch add. */
   const buildCellChange = (l10nId: string, locale: string): L10nChange | null => {
     const value = srcTables[locale]?.[l10nId];
     if (value === undefined) return null;
+    if (unmatchedCourseRefs.has(l10nId)) return null; // flagged, not orphaned
     const srcLesson = srcLessonByRef.get(l10nId);
     const targetLesson = srcLesson ? ids.get(srcLesson) : undefined;
     return {
@@ -314,10 +329,20 @@ export async function executePlan(
                   },
                 ]),
               );
+              log(`Marked partial course title "!unfinished: ${srcTitle}"`);
+            } else if (stack && stackConversionStarted) {
+              // A Stop landed BETWEEN convert-stack and await-stack: the target
+              // may already be converted (title is a ref) but its ref id is
+              // unknown, so ANY title write here risks clobbering the ref. The
+              // course still carries the `!importing:` title from the early
+              // provisional write — already unmistakable — so skip the rename.
+              log(
+                'Stop during stack conversion — keeping the "!importing:" title (a rename now could clobber the title ref)',
+              );
             } else {
               await deps.relay(env.updateCourseTitle(newCourseId, `!unfinished: ${srcTitle}`));
+              log(`Marked partial course title "!unfinished: ${srcTitle}"`);
             }
-            log(`Marked partial course title "!unfinished: ${srcTitle}"`);
           } catch {
             /* best-effort — the stop still succeeds */
           }
@@ -728,13 +753,16 @@ export async function executePlan(
           const newBankId = bound?.newBankId ?? ids.get(step.sourceBankId);
           if (!newBankId) throw new WriteError('bind before bank create', step.kind);
           const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          // Same loud-fail as patch/attach: shipping an empty blockOrItemId
+          // would silently bind the draw to nothing on the server.
+          if (!meta) throw new WriteError('bind before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
           const pendingItemId = mint();
           const questionList = bound?.questionIds ?? bankQuestionIds.get(step.sourceBankId) ?? [];
           await send(
             env.insertQuestionBankQuestions({
               lesson: { id: newLessonId, courseId: newCourseId },
-              blockOrItemId: meta?.newId ?? '',
+              blockOrItemId: meta.newId,
               pendingItemId,
               mode: 'knowledgeCheck',
               drawCount: step.drawCount,
@@ -884,6 +912,7 @@ export async function executePlan(
           break;
         }
         case 'convert-stack': {
+          stackConversionStarted = true;
           await send(
             env.createTranslations(newCourseId, {
               sourceLanguage: step.sourceLanguage,
@@ -963,6 +992,7 @@ export async function executePlan(
               stackRefMap.set(srcFirst.title.l10nId, tgtFirst.title.l10nId);
             }
             for (const u of unmatched) {
+              unmatchedCourseRefs.add(u.l10nId);
               result.flags.push({
                 kind: 'l10n-ref',
                 detail: `Course-level localized value at ${u.path} has no counterpart on the target — set it manually per language`,
@@ -1107,20 +1137,30 @@ export async function executePlan(
           );
           const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
           const targetLesson = ids.get(step.sourceLessonId);
+          const cellId = stackRefMap.get(step.l10nId) ?? step.l10nId;
+          // Captured sequence (capture2aug, byte-verified): the FIRST language's
+          // cell write is an `add` carrying lessonId + valueType:"storyline"; a
+          // further language on the SAME cell is an `update` with ONLY
+          // {l10nId, locale, value} — no lessonId, no valueType. Mirror exactly.
+          const firstAttach = !storylineCellsWritten.has(cellId);
+          storylineCellsWritten.add(cellId);
+          const value = env.buildStorylineMedia({
+            contentPrefix,
+            meta: step.meta,
+            title: step.title,
+          });
           await send(
             env.updateL10nBatch(newCourseId, [
-              {
-                action: 'add',
-                l10nId: stackRefMap.get(step.l10nId) ?? step.l10nId,
-                ...(targetLesson ? { lessonId: targetLesson } : {}),
-                locale: step.locale,
-                value: env.buildStorylineMedia({
-                  contentPrefix,
-                  meta: step.meta,
-                  title: step.title,
-                }),
-                valueType: 'storyline',
-              },
+              firstAttach
+                ? {
+                    action: 'add',
+                    l10nId: cellId,
+                    ...(targetLesson ? { lessonId: targetLesson } : {}),
+                    locale: step.locale,
+                    value,
+                    valueType: 'storyline',
+                  }
+                : { action: 'update', l10nId: cellId, locale: step.locale, value },
             ]),
             step.kind,
           );

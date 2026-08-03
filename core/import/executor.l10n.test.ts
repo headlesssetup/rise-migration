@@ -369,16 +369,25 @@ describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => 
     expect(copies[0]!.payload.id).toBe('NEWCOURSE');
     expect(typeof copies[0]!.payload.jobId).toBe('string');
 
-    // the storyline CELLS point at the TARGET course prefix, per language
+    // the storyline CELLS point at the TARGET course prefix, per language.
+    // Captured two-language sequence (capture2aug, byte-verified): the FIRST
+    // language is an `add` with lessonId + valueType:"storyline"; the second
+    // is an `update` with ONLY {l10nId, locale, value}.
     const cellWrites = bodies
       .filter((b) => b.url.endsWith('/l10n/UPDATE_L10N_BATCH'))
       .flatMap((b) => (b.payload.payload as { changes: Record<string, unknown>[] }).changes)
-      .filter((c) => c.valueType === 'storyline');
+      .filter((c) => !!(c.value as { storyline?: unknown } | undefined)?.storyline);
     expect(cellWrites).toHaveLength(2);
     expect(cellWrites.map((c) => c.locale)).toEqual(['en-us', 'ru']);
+    const [first, second] = cellWrites as [Record<string, unknown>, Record<string, unknown>];
+    expect(first.action).toBe('add');
+    expect(first.valueType).toBe('storyline');
+    expect(first.lessonId).toBeTruthy(); // lesson-scoped add
+    expect(second.action).toBe('update');
+    expect(second.valueType).toBeUndefined();
+    expect(second.lessonId).toBeUndefined();
     for (const c of cellWrites) {
       expect(c.l10nId).toBe('cccc3333-0000-4000-8000-000000000009');
-      expect(c.lessonId).toBeTruthy(); // lesson-scoped add
       const sl = (c.value as { storyline: { contentPrefix: string; src: string } }).storyline;
       expect(sl.contentPrefix).toMatch(/^rise\/courses\/NEWCOURSE\//);
       expect(sl.src).toBe(`${sl.contentPrefix}/story.html`);

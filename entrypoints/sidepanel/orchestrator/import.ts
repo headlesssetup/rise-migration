@@ -10,6 +10,7 @@
 // barrel) keeps the same surface after the split.
 
 import {
+  courseRefMap,
   defaultLocaleOf,
   defaultOnlyCells,
   isLocalizedStack,
@@ -951,6 +952,15 @@ export async function runImport(
           for (const s of steps) {
             if (s.kind === 'flag-l10n-storyline') {
               for (const loc of s.locales) toleratedMissing.add(`${s.l10nId} ${loc}`);
+            }
+          }
+          // Unmatched course-level refs (flagged l10n-ref at await-stack) are
+          // deliberately NOT written — under their source ids they'd be orphan
+          // rows nothing references. Their announced absence is tolerated.
+          const { unmatched: unmatchedRefs } = courseRefMap(course, targetDoc);
+          for (const u of unmatchedRefs) {
+            for (const code of Object.keys(course.l10n?.translations ?? {})) {
+              toleratedMissing.add(`${u.l10nId} ${code}`);
             }
           }
           l10nParity = verifyL10nParity(course, targetDoc, { toleratedMissing });
