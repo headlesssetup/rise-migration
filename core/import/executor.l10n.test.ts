@@ -1,7 +1,10 @@
-// Multi-language stack import — plan sequence + executor behavior against the
-// scripted relay (docs/rise-multilang.md). Uses the fixture stack: 3 locales
-// (en-us default, ru with a custom label set + media override, ar), 2 lessons,
-// media in the translation tables + a block-embedded attachment.
+// Multi-language stack import, IDEA-2 shape (docs/rise-multilang.md §6,
+// v0.6.7): the full course is built in the DEFAULT language from the
+// materialized doc, converted ONCE, then every TARGET-locale row is
+// overwritten from the archive through the structural pairing map. Uses the
+// fixture stack: 3 locales (en-us default, ru with a custom label set + media
+// override, ar), 2 lessons, media in the translation tables + a
+// block-embedded attachment.
 import { describe, it, expect } from 'vitest';
 import { buildPlan, type PlanStep } from './plan';
 import { executePlan, blockKey } from './executor';
@@ -11,6 +14,7 @@ import {
   l10nCourse,
   l10nHandlers,
   l10nStorylineAttach,
+  tgtRef,
 } from './executor.fixtures';
 
 const readAsset = async () => ({ base64: 'Zm9v', contentType: 'application/octet-stream' });
@@ -19,27 +23,54 @@ function kinds(steps: PlanStep[]): string[] {
   return steps.map((s) => s.kind);
 }
 
-describe('buildPlan — stack sequence', () => {
+const TITLE_REF = 'aaaa1111-0000-4000-8000-000000000001';
+const DESC_REF = 'aaaa1111-0000-4000-8000-000000000002';
+
+type CellChange = {
+  action?: string;
+  l10nId?: string;
+  locale?: string;
+  lessonId?: string;
+  valueType?: string;
+  value?: unknown;
+};
+
+/** Every UPDATE_L10N_BATCH change across the recorded bodies. */
+function cellChanges(bodies: { url: string; payload: Record<string, unknown> }[]): CellChange[] {
+  return bodies
+    .filter((b) => b.url.endsWith('/l10n/UPDATE_L10N_BATCH'))
+    .flatMap((b) => (b.payload.payload as { changes: CellChange[] }).changes);
+}
+
+describe('buildPlan — stack sequence (idea 2)', () => {
   const input = l10nCourse();
   const steps = buildPlan(input);
   const ks = kinds(steps);
 
-  it('orders: shell → placeholder lesson → provisional title/description/images → convert → await → uploads → content → cells → label sets → cleanup → titles', () => {
+  it('orders: shell → FULL default-language build (lessons/blocks/title/description/images/theme) → convert → await → uploads → target cells → label sets → titles', () => {
     const idx = (k: string): number => ks.indexOf(k);
+    const lastIdx = (k: string): number => ks.lastIndexOf(k);
     expect(idx('create-course')).toBeGreaterThanOrEqual(0);
     expect(idx('create-lesson')).toBeGreaterThan(idx('create-course'));
-    expect(idx('set-title')).toBeGreaterThan(idx('create-lesson'));
-    expect(idx('set-course-description')).toBeGreaterThan(idx('set-title'));
+    // The CLEAN title lands right after the first lesson (no markers).
+    expect(idx('set-title')).toBe(idx('create-lesson') + 1);
+    // The WHOLE build precedes the conversion: content, description, images, theme.
+    expect(lastIdx('create-blocks')).toBeLessThan(idx('convert-stack'));
+    expect(lastIdx('update-lesson')).toBeLessThan(idx('convert-stack'));
+    expect(idx('set-course-description')).toBeLessThan(idx('convert-stack'));
     expect(idx('set-course-images')).toBeLessThan(idx('convert-stack'));
+    expect(idx('set-theme')).toBeLessThan(idx('convert-stack'));
     expect(idx('convert-stack')).toBeLessThan(idx('await-stack'));
+    // Post-conversion: per-locale table media, target cells, label sets, titles.
     expect(idx('await-stack')).toBeLessThan(idx('upload-l10n-asset'));
-    expect(idx('await-stack')).toBeLessThan(idx('update-lesson'));
-    expect(idx('write-l10n')).toBeGreaterThan(ks.lastIndexOf('create-blocks'));
-    expect(idx('set-locale-labelset')).toBeGreaterThan(ks.lastIndexOf('write-l10n'));
-    expect(idx('cleanup-l10n')).toBeGreaterThan(idx('set-locale-labelset'));
-    // set-stack-titles is the very LAST step (partial-title invariant).
+    expect(idx('await-stack')).toBeLessThan(idx('write-l10n'));
+    expect(idx('set-locale-labelset')).toBeGreaterThan(lastIdx('write-l10n'));
     expect(ks[ks.length - 1]).toBe('set-stack-titles');
-    // the monolingual final set-title never fires on a stack
+    // No placeholder machinery survives.
+    expect(ks).not.toContain('cleanup-l10n');
+    expect(steps.some((s) => s.summary.includes('placeholder'))).toBe(false);
+    expect(steps.some((s) => s.summary.includes('!importing'))).toBe(false);
+    // Exactly one plain title write.
     expect(steps.filter((s) => s.kind === 'set-title')).toHaveLength(1);
   });
 
@@ -53,52 +84,64 @@ describe('buildPlan — stack sequence', () => {
     expect(await1).toMatchObject({ expectedLocales: ['en-us', 'ar', 'ru'] });
   });
 
-  it('reuses the placeholder as lesson 1 (one create per OTHER lesson, with the source title ref)', () => {
-    const creates = steps.filter((s) => s.kind === 'create-lesson');
-    expect(creates).toHaveLength(2); // placeholder (lesson A) + lesson B
+  it('creates EVERY lesson up front with its plain materialized title (no refs, no placeholder)', () => {
+    const creates = steps.filter(
+      (s): s is Extract<PlanStep, { kind: 'create-lesson' }> => s.kind === 'create-lesson',
+    );
+    expect(creates).toHaveLength(2);
     expect(creates[0]).toMatchObject({
       sourceLessonId: 'lessonA-0000000000000000000000',
       title: 'Lesson One',
+      position: 0,
     });
-    expect(creates[0]).not.toHaveProperty('l10nTitleRef');
     expect(creates[1]).toMatchObject({
       sourceLessonId: 'lessonB-0000000000000000000000',
-      l10nTitleRef: 'bbbb2222-0000-4000-8000-000000000002',
+      title: 'Lesson Two',
+      position: 1,
     });
+    // The description is the real materialized value, pre-conversion.
+    const desc = steps.find(
+      (s): s is Extract<PlanStep, { kind: 'set-course-description' }> =>
+        s.kind === 'set-course-description',
+    );
+    expect(desc!.value).toContain('Course description EN');
   });
 
-  it('uploads table media (incl. the per-locale override) and keeps block media in the block loop', () => {
-    const l10nUploads = steps.filter((s) => s.kind === 'upload-l10n-asset');
-    const keys = l10nUploads.map((s) => (s as { sourceKey: string }).sourceKey);
-    expect(keys).toContain('rise/courses/stackCourse000000000000000000000/heroEN0000000000.jpg');
+  it('default-locale media rides the BUILD; only per-locale overrides ride upload-l10n-asset', () => {
+    const l10nUploads = steps.filter(
+      (s): s is Extract<PlanStep, { kind: 'upload-l10n-asset' }> => s.kind === 'upload-l10n-asset',
+    );
+    const keys = l10nUploads.map((s) => s.sourceKey);
+    // The ru per-locale hero override is table-only → upload-l10n-asset.
     expect(keys).toContain('rise/courses/stackCourse000000000000000000000/heroRU0000000000.jpg');
-    // logo/cover keys ride set-course-images (handled), not table uploads
-    expect(keys.some((k) => k.includes('logoEN'))).toBe(false);
-    // the attachment is block-embedded → normal upload-asset
-    const blockUploads = steps.filter((s) => s.kind === 'upload-asset');
-    expect(blockUploads.map((s) => (s as { sourceKey: string }).sourceKey)).toContain(
+    // The DEFAULT hero rides the materialized block build (upload-asset)…
+    expect(keys).not.toContain('rise/courses/stackCourse000000000000000000000/heroEN0000000000.jpg');
+    const blockUploads = steps
+      .filter((s): s is Extract<PlanStep, { kind: 'upload-asset' }> => s.kind === 'upload-asset')
+      .map((s) => s.sourceKey);
+    expect(blockUploads).toContain(
+      'rise/courses/stackCourse000000000000000000000/heroEN0000000000.jpg',
+    );
+    // …the attachment too, and logo/cover ride set-course-images (handled).
+    expect(blockUploads).toContain(
       'rise/courses/stackCourse000000000000000000000/attach0000000000.pdf',
     );
+    expect(keys.some((k) => k.includes('logoEN'))).toBe(false);
   });
 
-  it('batches cells default-locale-first, one locale per batch, skipping inline + title/description cells', () => {
+  it('plans TARGET-locale cells only — the default locale is never written post-conversion', () => {
     const writes = steps.filter(
       (s): s is Extract<PlanStep, { kind: 'write-l10n' }> => s.kind === 'write-l10n',
     );
     expect(writes.length).toBeGreaterThan(0);
-    const seq = writes.map((w) => w.locale);
-    const firstNonDefault = seq.findIndex((l) => l !== 'en-us');
-    expect(seq.slice(0, firstNonDefault).every((l) => l === 'en-us')).toBe(true);
+    expect(writes.every((w) => w.locale !== 'en-us')).toBe(true);
     const allIds = writes.flatMap((w) => w.l10nIds.map((id) => `${w.locale}:${id}`));
     // title/description reserved for set-stack-titles
-    expect(allIds.some((x) => x.endsWith('aaaa1111-0000-4000-8000-000000000001'))).toBe(false);
-    expect(allIds.some((x) => x.endsWith('aaaa1111-0000-4000-8000-000000000002'))).toBe(false);
-    // inline-shipped default cells (block heading EN) are skipped…
-    expect(allIds).not.toContain('en-us:cccc3333-0000-4000-8000-000000000001');
-    // …but their other-locale rows ride the batches
-    expect(allIds).toContain('ru:cccc3333-0000-4000-8000-000000000001');
-    // the ru-only cell is written for ru
+    expect(allIds.some((x) => x.endsWith(TITLE_REF))).toBe(false);
+    expect(allIds.some((x) => x.endsWith(DESC_REF))).toBe(false);
+    // the ru-only cell and the ru rows of default cells ride the batches
     expect(allIds).toContain('ru:cccc3333-0000-4000-8000-000000000005');
+    expect(allIds).toContain('ru:cccc3333-0000-4000-8000-000000000001');
   });
 
   it('recreates only the CUSTOM non-default label set (diff vs the language default)', () => {
@@ -120,7 +163,7 @@ describe('buildPlan — stack sequence', () => {
     expect(ks).toContain('flag-locale-selector');
   });
 
-  it('never copies a storyline cell verbatim — flags it per language instead', () => {
+  it('never copies a storyline cell verbatim — flags it per language when nothing is staged', () => {
     const flags = steps.filter(
       (s): s is Extract<PlanStep, { kind: 'flag-l10n-storyline' }> =>
         s.kind === 'flag-l10n-storyline',
@@ -136,16 +179,11 @@ describe('buildPlan — stack sequence', () => {
       .filter((s): s is Extract<PlanStep, { kind: 'write-l10n' }> => s.kind === 'write-l10n')
       .flatMap((w) => w.l10nIds);
     expect(written).not.toContain('cccc3333-0000-4000-8000-000000000009');
-    // …and the block is never attached via UPDATE_BLOCK_DEBOUNCE (that would
-    // clobber the {l10nId} ref and every other language's binding)
-    expect(ks).not.toContain('attach-storyline');
-    // the per-cell flag replaces the block-level one when the cell HAS packages
-    expect(ks).not.toContain('flag-storyline');
   });
 });
 
-describe('executePlan — stack live run (scripted relay)', () => {
-  it('runs the full sequence, keeps source l10nIds, remaps media in cells, cleans junk, titles last', async () => {
+describe('executePlan — stack live run (idea 2, scripted relay)', () => {
+  it('builds the full course, converts once, then overwrites TARGET rows through the pairing map', async () => {
     const input = l10nCourse();
     const steps = buildPlan(input);
     const { relay, calls } = mockRelay(l10nHandlers());
@@ -168,84 +206,120 @@ describe('executePlan — stack live run (scripted relay)', () => {
     expect(res.newCourseId).toBe('NEWCOURSE');
     expect(res.survivingKeys).toEqual([]);
 
-    // conversion happened before any content lesson beyond the placeholder
+    // The conversion fires only AFTER the whole default-language build.
     const urls = calls.map((c) => `${c.method} ${c.url}`);
-    const firstConvert = urls.findIndex((u) => u.startsWith('POST /manage/api/content/NEWCOURSE/translations'));
-    expect(firstConvert).toBeGreaterThan(-1);
+    const firstConvert = urls.findIndex((u) =>
+      u.startsWith('POST https://') ? false : u.includes('/translations') && u.startsWith('POST'),
+    );
+    const lastCreateBlocks = urls.map((u) => u.includes('CREATE_BLOCKS')).lastIndexOf(true);
+    expect(firstConvert).toBeGreaterThan(lastCreateBlocks);
 
-    // CREATE_BLOCKS carried inline default-locale translationChanges with the
-    // TARGET lesson id + remapped media keys, refs kept verbatim
+    // Blocks shipped MATERIALIZED: default-language values, no l10n refs, no
+    // inline translationChanges.
     const createBlocks = bodies.filter((b) => b.url.endsWith('/lessons/CREATE_BLOCKS'));
     expect(createBlocks.length).toBe(2);
-    const cb1 = createBlocks[0]!.payload.payload as Record<string, unknown>;
-    const changes1 = cb1.translationChanges as Record<string, unknown>[];
-    expect(changes1.length).toBeGreaterThan(0);
-    expect(changes1.every((c) => c.action === 'add' && c.locale === 'en-us')).toBe(true);
-    expect(changes1.every((c) => c.lessonId === 'NEWLESSON1')).toBe(true);
-    const mediaChange = changes1.find(
-      (c) => c.l10nId === 'cccc3333-0000-4000-8000-000000000004',
-    );
-    expect(mediaChange?.valueType).toBe('mediaRecord');
-    expect(JSON.stringify(mediaChange?.value)).toContain(
-      'rise/courses/NEWCOURSE/new-heroEN0000000000.jpg',
-    );
-    expect(JSON.stringify(mediaChange?.value)).not.toContain('rise/courses/stackCourse');
-    // blocks keep the SOURCE refs verbatim
-    expect(JSON.stringify(cb1.blocks)).toContain('cccc3333-0000-4000-8000-000000000001');
-
-    // CREATE_LESSON for lesson B carried the source title ref + inline change
-    const createLessons = bodies.filter((b) => b.url.endsWith('/lessons/CREATE_LESSON'));
-    expect(createLessons).toHaveLength(2);
-    const l2 = createLessons[1]!.payload.payload as Record<string, unknown>;
-    expect(l2.title).toEqual({ l10nId: 'bbbb2222-0000-4000-8000-000000000002' });
-    expect((l2.translationChanges as unknown[]).length).toBe(1);
-
-    // batch writes: single locale per envelope; ru override remapped; course
-    // title cells NOT in the generic batches
-    const batches = bodies
-      .filter((b) => b.url.endsWith('/l10n/UPDATE_L10N_BATCH'))
-      .map((b) => (b.payload.payload as { changes: Record<string, unknown>[] }).changes);
-    for (const ch of batches) {
-      const locales = new Set(ch.map((c) => c.locale).filter(Boolean));
-      expect(locales.size).toBeLessThanOrEqual(1);
+    for (const cb of createBlocks) {
+      const p = cb.payload.payload as Record<string, unknown>;
+      expect(p.translationChanges).toBeUndefined();
+      expect(JSON.stringify(p.blocks)).not.toContain('l10nId');
     }
-    const flat = batches.flat();
-    const ruOverride = flat.find(
-      (c) => c.l10nId === 'cccc3333-0000-4000-8000-000000000004' && c.locale === 'ru',
+    expect(JSON.stringify(createBlocks[0]!.payload)).toContain('Heading EN');
+
+    // The clean title was written ONCE, pre-conversion, with the description.
+    const titleWrites = bodies
+      .filter((b) => b.url.endsWith('/courses/UPDATE_COURSE_FIELD_THROTTLE'))
+      .map((b) => (b.payload.payload as { course: Record<string, unknown> }).course);
+    expect(titleWrites.filter((c) => typeof c.title === 'string').map((c) => c.title)).toEqual([
+      'Fixture Stack Course',
+    ]);
+    expect(
+      titleWrites.find((c) => typeof c.description === 'string')?.description,
+    ).toContain('Course description EN');
+
+    // Every post-conversion cell write is a bare `update` on a PAIRED target
+    // ref, for a NON-default locale only.
+    const changes = cellChanges(bodies);
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.every((c) => c.action === 'update')).toBe(true);
+    expect(changes.every((c) => c.locale !== 'en-us')).toBe(true);
+    expect(changes.every((c) => c.lessonId === undefined && c.valueType === undefined)).toBe(true);
+    expect(changes.every((c) => c.l10nId!.startsWith('tgt-'))).toBe(true);
+
+    // The ru per-locale hero override landed on the paired ref, key remapped.
+    const ruOverride = changes.find(
+      (c) => c.l10nId === tgtRef('cccc3333-0000-4000-8000-000000000004') && c.locale === 'ru',
     );
     expect(JSON.stringify(ruOverride?.value)).toContain('rise/courses/NEWCOURSE/');
+    expect(JSON.stringify(ruOverride?.value)).not.toContain('stackCourse000000000000000000000');
 
-    // cleanup deleted the junk placeholder cell (and ONLY it)
-    const deletes = flat.filter((c) => c.action === 'delete');
-    expect(deletes.map((c) => c.l10nId)).toEqual(['junk-1']);
+    // Titles: ru gets its proofread row; ar (no source description row) gets
+    // the DEFAULT value — fallback-resolved (D2), so the target displays what
+    // the source displays.
+    const titleCells = changes.filter((c) => c.l10nId === tgtRef(TITLE_REF));
+    expect(titleCells.map((c) => c.locale).sort()).toEqual(['ar', 'ru']);
+    expect(titleCells.find((c) => c.locale === 'ru')?.value).toBe('Курс-стек (фикстура)');
+    const descCells = changes.filter((c) => c.l10nId === tgtRef(DESC_REF));
+    expect(descCells.map((c) => c.locale).sort()).toEqual(['ar', 'ru']);
+    expect(descCells.find((c) => c.locale === 'ar')?.value).toContain('Course description EN');
+    expect(descCells.find((c) => c.locale === 'ru')?.value).toContain('Описание курса RU');
 
-    // final titles: mapped to the TARGET refs, default locale first, all locales
-    const titleWrites = flat.filter((c) => c.l10nId === 'tgt-title');
-    expect(titleWrites[0]!.locale).toBe('en-us'); // default FIRST (pending rule)
-    expect(titleWrites.map((c) => c.locale).sort()).toEqual(['ar', 'en-us', 'ru']);
-    expect(titleWrites[0]!.value).toBe('Fixture Stack Course');
-    // ar has no source description cell (falls back) → only en-us + ru written
-    const descWrites = flat.filter((c) => c.l10nId === 'tgt-desc');
-    expect(descWrites.map((c) => c.locale).sort()).toEqual(['en-us', 'ru']);
-    // lesson-1 title cells ride the batches via the placeholder's target ref
-    const l1Title = flat.filter((c) => c.l10nId === 'tgt-l1title');
-    expect(l1Title.length).toBeGreaterThanOrEqual(3);
+    // The pairing map is exported for the read-back.
+    expect(res.l10nRefMap?.['cccc3333-0000-4000-8000-000000000005']).toBe(
+      tgtRef('cccc3333-0000-4000-8000-000000000005'),
+    );
 
-    // label set recreated once + bound to ru, cached for the run
+    // Label set recreated once + bound to ru, cached for the run.
     const labelCalls = urls.filter((u) => u.includes('CREATE_LABEL_SET'));
     expect(labelCalls).toHaveLength(1);
     expect(labelSetCache.get('customSetRu00000000000mm')).toBe('NEWLABELSET1');
     const bind = bodies.find((b) => b.url.endsWith('/l10n/UPDATE_LOCALE'));
     expect((bind?.payload.payload as Record<string, unknown>).labelSetId).toBe('NEWLABELSET1');
 
-    // the language-selector flag surfaced
+    // Flags: language selector + the un-staged storyline cell (per language).
     expect(res.flags.some((f) => f.kind === 'locale-selector')).toBe(true);
-    // storyline in a stack: flagged, and its source contentPrefix never shipped
     const slFlag = res.flags.find((f) => f.kind === 'l10n-storyline');
     expect(slFlag?.detail).toMatch(/en-us, ru/);
-    const allWritten = JSON.stringify(bodies);
-    expect(allWritten).not.toContain('slEN000000000000');
-    expect(allWritten).not.toContain('slRU000000000000');
+    // No source storyline contentPrefix ever rode a CELL write.
+    expect(JSON.stringify(changes)).not.toContain('slEN000000000000');
+    expect(JSON.stringify(changes)).not.toContain('slRU000000000000');
+  });
+
+  it('regression (F1 class): an INVERTED lessons[] array cannot cross lesson titles (pairing is id-mapped)', async () => {
+    const input = l10nCourse();
+    input.course.lessons = [...(input.course.lessons ?? [])].reverse();
+    expect((input.course.lessons![0] as { id?: string }).id).toBe(
+      'lessonB-0000000000000000000000',
+    ); // raw order starts with lesson B — the old trap
+    const bodies: { url: string; payload: Record<string, unknown> }[] = [];
+    const { relay } = mockRelay(l10nHandlers());
+    const spyRelay: typeof relay = async (spec) => {
+      if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
+      return relay(spec);
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: spyRelay,
+      readAsset,
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // Lessons were CREATED in authoritative order (A first) with their own titles…
+    const created = bodies
+      .filter((b) => b.url.endsWith('/lessons/CREATE_LESSON'))
+      .map((b) => (b.payload.payload as { title: string }).title);
+    expect(created).toEqual(['Lesson One', 'Lesson Two']);
+    // …and the ru title cells landed on the RIGHT paired refs (no crossing).
+    const changes = cellChanges(bodies);
+    expect(
+      changes.find(
+        (c) => c.l10nId === tgtRef('bbbb2222-0000-4000-8000-000000000001') && c.locale === 'ru',
+      )?.value,
+    ).toBe('Урок один');
+    expect(
+      changes.find(
+        (c) => c.l10nId === tgtRef('bbbb2222-0000-4000-8000-000000000002') && c.locale === 'ru',
+      )?.value,
+    ).toBe('Урок два');
   });
 
   it('blanks an orphaned TABLE-media key inside the cell value (flagged, no survivor)', async () => {
@@ -255,10 +329,10 @@ describe('executePlan — stack live run (scripted relay)', () => {
     input.assets = input.assets.map((a) =>
       a.key === orphanKey ? { key: a.key, kind: a.kind, orphaned: true } : a,
     );
-    const bodies: Record<string, unknown>[] = [];
+    const bodies: { url: string; payload: Record<string, unknown> }[] = [];
     const { relay } = mockRelay(l10nHandlers());
     const spyRelay: typeof relay = async (spec) => {
-      if (spec.body) bodies.push(JSON.parse(spec.body) as Record<string, unknown>);
+      if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
       return relay(spec);
     };
     const res = await executePlan(buildPlan(input), {
@@ -273,10 +347,7 @@ describe('executePlan — stack live run (scripted relay)', () => {
       true,
     );
     // The ru cell was still written — with the dead key BLANKED inside the value.
-    const cellValues = bodies
-      .filter((b) => (b as { type?: string }).type === 'rise/l10n/UPDATE_L10N_BATCH')
-      .flatMap((b) => ((b.payload as { changes: { value?: unknown }[] }).changes ?? []))
-      .map((c) => JSON.stringify(c.value ?? ''));
+    const cellValues = cellChanges(bodies).map((c) => JSON.stringify(c.value ?? ''));
     expect(cellValues.some((v) => v.includes(orphanKey))).toBe(false);
   });
 
@@ -297,49 +368,23 @@ describe('executePlan — stack live run (scripted relay)', () => {
     expect(res.error).toMatch(/not l10n-ified/);
   });
 
-  it('flags an unmatched course-level ref (l10n-ref) and ships no orphan cells for it', async () => {
+  it('flags an unmatched ref (l10n-ref) and ships no orphan cells for it', async () => {
     const input = l10nCourse();
     const handlers = l10nHandlers();
-    // Converted target WITHOUT a description ref: the source's description
-    // cell has no counterpart — it must be flagged, and its cells must NOT be
-    // written under the source id (orphan rows junk-cleanup can't remove).
-    let getCourseCalls = 0;
-    const convertedNoDesc = {
-      course: {
-        id: 'NEWCOURSE',
-        title: { l10nId: 'tgt-title' },
-        media: { l10nId: 'tgt-logo' },
-        coverImage: { media: { l10nId: 'tgt-cover' } },
-        defaultLocaleId: 'tgt-row-en',
-        localizationMetadata: { isLocalized: true, localizedAt: 't' },
-        lessons: ['NEWLESSON1'],
-      },
-      lessons: [{ id: 'NEWLESSON1', title: { l10nId: 'tgt-l1title' }, items: [] }],
-      l10n: {
-        defaultLocale: 'en-us',
-        showLocaleSelector: false,
-        locales: [
-          { id: 'tgt-row-en', locale: 'en-us' },
-          { id: 'tgt-row-ru', locale: 'ru' },
-          { id: 'tgt-row-ar', locale: 'ar' },
-        ],
-        translations: {
-          'en-us': { 'tgt-title': '!importing: x', 'tgt-l1title': 'Lesson One' },
-          ru: { 'tgt-title': 'AI', 'tgt-l1title': 'AI' },
-          ar: { 'tgt-title': 'AI', 'tgt-l1title': 'AI' },
-        },
-      },
+    // Converted target WITHOUT a description ref: the target's Rise did not
+    // localize that field — flagged, and its cells never written (a source id
+    // must never ship, and there is no target ref to address).
+    const inner = handlers['GET_COURSE']!;
+    handlers['GET_COURSE'] = (body) => {
+      const out = inner(body) as { payload: Record<string, unknown> };
+      const course = out.payload.course as Record<string, unknown> | undefined;
+      if (course && 'description' in course) course.description = '';
+      return out;
     };
-    handlers['GET_COURSE'] = () => {
-      getCourseCalls++;
-      return getCourseCalls === 1
-        ? { payload: { course: { id: 'NEWCOURSE', lessons: [] } } }
-        : { payload: convertedNoDesc };
-    };
-    const bodies: Record<string, unknown>[] = [];
+    const bodies: { url: string; payload: Record<string, unknown> }[] = [];
     const { relay } = mockRelay(handlers);
     const spyRelay: typeof relay = async (spec) => {
-      if (spec.body) bodies.push(JSON.parse(spec.body) as Record<string, unknown>);
+      if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
       return relay(spec);
     };
     const res = await executePlan(buildPlan(input), {
@@ -348,16 +393,13 @@ describe('executePlan — stack live run (scripted relay)', () => {
       readAsset,
       mintId: counterMint(),
     });
-    expect(res.flags.some((f) => f.kind === 'l10n-ref' && f.detail.includes('description'))).toBe(
-      true,
-    );
-    // The source description cell id must appear in NO batch write.
-    const srcDescId = 'aaaa1111-0000-4000-8000-000000000002';
-    const shippedIds = bodies
-      .filter((b) => (b as { type?: string }).type === 'rise/l10n/UPDATE_L10N_BATCH')
-      .flatMap((b) => ((b.payload as { changes: { l10nId?: string }[] }).changes ?? []))
-      .map((c) => c.l10nId);
-    expect(shippedIds).not.toContain(srcDescId);
+    expect(res.ok).toBe(true);
+    const flag = res.flags.find((f) => f.kind === 'l10n-ref');
+    expect(flag?.detail).toContain('course.description');
+    // No cell write carries the source id OR any unmapped description cell.
+    const changes = cellChanges(bodies);
+    expect(changes.some((c) => c.l10nId === DESC_REF)).toBe(false);
+    expect(changes.some((c) => c.l10nId === tgtRef(DESC_REF))).toBe(false);
   });
 
   it('fails loudly when the conversion never completes (poll timeout)', async () => {
@@ -409,30 +451,36 @@ describe('executePlan — stack live run (scripted relay)', () => {
   });
 });
 
-describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => {
+describe('per-language Storyline attach (idea 2, docs/rise-multilang.md §4.3b)', () => {
   function stackWithPackages() {
     const input = l10nCourse();
     input.storylineAttachL10n = l10nStorylineAttach();
     return input;
   }
 
-  it('plans one attach per language and drops the manual flag', () => {
+  it('plans the DEFAULT package as a pre-conversion block attach and the others as post-await cell attaches', () => {
     const steps = buildPlan(stackWithPackages());
+    const ks = kinds(steps);
+    // en-us (default) → mono-style attach-storyline DURING the build.
+    const monoAttach = steps.filter((s) => s.kind === 'attach-storyline');
+    expect(monoAttach).toHaveLength(1);
+    expect(ks.indexOf('attach-storyline')).toBeLessThan(ks.indexOf('convert-stack'));
+    // ru → attach-storyline-l10n AFTER await-stack.
     const attaches = steps.filter(
       (s): s is Extract<PlanStep, { kind: 'attach-storyline-l10n' }> =>
         s.kind === 'attach-storyline-l10n',
     );
-    expect(attaches.map((a) => a.locale)).toEqual(['en-us', 'ru']);
+    expect(attaches.map((a) => a.locale)).toEqual(['ru']);
+    expect(ks.indexOf('attach-storyline-l10n')).toBeGreaterThan(ks.indexOf('await-stack'));
     expect(attaches[0]).toMatchObject({
       sourceBlockId: 'cblockSL00000000000000000',
       l10nId: 'cccc3333-0000-4000-8000-000000000009',
-      reviewPrefix: 'review/items/slEN000000000000',
-      title: 'Onboarding EN',
+      reviewPrefix: 'review/items/slRU000000000000',
+      title: 'Onboarding RU',
     });
     // nothing left to flag: every language has a staged package
-    expect(kinds(steps)).not.toContain('flag-l10n-storyline');
-    // and the block is still never patched
-    expect(kinds(steps)).not.toContain('attach-storyline');
+    expect(ks).not.toContain('flag-l10n-storyline');
+    expect(ks).not.toContain('flag-storyline');
   });
 
   it('flags only the languages with no staged package', () => {
@@ -441,9 +489,8 @@ describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => 
       `${blockKey('lessonB-0000000000000000000000', 'cblockSL00000000000000000')}|ru`,
     );
     const steps = buildPlan(input);
-    expect(
-      steps.filter((s) => s.kind === 'attach-storyline-l10n').map((s) => (s as { locale: string }).locale),
-    ).toEqual(['en-us']);
+    expect(steps.filter((s) => s.kind === 'attach-storyline')).toHaveLength(1); // en-us
+    expect(steps.filter((s) => s.kind === 'attach-storyline-l10n')).toHaveLength(0);
     const flags = steps.filter(
       (s): s is Extract<PlanStep, { kind: 'flag-l10n-storyline' }> =>
         s.kind === 'flag-l10n-storyline',
@@ -452,10 +499,10 @@ describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => 
     expect(flags[0]!.locales).toEqual(['ru']); // en-us was attached → not flagged
   });
 
-  it('executes copy_review_item + a storyline CELL write per language (never a block patch)', async () => {
+  it('executes: default patched onto the block pre-conversion; ru = copy + bare cell UPDATE on the paired ref', async () => {
     const input = stackWithPackages();
     const steps = buildPlan(input);
-    const { relay, calls } = mockRelay(l10nHandlers());
+    const { relay } = mockRelay(l10nHandlers());
     const bodies: { url: string; payload: Record<string, unknown> }[] = [];
     const spy: typeof relay = async (spec) => {
       if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
@@ -481,50 +528,83 @@ describe('per-language Storyline attach (docs/rise-multilang.md §4.3b)', () => 
     expect(copies[0]!.payload.id).toBe('NEWCOURSE');
     expect(typeof copies[0]!.payload.jobId).toBe('string');
 
-    // the storyline CELLS point at the TARGET course prefix, per language.
-    // Captured two-language sequence (capture2aug, byte-verified): the FIRST
-    // language is an `add` with lessonId + valueType:"storyline"; the second
-    // is an `update` with ONLY {l10nId, locale, value}.
-    const cellWrites = bodies
-      .filter((b) => b.url.endsWith('/l10n/UPDATE_L10N_BATCH'))
-      .flatMap((b) => (b.payload.payload as { changes: Record<string, unknown>[] }).changes)
-      .filter((c) => !!(c.value as { storyline?: unknown } | undefined)?.storyline);
-    expect(cellWrites).toHaveLength(2);
-    expect(cellWrites.map((c) => c.locale)).toEqual(['en-us', 'ru']);
-    const [first, second] = cellWrites as [Record<string, unknown>, Record<string, unknown>];
-    expect(first.action).toBe('add');
-    expect(first.valueType).toBe('storyline');
-    expect(first.lessonId).toBeTruthy(); // lesson-scoped add
-    expect(second.action).toBe('update');
-    expect(second.valueType).toBeUndefined();
-    expect(second.lessonId).toBeUndefined();
-    for (const c of cellWrites) {
-      expect(c.l10nId).toBe('cccc3333-0000-4000-8000-000000000009');
-      const sl = (c.value as { storyline: { contentPrefix: string; src: string } }).storyline;
-      expect(sl.contentPrefix).toMatch(/^rise\/courses\/NEWCOURSE\//);
-      expect(sl.src).toBe(`${sl.contentPrefix}/story.html`);
-    }
-    // per-language prefixes stay distinct (EN ≠ RU bundle)
-    const prefixes = cellWrites.map(
-      (c) => (c.value as { storyline: { contentPrefix: string } }).storyline.contentPrefix,
-    );
-    expect(new Set(prefixes).size).toBe(2);
+    // The DEFAULT language attached via a BLOCK PATCH (pre-conversion) with the
+    // TARGET prefix — never a cell write for the default locale.
+    const patches = bodies
+      .filter((b) => b.url.endsWith('/lessons/UPDATE_BLOCK_DEBOUNCE'))
+      .map((b) => JSON.stringify(b.payload));
+    expect(patches.some((p) => p.includes('rise/courses/NEWCOURSE/slEN000000000000'))).toBe(true);
 
-    // no block patch ever carries a storyline media object: the block keeps its
-    // {l10nId} ref (patching it would clobber every language's binding)
-    const blockPatches = bodies.filter((b) => b.url.endsWith('/lessons/UPDATE_BLOCK_DEBOUNCE'));
-    for (const p of blockPatches) {
-      expect(JSON.stringify(p.payload)).not.toContain('"storyline"');
-    }
-    // …and the created storyline block carried the ref verbatim
-    const created = bodies
-      .filter((b) => b.url.endsWith('/lessons/CREATE_BLOCKS'))
-      .map((b) => JSON.stringify((b.payload.payload as { blocks: unknown }).blocks))
-      .join(' ');
-    expect(created).toContain('"media":{"l10nId":"cccc3333-0000-4000-8000-000000000009"}');
-    // …and no source contentPrefix ever shipped
-    const all = JSON.stringify(bodies);
-    expect(all).not.toContain('rise/courses/stackCourse000000000000000000000/slEN');
-    expect(all).not.toContain('rise/courses/stackCourse000000000000000000000/slRU');
+    // ru attached via the CELL: a bare `update` on the PAIRED target ref (the
+    // cell exists post-conversion — the capture-proven 2nd-language shape).
+    const slCells = cellChanges(bodies).filter(
+      (c) => !!(c.value as { storyline?: unknown } | undefined)?.storyline,
+    );
+    expect(slCells).toHaveLength(1);
+    expect(slCells[0]).toMatchObject({
+      action: 'update',
+      locale: 'ru',
+      l10nId: tgtRef('cccc3333-0000-4000-8000-000000000009'),
+    });
+    expect(slCells[0]!.lessonId).toBeUndefined();
+    expect(slCells[0]!.valueType).toBeUndefined();
+    const sl = (slCells[0]!.value as { storyline: { contentPrefix: string; src: string } })
+      .storyline;
+    expect(sl.contentPrefix).toBe('rise/courses/NEWCOURSE/slRU000000000000');
+    expect(sl.src).toBe(`${sl.contentPrefix}/story.html`);
+
+    // No SOURCE contentPrefix survives in any FINAL payload the target keeps:
+    // the block was patched to the target prefix and the ru cell is target-
+    // prefixed. (The initial copy-faithful CREATE ships the materialized source
+    // object transiently — same as the monolingual placeholder policy — so the
+    // assertion checks patches + cells, the state that persists.)
+    expect(patches.join(' ')).not.toContain('stackCourse000000000000000000000/slEN');
+    expect(JSON.stringify(cellChanges(bodies))).not.toContain('stackCourse000000000000000000000');
+  });
+
+  it('flags (never writes) a per-language attach when the conversion did not l10n-ify the storyline slot (R3)', async () => {
+    const input = stackWithPackages();
+    const steps = buildPlan(input);
+    const handlers = l10nHandlers();
+    // Simulate R3: the converted doc keeps the storyline block's media as a
+    // PLAIN object (no ref minted for it).
+    const inner = handlers['GET_COURSE']!;
+    handlers['GET_COURSE'] = (body) => {
+      const out = inner(body) as { payload: { lessons?: { items?: Record<string, unknown>[] }[] } };
+      for (const l of out.payload.lessons ?? []) {
+        for (const b of l.items ?? []) {
+          if ((b as { variant?: string }).variant === 'storyline') {
+            const items = (b as { items?: { media?: unknown }[] }).items ?? [];
+            if (items[0]) items[0].media = { storyline: { contentPrefix: 'x', type: 'storyline' } };
+          }
+        }
+      }
+      return out;
+    };
+    const { relay } = mockRelay(handlers);
+    const bodies: { url: string; payload: Record<string, unknown> }[] = [];
+    const spy: typeof relay = async (spec) => {
+      if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
+      return relay(spec);
+    };
+    const res = await executePlan(steps, {
+      input,
+      relay: spy,
+      readAsset,
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // Default attach still happened (block patch), ru did NOT (flagged).
+    expect(res.storylineAttached).toBe(1);
+    const flag = res.flags.find(
+      (f) => f.kind === 'l10n-storyline' && f.detail.includes('per-language'),
+    );
+    expect(flag).toBeTruthy();
+    expect(flag!.detail).toContain('ru');
+    // No storyline cell write fired.
+    const slCells = cellChanges(bodies).filter(
+      (c) => !!(c.value as { storyline?: unknown } | undefined)?.storyline,
+    );
+    expect(slCells).toHaveLength(0);
   });
 });

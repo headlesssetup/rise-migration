@@ -11,8 +11,10 @@
 // Pure + deterministic — no network, no ids minted. Tested in manual-work.test.ts.
 
 import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
+import { isLocalizedStack, materializeLocale } from '@/core/l10n';
 import { orderLessons } from './plan';
 import type { ManualFlag } from './executor';
+import { blockKey } from './executor-types';
 import { fidelityStatus, type FidelityReport } from './fidelity';
 import { l10nParityToMarkdown, type L10nParityReport, type ParityReport } from './verify';
 
@@ -56,27 +58,39 @@ export function blockTypeLabel(b: Block): string {
   return fv === '/' ? (b.type ?? 'block') : fv;
 }
 
-/** Map sourceBlockId → BlockLocation using the SAME display ordering the plan and
- *  parity use (`course.lessons` id list, then block order within each lesson). */
+/** Map lessonId+blockId → BlockLocation using the SAME display ordering the plan
+ *  and parity use (`course.lessons` id list, then block order within each
+ *  lesson). A blockId-only fallback key is kept for flags without a lessonId,
+ *  but only when the blockId is unique across the course (ambiguous → omitted).
+ *  Stacks are MATERIALIZED first (F9: a raw stack's lesson title is a
+ *  `{l10nId}` ref, which printed as an id instead of the title). */
 export function buildBlockIndex(doc: GetCourseDocument): Map<string, BlockLocation> {
+  const mat = isLocalizedStack(doc) ? materializeLocale(doc).doc : doc;
   const index = new Map<string, BlockLocation>();
+  const byBlockIdOnly = new Map<string, BlockLocation | null>(); // null = ambiguous
   const lessons = orderLessons(
-    Array.isArray(doc.lessons) ? doc.lessons : [],
-    (doc.course as Record<string, unknown> | undefined)?.lessons,
+    Array.isArray(mat.lessons) ? mat.lessons : [],
+    (mat.course as Record<string, unknown> | undefined)?.lessons,
   );
   lessons.forEach((lesson, li) => {
+    const lessonId = typeof lesson.id === 'string' ? lesson.id : '';
     const blocks = (lesson.items ?? []) as Block[];
     blocks.forEach((b, bi) => {
       const id = typeof b.id === 'string' ? b.id : '';
       if (!id) return;
-      index.set(id, {
+      const loc: BlockLocation = {
         lessonNumber: li + 1,
         lessonTitle: lessonTitleOf(lesson),
         blockNumber: bi + 1,
         blockType: blockTypeLabel(b),
-      });
+      };
+      index.set(blockKey(lessonId, id), loc);
+      byBlockIdOnly.set(id, byBlockIdOnly.has(id) ? null : loc);
     });
   });
+  for (const [id, loc] of byBlockIdOnly) {
+    if (loc && !index.has(id)) index.set(id, loc);
+  }
   return index;
 }
 
@@ -165,12 +179,6 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'The source holds translation data for a language that is archived (or has no locale row), so the target cannot have it. To migrate it, restore the language on the source course, re-export, and re-import.',
       };
-    case 'l10n-placeholder':
-      return {
-        itemType: 'Placeholder text in some languages',
-        action:
-          'The conversion AI-translated the provisional title/description into every language, and the source only holds real values for some of them (the rest fall back to its default language). Those languages visibly show placeholder text on the target — open the course, switch to each listed language, and fix the title/description by hand.',
-      };
     default:
       return { itemType: String(kind), action: 'Manual handling required.' };
   }
@@ -184,8 +192,7 @@ function categoryLocation(kind: ManualFlag['kind']): string {
     kind === 'locale-selector' ||
     kind === 'l10n-ref' ||
     kind === 'l10n-storyline' ||
-    kind === 'l10n-locale' ||
-    kind === 'l10n-placeholder'
+    kind === 'l10n-locale'
   ) {
     return 'Languages';
   }
@@ -201,7 +208,12 @@ export function resolveManualWork(
   return flags.map((f) => {
     const file = f.sourceKey ? prettyFilename(f.sourceKey) : '';
     const { itemType, action } = describe(f.kind, file);
-    const loc = f.sourceBlockId ? index.get(f.sourceBlockId) : undefined;
+    // Prefer the unambiguous lessonId+blockId key (F9); fall back to the
+    // blockId-only key (set only when the id is unique across the course).
+    const loc = f.sourceBlockId
+      ? (f.sourceLessonId ? index.get(blockKey(f.sourceLessonId, f.sourceBlockId)) : undefined) ??
+        index.get(f.sourceBlockId)
+      : undefined;
     let location: string;
     if (loc) {
       location = `Lesson ${loc.lessonNumber} "${loc.lessonTitle}" › block ${loc.blockNumber} (${loc.blockType})`;
@@ -234,20 +246,37 @@ function parityLine(parity?: ParityReport): string {
   return `DIVERGENCES — ${parity.issues.length} unexpected`;
 }
 
+/** The truthful pending-translation read-back (F5): the SET of pending
+ *  (l10nId, locale) entries from `…/translations/updates`, not a count. */
+export interface PendingSetReport {
+  count: number;
+  /** "l10nId locale" keys (first ~50 kept for the report). */
+  keys: string[];
+  /** The decorative badge tally the endpoint also returns (segment-ish). */
+  updateCount: number | null;
+  inProgress: boolean;
+}
+
 /** Brief, human, issue-focused per-course report. Uses real names. */
 export function buildCourseReportMarkdown(args: {
   report: FidelityReport;
   parity?: ParityReport;
   /** Multi-language stack: translation-table parity + the standing warning. */
   l10nParity?: L10nParityReport;
-  /** Per-language pending-translation counts read back after the import. */
+  /** Per-language `pendingChangesCount` (stackItems) — LAZY and segment-ish;
+   *  recorded as decoration only, never compared (F5). */
   l10nPending?: Record<string, number>;
-  /** Same shape, PREDICTED from the archive (cells the source holds only in its
-   *  default language). Equal to `l10nPending` ⇒ expected/benign. */
-  l10nPendingExpected?: Record<string, number>;
+  /** The truth: the pending SET read from `…/translations/updates`. After a
+   *  full-course-first import the expected set is EMPTY (the conversion stamps
+   *  every cell; we never touch a default row after it). */
+  l10nPendingSet?: PendingSetReport;
+  /** Default-only TEXT cells (l10nId per locale) where the conversion's AI text
+   *  PERSISTS on the target (the source serves those locales by default-language
+   *  fallback; media lands in the source's exact state, text cannot). */
+  aiTextCells?: string[];
   manual: ManualWorkItem[];
 }): string {
-  const { report: r, parity, l10nParity, l10nPending, l10nPendingExpected, manual } = args;
+  const { report: r, parity, l10nParity, l10nPending, l10nPendingSet, aiTextCells, manual } = args;
   const status = fidelityStatus(r);
   const resumable = status === 'PARTIAL' || status === 'STOPPED';
   const lines: string[] = [];
@@ -285,34 +314,46 @@ export function buildCourseReportMarkdown(args: {
   if (l10nParity) {
     lines.push('');
     lines.push(l10nParityToMarkdown(l10nParity));
-    if (l10nPending && Object.keys(l10nPending).length) {
-      const parts = Object.entries(l10nPending).map(([c, n]) => {
-        const exp = l10nPendingExpected?.[c];
-        return exp === undefined ? `${c}: ${n}` : `${c}: ${n} of ${exp} expected`;
-      });
-      const mismatch =
-        !!l10nPendingExpected &&
-        Object.entries(l10nPending).some(([c, n]) => l10nPendingExpected[c] !== n);
-      lines.push(`- Rise reports "source changes detected" per language: ${parts.join(' · ')}`);
-      lines.push(
-        '  These are cells the SOURCE holds only in its default language (fallback cells —',
-      );
-      lines.push(
-        '  mostly media, plus non-translatable text). Every language shows the same content as',
-      );
-      lines.push(
-        '  the source; only Rise\'s "translated" marker differs, and no API can set it (the only',
-      );
-      lines.push('  writer is an AI translation run).');
-      if (mismatch) {
-        lines.push('  ⚠ The counts do NOT match the archive — investigate before shipping.');
+    if (l10nPendingSet) {
+      if (l10nPendingSet.count === 0) {
+        lines.push(
+          '- Pending translations: **0** — the conversion stamped every cell and no default row ' +
+            'was written after it. "Update translation" would find nothing to do.',
+        );
+      } else {
+        lines.push(
+          `- ⚠ Pending translations: **${l10nPendingSet.count} cell(s)**` +
+            `${l10nPendingSet.updateCount !== null ? ` (badge tally ${l10nPendingSet.updateCount} — segment-ish, ignore)` : ''}` +
+            ' — expected 0 after this import shape. The signal can also materialize LAZILY,' +
+            ' so re-check Manage languages later; investigate before any AI run.',
+        );
+        for (const k of l10nPendingSet.keys.slice(0, 15)) lines.push(`  - \`${k}\``);
+        if (l10nPendingSet.count > 15) lines.push(`  - … ${l10nPendingSet.count - 15} more`);
+        lines.push(
+          '> ⚠ Do **not** click "Update translation" while cells are pending — it would ' +
+            'AI-overwrite exactly those cells. Resolve/understand the list first.',
+        );
+      }
+      if (l10nPendingSet.inProgress) {
+        lines.push('- ⚠ A translation run was IN PROGRESS at read-back — re-check when it settles.');
       }
     }
-    lines.push('');
-    lines.push(
-      '> ⚠ **Never click "Update translation" on this migrated course** — it would AI-translate ' +
-        'exactly the fallback cells above, replacing the migrated behavior with machine text.',
-    );
+    if (l10nPending && Object.keys(l10nPending).length) {
+      lines.push(
+        `- (decorative) per-language pendingChangesCount at read-back: ${Object.entries(l10nPending)
+          .map(([c, n]) => `${c}: ${n}`)
+          .join(' · ')} — lazy + segment-based, never compared (F5).`,
+      );
+    }
+    if (aiTextCells?.length) {
+      lines.push(
+        `- AI text persists in ${aiTextCells.length} default-only TEXT cell(s) (the source serves ` +
+          'these languages by default-language fallback; the conversion translated them). Review or ' +
+          'leave as-is:',
+      );
+      for (const k of aiTextCells.slice(0, 15)) lines.push(`  - \`${k}\``);
+      if (aiTextCells.length > 15) lines.push(`  - … ${aiTextCells.length - 15} more`);
+    }
   }
   return lines.join('\n');
 }
@@ -324,7 +365,8 @@ export function buildCourseReportJson(args: {
   parity?: ParityReport;
   l10nParity?: L10nParityReport;
   l10nPending?: Record<string, number>;
-  l10nPendingExpected?: Record<string, number>;
+  l10nPendingSet?: PendingSetReport;
+  aiTextCells?: string[];
   manual: ManualWorkItem[];
   idMap: Record<string, string>;
 }): string {
@@ -334,7 +376,8 @@ export function buildCourseReportJson(args: {
       parity: args.parity ?? null,
       l10nParity: args.l10nParity ?? null,
       l10nPending: args.l10nPending ?? null,
-      l10nPendingExpected: args.l10nPendingExpected ?? null,
+      l10nPendingSet: args.l10nPendingSet ?? null,
+      aiTextCells: args.aiTextCells ?? null,
       manualWork: args.manual,
       idMap: args.idMap,
     },

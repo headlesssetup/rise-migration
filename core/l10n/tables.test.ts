@@ -4,12 +4,9 @@ import type { GetCourseDocument } from '@/shared/types/rise';
 import {
   cellKey,
   collectCells,
-  courseRefMap,
   defaultOnlyCells,
-  inlineTranslationChanges,
+  defaultOnlyTextCells,
   isStorylineCell,
-  junkCellIds,
-  lessonIdByRef,
   orphanLocaleTables,
   planCellWrites,
   storylineCells,
@@ -81,111 +78,6 @@ describe('collectCells', () => {
   });
 });
 
-describe('lessonIdByRef', () => {
-  it('maps lesson-scoped refs (titles + block fields) to their lesson', () => {
-    const map = lessonIdByRef(doc);
-    expect(map.get('bbbb2222-0000-4000-8000-000000000001')).toBe(
-      'lessonA-0000000000000000000000',
-    );
-    expect(map.get('cccc3333-0000-4000-8000-000000000005')).toBe(
-      'lessonB-0000000000000000000000',
-    );
-    // course-level refs are not lesson-scoped
-    expect(map.has('aaaa1111-0000-4000-8000-000000000001')).toBe(false);
-  });
-});
-
-describe('courseRefMap', () => {
-  it('maps course-level refs by structural position and reports unmatched', () => {
-    const target: GetCourseDocument = {
-      course: {
-        id: 'newCourse',
-        title: { l10nId: 'tttt-title' },
-        description: { l10nId: 'tttt-desc' },
-        media: { l10nId: 'tttt-logo' },
-        coverImage: { media: { l10nId: 'tttt-cover' } },
-      },
-    };
-    const { map, unmatched } = courseRefMap(doc, target);
-    expect(map.get('aaaa1111-0000-4000-8000-000000000001')).toBe('tttt-title');
-    expect(map.get('aaaa1111-0000-4000-8000-000000000004')).toBe('tttt-cover');
-    expect(map.size).toBe(4);
-    expect(unmatched).toEqual([]);
-  });
-
-  it('flags source refs with no target counterpart', () => {
-    const { unmatched } = courseRefMap(doc, { course: { title: { l10nId: 't' } } });
-    expect(unmatched.map((u) => u.path).sort()).toEqual([
-      'course.coverImage.media',
-      'course.description',
-      'course.media',
-    ]);
-  });
-
-  it('recurses into arrays on both sides (positional pairing)', () => {
-    const source = {
-      course: {
-        banners: [{ media: { l10nId: 's-0' } }, { media: { l10nId: 's-1' } }],
-      },
-    } as unknown as GetCourseDocument;
-    const target = {
-      course: {
-        banners: [{ media: { l10nId: 't-0' } }],
-      },
-    } as unknown as GetCourseDocument;
-    const { map, unmatched } = courseRefMap(source, target);
-    expect(map.get('s-0')).toBe('t-0');
-    // source overhang (no target counterpart) is reported, never dropped
-    expect(unmatched).toEqual([{ path: 'course.banners[1].media', l10nId: 's-1' }]);
-  });
-
-  it('reports refs inside arrays when the whole subtree is absent on target', () => {
-    const source = {
-      course: { gallery: { items: [{ media: { l10nId: 's-g0' } }] } },
-    } as unknown as GetCourseDocument;
-    const { map, unmatched } = courseRefMap(source, { course: {} });
-    expect(map.size).toBe(0);
-    expect(unmatched).toEqual([{ path: 'course.gallery.items[0].media', l10nId: 's-g0' }]);
-  });
-});
-
-describe('inlineTranslationChanges', () => {
-  it('builds default-locale add-changes for the refs in a blocks subtree', () => {
-    const blocks = doc.lessons![0]!.items!;
-    const changes = inlineTranslationChanges(blocks, doc, 'lessonA-0000000000000000000000');
-    const ids = changes.map((c) => c.l10nId);
-    expect(ids).toEqual([
-      'cccc3333-0000-4000-8000-000000000001',
-      'cccc3333-0000-4000-8000-000000000002',
-      'cccc3333-0000-4000-8000-000000000003',
-      'cccc3333-0000-4000-8000-000000000004',
-    ]);
-    expect(changes[0]).toMatchObject({
-      action: 'add',
-      locale: 'en-us',
-      lessonId: 'lessonA-0000000000000000000000',
-      valueType: 'rich',
-    });
-    expect(changes[3]!.valueType).toBe('mediaRecord');
-  });
-
-  it('skips refs whose cell exists only in a non-default locale', () => {
-    // lesson B's paragraph block: cccc…0005 is ru-only → no default to inline
-    const paragraphBlock = doc.lessons![1]!.items!.filter((b) => b.family === 'text');
-    expect(inlineTranslationChanges(paragraphBlock, doc)).toEqual([]);
-  });
-
-  it('never inlines a STORYLINE cell (its contentPrefix is source-owned)', () => {
-    // lesson B also holds a storyline block whose en-us cell DOES exist —
-    // it must still be skipped (docs/rise-multilang.md §4.3b).
-    const changes = inlineTranslationChanges(doc.lessons![1]!.items!, doc);
-    expect(changes.every((c) => c.valueType !== 'storyline')).toBe(true);
-    expect(changes.map((c) => c.l10nId)).not.toContain(
-      'cccc3333-0000-4000-8000-000000000009',
-    );
-  });
-});
-
 describe('planCellWrites', () => {
   it('batches per locale, default first, applying idMap/remap/skip', () => {
     const cells = collectCells(doc);
@@ -198,7 +90,9 @@ describe('planCellWrites', () => {
     const batches = planCellWrites(cells, {
       idMap: new Map([['aaaa1111-0000-4000-8000-000000000001', 'tttt-title']]),
       remapValue: (v) => remapMediaKeys(v as never, keyMap) as typeof v,
-      lessonIds: lessonIdByRef(doc),
+      lessonIds: new Map([
+        ['bbbb2222-0000-4000-8000-000000000001', 'lessonA-0000000000000000000000'],
+      ]),
       skip: new Set([cellKey('cccc3333-0000-4000-8000-000000000001', 'en-us')]),
       batchSize: 3,
     });
@@ -229,46 +123,6 @@ describe('planCellWrites', () => {
     // lessonId present on lesson-scoped adds
     const lessonCell = flat.find((c) => c.l10nId === 'bbbb2222-0000-4000-8000-000000000001');
     expect(lessonCell!.lessonId).toBe('lessonA-0000000000000000000000');
-  });
-});
-
-describe('junkCellIds', () => {
-  it('returns target-only ids minus the keep set', () => {
-    const target: GetCourseDocument = {
-      l10n: {
-        translations: {
-          'en-us': {
-            'tttt-title': 'placeholder',
-            'junk-1': '!importing: x',
-            'cccc3333-0000-4000-8000-000000000001': 'kept (source id)',
-          },
-          ru: { 'junk-1': 'x', 'junk-2': 'y' },
-        },
-      },
-    };
-    expect(junkCellIds(doc, target, ['tttt-title']).sort()).toEqual(['junk-1', 'junk-2']);
-  });
-
-  it('never deletes a cell the target document still references (dangling-cover guard)', () => {
-    // Source has no cover → the target's random built-in cover was l10n-ified
-    // by the conversion into a cell that maps to nothing in the source.
-    // Deleting it would leave course.coverImage pointing at a dead l10nId.
-    const target: GetCourseDocument = {
-      course: {
-        id: 'T',
-        coverImage: { media: { l10nId: 'tgt-own-cover' } },
-      },
-      lessons: [],
-      l10n: {
-        translations: {
-          'en-us': {
-            'tgt-own-cover': { image: { key: 'assets/rise/builtin.jpg' } },
-            'junk-1': '!importing: x',
-          },
-        },
-      },
-    };
-    expect(junkCellIds(doc, target, [])).toEqual(['junk-1']);
   });
 });
 

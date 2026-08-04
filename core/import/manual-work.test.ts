@@ -11,6 +11,7 @@ import {
 } from './manual-work';
 import type { GetCourseDocument } from '@/shared/types/rise';
 import type { FidelityReport } from './fidelity';
+import { blockKey } from './executor-types';
 
 // A tiny course: 2 lessons in an explicit display order (reversed vs the object
 // array, to prove ordering follows `course.lessons`, not array position).
@@ -52,6 +53,59 @@ describe('buildBlockIndex', () => {
       blockNumber: 1,
       blockType: 'text/paragraph',
     });
+  });
+
+  it('F9: duplicate block ids across lessons resolve per lesson, never last-wins', () => {
+    const dup: GetCourseDocument = {
+      course: { id: 'C', lessons: ['la', 'lb'] },
+      lessons: [
+        { id: 'la', title: 'A', items: [{ id: '1', family: 'text', variant: 'paragraph' }] },
+        { id: 'lb', title: 'B', items: [{ id: '1', family: 'image', variant: 'hero' }] },
+      ],
+    };
+    const idx = buildBlockIndex(dup);
+    expect(idx.get(blockKey('la', '1'))?.lessonTitle).toBe('A');
+    expect(idx.get(blockKey('lb', '1'))?.lessonTitle).toBe('B');
+    // The ambiguous blockId-only key must NOT exist (it used to print lesson B
+    // for a lesson-A flag — last one wins).
+    expect(idx.get('1')).toBeUndefined();
+    // Flags carrying the lessonId resolve to the right lesson…
+    const [itemA] = resolveManualWork(
+      [{ kind: 'storyline', sourceBlockId: '1', sourceLessonId: 'la', detail: 'x' }],
+      idx,
+    );
+    expect(itemA!.lessonTitle).toBe('A');
+    // …and a legacy flag without one degrades to the raw id, not a wrong lesson.
+    const [itemLegacy] = resolveManualWork(
+      [{ kind: 'storyline', sourceBlockId: '1', detail: 'x' }],
+      idx,
+    );
+    expect(itemLegacy!.location).toBe('block 1');
+  });
+
+  it('F9: stack lesson titles are MATERIALIZED, not printed as l10n ref ids', () => {
+    const stack: GetCourseDocument = {
+      course: {
+        id: 'C',
+        lessons: ['sl1'],
+        defaultLocaleId: 'row-en',
+        localizationMetadata: { isLocalized: true },
+      },
+      lessons: [
+        {
+          id: 'sl1',
+          title: { l10nId: 'ref-l1' } as never,
+          items: [{ id: 'bX', family: '360', variant: 'storyline' }],
+        },
+      ],
+      l10n: {
+        defaultLocale: 'en-us',
+        locales: [{ id: 'row-en', locale: 'en-us' }],
+        translations: { 'en-us': { 'ref-l1': 'Здравствуйте' } },
+      },
+    } as never;
+    const idx = buildBlockIndex(stack);
+    expect(idx.get(blockKey('sl1', 'bX'))?.lessonTitle).toBe('Здравствуйте');
   });
 });
 

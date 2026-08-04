@@ -1,6 +1,58 @@
 # Project Status
 
-_Last updated: 2026-08-03 (v0.6.6 — independent verification pass over the multi-language work: capture re-verification + fix set). Keep this current at each phase boundary._
+_Last updated: 2026-08-04 (v0.6.7 — the fix pass from the first live cross-plane run + the idea-2 stack rework). Keep this current at each phase boundary._
+
+## Fix pass v0.6.7 (2026-08-04) — BUILT, needs live verification
+
+Everything from `docs/fix-plan-2026-08-04.md` (all batches), driven by
+`docs/findings-2026-08-04-us-run.md` + three mitm captures. 632 tests green.
+
+- **F0 token poisoning (safety class).** The webRequest sniffer never captures
+  a bearer the extension itself attached (`core/auth/slots.ts`,
+  `shouldCaptureBearer`); `tokenFor` lost the cross-plane fallback — a known
+  plane uses its OWN slot or the request BLOCKS with "open a course EDITOR on
+  the target account"; 401/403-after-failed-refresh messages carry the same
+  instruction (F6).
+- **F1** await-stack lesson pairing crossed titles on an inverted `lessons[]`
+  array — superseded by the pairing rework (below); regression kept.
+- **F2 onePage shell lesson** (capture round 3): a `onePage` shell ships WITH
+  one empty pre-created lesson; the editor never creates/renames lessons on a
+  microlearning (lesson title `""` by design). The executor ADOPTS an unclaimed
+  empty shell lesson as lesson 1 — no phantom second lesson, no rename envelope
+  needed.
+- **F3** read-back parity: a target-only ref over a DEEP-EMPTY source slot
+  (the empty-logo class) is EXPECTED, not a divergence — no-logo stacks no
+  longer go `partial`.
+- **F4 bank read-back via the LIST** (`GET /api/rise-authoring/question_banks`,
+  the editor's own route — the US plane has NO per-id GET; deterministic 404).
+  Honest failure copy: a PUT-accepted bank is never mislabeled "empty".
+- **F5 pending as a SET** via `GET …/translations/updates`
+  (`core/l10n/updates.ts`); `pendingChangesCount` (lazy) and `updateCount`
+  (segment tally) recorded as decoration only. Expected set after an idea-2
+  import: EMPTY.
+- **F9** manual-work locations: block index keyed lessonId+blockId (duplicate
+  "1","2","3" ids), stack lesson titles materialized.
+- **IDEA 2 — the stack import is now full-course-first** (operator decision;
+  translation credits unlimited): build the whole course in the default
+  language from the materialized doc → convert ONCE per formality group (the
+  AI stamps `translatedAt` on every cell → badge 0) → pair source↔target refs
+  structurally (`core/l10n/pair.ts`) → overwrite every TARGET-locale row from
+  the archive (bare updates; the default locale is never written
+  post-conversion) → fallback-resolved title/description cells for all target
+  locales (D2). Deleted: the placeholder lesson/description machinery, inline
+  `translationChanges`, source-l10nIds-verbatim writes, `cleanup-l10n`,
+  `junkCellIds`/`courseRefMap`/`inlineTranslationChanges`, the
+  `l10n-placeholder` flag. §6b (the badge decision) is CLOSED by construction.
+  Known residue (reported): AI text persists in default-only TEXT cells
+  (`defaultOnlyTextCells` → aiTextCells in the report).
+- **No more title markers (operator decision):** `!importing:`/`!unfinished:`
+  renames are gone everywhere (mono + stack). The clean title is written once,
+  right after lesson 1; partials are identified via reports/read-back/a manual
+  export-from-target pass.
+- First-run verify items: R1 full-course conversion wall-clock (await ceiling
+  now ~30 min), R3 whether the conversion l10n-ifies `media.storyline`
+  (executor detects + flags if not), R4 whether the conversion normalizes our
+  default rows (parity would surface it), EU pending-rule re-measurement.
 
 **Session handover (2026-08-02, multi-language):**
 `docs/handover-2026-08-02-multilang.md` — what shipped, the ONE open decision

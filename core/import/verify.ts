@@ -462,17 +462,13 @@ export interface L10nParityReport {
    *  import deliberately does not copy) — reported, but they never fail the
    *  course. Mirrors ParityReport.expectedDivergences. */
   expected?: L10nParityIssue[];
-  /** Conversion-era placeholder rows that survive in locales where the SOURCE
-   *  holds no row (`placeholder-cell`): the AI conversion translated the
-   *  `!importing:` title / `.` description / placeholder lesson-1 title into
-   *  EVERY locale, and `set-stack-titles` overwrites only the locales the
-   *  source actually has — the rest keep the AI'd placeholder text VISIBLY
-   *  (the source falls back to its default language there; the target shows
-   *  the junk instead). The captured cell-delete removes an id across ALL
-   *  locales, so there is no per-locale delete to clean these with — how to
-   *  resolve them (overwrite with the default-locale value vs. leave + fix by
-   *  hand) is an OPEN operator decision; until then they are surfaced here
-   *  and flagged, never hidden. */
+  /** Target rows in locales where the SOURCE holds no row (`placeholder-cell`,
+   *  kept for report-shape stability). Under the full-course-first import
+   *  (idea 2) these are the conversion's AI translations of REAL content: a
+   *  locale the source serves by default-language fallback has no proofread
+   *  row to overwrite the AI text with, so it persists — EXPECTED and
+   *  status-neutral. The text subset is predicted per course
+   *  (`defaultOnlyTextCells`) and listed in the report as aiTextCells. */
   placeholderJunk?: L10nParityIssue[];
   ok: boolean;
   locales: { source: string[]; target: string[] };
@@ -500,6 +496,15 @@ export function verifyL10nParity(
      *  copy (docs/rise-multilang.md §4.3b). Without this, every flagged stack
      *  import false-fails its language read-back on exactly those cells. */
     toleratedMissing?: Set<string>;
+    /** IDEA-2 imports: the executor's pairing map (source l10nId → target
+     *  l10nId, ALL refs — course fields, lesson titles, block-internal). When
+     *  provided it is authoritative: no source id exists on the target, so the
+     *  structural self-derivation below cannot map block-level cells. */
+    idMap?: ReadonlyMap<string, string>;
+    /** Target-only ref ids whose cells are EXPECTED (conversion artifacts over
+     *  deep-empty source slots, recorded by the executor's pairing). Unioned
+     *  with this function's own course-field detection (F3). */
+    toleratedExtra?: ReadonlySet<string>;
   } = {},
 ): L10nParityReport {
   const srcTables = source.l10n?.translations ?? {};
@@ -519,24 +524,49 @@ export function verifyL10nParity(
   // source l10nId → target l10nId. Course-level refs map structurally; lesson
   // title refs map by lesson index; everything else maps to itself.
   const idMap = new Map<string, string>();
+  // Target-only refs whose SOURCE slot is deep-empty (F3): the conversion mints
+  // a ref+cell even for an EMPTY slot (e.g. `course.media` with no logo), so a
+  // source-driven map can never cover it — the 0.6.6 dangling-ref guard rightly
+  // KEEPS the cell, and its presence is EXPECTED, not a divergence (the l10n
+  // analog of the random-default-cover rule).
+  const emptySlotTargetRefs = new Set<string>();
+  const isDeepEmpty = (v: unknown): boolean => {
+    if (v === undefined || v === null || v === '') return true;
+    if (Array.isArray(v)) return v.every(isDeepEmpty);
+    if (typeof v === 'object') return Object.values(v as object).every(isDeepEmpty);
+    return false;
+  };
+  const soleRefId = (v: unknown): string | null => {
+    if (
+      v && typeof v === 'object' && !Array.isArray(v) &&
+      Object.keys(v as object).length === 1 &&
+      typeof (v as Record<string, unknown>).l10nId === 'string'
+    ) {
+      return (v as Record<string, unknown>).l10nId as string;
+    }
+    return null;
+  };
   const mapRefs = (s: unknown, t: unknown): void => {
+    const tr0 = soleRefId(t);
+    if (tr0 && isDeepEmpty(s)) {
+      emptySlotTargetRefs.add(tr0);
+      return;
+    }
     if (
       s && t &&
       typeof s === 'object' && typeof t === 'object' &&
       !Array.isArray(s) && !Array.isArray(t)
     ) {
-      const sr = (s as Record<string, unknown>).l10nId;
-      const tr = (t as Record<string, unknown>).l10nId;
-      if (
-        typeof sr === 'string' &&
-        typeof tr === 'string' &&
-        Object.keys(s as object).length === 1 &&
-        Object.keys(t as object).length === 1
-      ) {
+      const sr = soleRefId(s);
+      const tr = soleRefId(t);
+      if (sr && tr) {
         idMap.set(sr, tr);
         return;
       }
-      for (const k of Object.keys(s as Record<string, unknown>)) {
+      for (const k of new Set([
+        ...Object.keys(s as Record<string, unknown>),
+        ...Object.keys(t as Record<string, unknown>),
+      ])) {
         mapRefs(
           (s as Record<string, unknown>)[k],
           (t as Record<string, unknown>)[k],
@@ -544,13 +574,23 @@ export function verifyL10nParity(
       }
     }
   };
-  mapRefs(source.course ?? {}, target.course ?? {});
-  const srcLessons = orderedLessons(source);
-  const tgtLessons = orderedLessons(target);
-  srcLessons.forEach((sl, i) => {
-    const tl = tgtLessons[i];
-    if (sl && tl) mapRefs({ t: sl.title }, { t: tl.title });
-  });
+  if (opts.idMap) {
+    // Idea-2 import: the executor's pairing is authoritative (block-level refs
+    // are unreachable to the structural derivation — no source id survives on
+    // the target). The own course-field walk still runs for the F3 empty-slot
+    // detection; the caller's toleratedExtra unions in the block-level ones.
+    for (const [s, t] of opts.idMap) idMap.set(s, t);
+    mapRefs(source.course ?? {}, target.course ?? {});
+  } else {
+    mapRefs(source.course ?? {}, target.course ?? {});
+    const srcLessons = orderedLessons(source);
+    const tgtLessons = orderedLessons(target);
+    srcLessons.forEach((sl, i) => {
+      const tl = tgtLessons[i];
+      if (sl && tl) mapRefs({ t: sl.title }, { t: tl.title });
+    });
+  }
+  for (const id of opts.toleratedExtra ?? []) emptySlotTargetRefs.add(id);
 
   const mappedTargets = new Set(idMap.values());
   let sourceCells = 0;
@@ -599,14 +639,23 @@ export function verifyL10nParity(
     for (const [id, tgtValue] of Object.entries(table)) {
       targetCells++;
       if (!srcIds.has(id) && !mappedTargets.has(id)) {
-        issues.push({ kind: 'extra-cell', locale: code, l10nId: id });
+        // F3: a target-only ref over a DEEP-EMPTY source slot is a conversion
+        // artifact (it l10n-ifies even empty course fields) — expected, and its
+        // cell content is irrelevant (the slot renders empty either way).
+        (emptySlotTargetRefs.has(id) ? expected : issues).push({
+          kind: 'extra-cell',
+          locale: code,
+          l10nId: id,
+          ...(emptySlotTargetRefs.has(id)
+            ? { detail: 'target-only ref over an empty source slot (conversion artifact)' }
+            : {}),
+        });
         continue;
       }
-      // A known id, but in a locale the SOURCE has no row for: a conversion-era
-      // placeholder translation (AI'd "!importing:" title / "." description).
-      // The source renders that locale via default-locale fallback; the target
-      // shows this junk instead. Surfaced separately (see the report field's
-      // doc) — there is no captured per-locale delete to clean it with.
+      // A known id, but in a locale the SOURCE has no row for: the
+      // conversion's AI translation of real content (idea 2) — the source
+      // renders that locale via default-locale fallback. Expected +
+      // status-neutral; surfaced separately (see the report field's doc).
       const srcId = srcIdByTarget.get(id) ?? (srcIds.has(id) ? id : undefined);
       if (srcId !== undefined && srcTables[code]?.[srcId] === undefined) {
         placeholderJunk.push({

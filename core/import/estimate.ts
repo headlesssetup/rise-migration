@@ -12,9 +12,11 @@ import type { AssetEntry, PlanStep } from './plan';
 const HTTP_OVERHEAD_S = 0.5;
 /** Rough S3 throughput for asset byte transfers (bytes/second). */
 const S3_THROUGHPUT_BPS = 1.5 * 1024 * 1024;
-/** Fixed allowance for one stack's AI conversion wait (seconds) — captures
- *  showed 15–70 s per language on a minimal course; polling is paced. */
-const STACK_AWAIT_S = 90;
+/** Fixed allowance for one stack's AI conversion wait (seconds). Idea 2
+ *  converts the FULL course (not a minimal placeholder), so the wait scales
+ *  with content; a real course's duration is unmeasured (R1) — allow generously
+ *  and let the paced poll (ceiling ~30 min) own the truth. */
+const STACK_AWAIT_S = 300;
 
 /** How many paced authoring envelopes a step costs (rough). */
 function pacedEnvelopes(step: PlanStep): number {
@@ -33,7 +35,6 @@ function pacedEnvelopes(step: PlanStep): number {
     case 'bind-draw-from-bank':
     case 'convert-stack':
     case 'write-l10n':
-    case 'cleanup-l10n':
       return 1;
     case 'set-course-images':
       return 1; // + its uploads are separate GET_YURLs below

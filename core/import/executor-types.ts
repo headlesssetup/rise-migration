@@ -102,10 +102,13 @@ export interface ManualFlag {
     | 'locale-selector' // learner language selector must be enabled manually
     | 'l10n-storyline' // stack cell holds a Storyline package → manual per-language attach
     | 'l10n-locale' // source table for an archived/row-less locale — not transferable
-    | 'l10n-placeholder' // conversion-era placeholder cells survive in fallback locales
     | 'builtin-asset' // Rise library/CDN asset copied as-is, unverified on the target plane
     | 'l10n-ref'; // a source course-level l10n ref had no target counterpart
   sourceBlockId?: string;
+  /** The owning SOURCE lesson — block ids repeat across lessons (Rise samples
+   *  number them "1","2","3" per lesson), so a blockId alone is ambiguous; the
+   *  manual-work resolver keys locations by lessonId+blockId when present. */
+  sourceLessonId?: string;
   sourceKey?: string;
   detail: string;
 }
@@ -136,6 +139,14 @@ export interface ExecResult {
   storylinePrefixes?: string[];
   /** The resumable old→new id map (job log). */
   idMap: Record<string, string>;
+  /** STACK (idea 2): source l10nId → target l10nId, from the post-conversion
+   *  structural pairing (core/l10n/pair.ts). The orchestrator feeds it to
+   *  verifyL10nParity — no source id exists on the target, so parity cannot
+   *  derive the map itself. */
+  l10nRefMap?: Record<string, string>;
+  /** STACK (idea 2): target-only refs over DEEP-EMPTY source slots (conversion
+   *  artifacts, e.g. the empty logo) — their cells are EXPECTED at read-back. */
+  l10nExpectedExtra?: string[];
   /** New course id once the shell is created. */
   newCourseId?: string;
   /** Always false now — automatic deletion is disabled (operator decision: no

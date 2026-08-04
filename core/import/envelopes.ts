@@ -519,12 +519,44 @@ export function createTranslations(
   };
 }
 
-/** GET one question bank (questions inline) — the bank import's read-back. */
+/** GET one question bank (questions inline). ⚠ US-BROKEN: the US plane has NO
+ *  per-id authoring route — this GET deterministically 404s there while the EU
+ *  build serves it (capture-proven 2026-08-04). The import read-back therefore
+ *  uses `listQuestionBanks` (the editor's own route on both planes) and filters
+ *  by id; this per-id GET remains only as the EXPORT-side fallback for a bank
+ *  the list served without inline questions. */
 export function getQuestionBank(bankId: string): WriteSpec {
   return {
     url: `/api/rise-authoring/question_banks/${encodeURIComponent(bankId)}`,
     method: 'GET',
     label: `GET /api/rise-authoring/question_banks/${bankId}`,
+  };
+}
+
+/** GET the question-bank LIST (full bank objects WITH `questions[]` inline) —
+ *  the bank import's read-back route. This is what the US editor itself fires
+ *  when a bank is opened (capture round 2: opening a bank issues ONLY the list
+ *  + a transcodes read — no per-id GET exists on the US plane). */
+export function listQuestionBanks(): WriteSpec {
+  return {
+    url: '/api/rise-authoring/question_banks',
+    method: 'GET',
+    label: 'GET /api/rise-authoring/question_banks (read-back list)',
+  };
+}
+
+/** GET /manage/api/content/{id}/translations/updates — the pending-translation
+ *  SET (F5): `{updateCount, courseUpdates:[…], lessonItemUpdates:{lesson:{block:
+ *  [entry…]}}, mondrianUpdates, aiScenarioUpdates, inProgress}` where each entry
+ *  is one pending (l10nId, locale). The only truthful pending signal —
+ *  `pendingChangesCount` is lazy and `updateCount` is a segment tally. Parse
+ *  with `parseTranslationUpdates` (core/l10n/updates). READ-ONLY here: the POST
+ *  variant fires an AI run and the migrator must never call it. */
+export function getTranslationUpdates(courseId: string): WriteSpec {
+  return {
+    url: `/manage/api/content/${encodeURIComponent(courseId)}/translations/updates`,
+    method: 'GET',
+    label: `GET /manage/api/content/${courseId}/translations/updates`,
   };
 }
 

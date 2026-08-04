@@ -7,13 +7,14 @@ import {
   checkSourceNotTarget,
   IdMap,
   remapIds,
-  getQuestionBank,
+  listQuestionBanks,
   postBank,
   putBank,
   verifyBankParity,
   type AccountIdentity,
   type SourceBank,
 } from '@/core/import';
+import { extractBanks } from '@/core/census/question-banks';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { ProgressEvent } from './shared';
@@ -169,9 +170,13 @@ export async function importBanks(
     const questions = remapIds(bank.questions ?? [], ids) as Array<{ id?: string }>;
     const questionIds = questions.map((q) => String(q.id ?? '')).filter(Boolean);
 
-    // Hoisted so the catch can report a shell that was created before the
-    // question write failed (empty bank left on target — no auto-delete).
+    // Hoisted so the catch can report honestly what was left on the target:
+    // a shell created before the question write (empty bank), or — after a
+    // successful PUT — a bank whose QUESTIONS WERE ACCEPTED but whose read-back
+    // failed (F4 taught us the difference: "FAILED … empty bank" mislabeled
+    // three fully-written banks). No auto-delete either way.
     let createdBankId: string | undefined;
+    let questionsPut = false;
     try {
       let newBankId: string;
       if (opts.dryRun) {
@@ -195,16 +200,26 @@ export async function importBanks(
         );
         if (!presp.ok) throw new Error(`write questions failed (HTTP ${presp.status})`);
 
-        // Read-back: GET the bank we just wrote and compare it to the archive
+        // Read-back: re-list the banks and compare OUR bank to the archive
         // (title + questions, canonicalized). The PUT's 200 alone proved only
         // that the request was accepted — not that the questions landed.
+        // ⚠ The read-back is the LIST route (the editor's own — full bank
+        // objects with questions inline), NOT the per-id GET: the US plane has
+        // no per-id authoring route (deterministic 404, capture-proven), which
+        // mislabeled three successfully-written banks as failed/empty.
+        questionsPut = true;
         await pacedDelay(pacing);
-        const rb = await relay(getQuestionBank(newBankId));
-        if (!rb.ok) throw new Error(`read-back failed (HTTP ${rb.status})`);
-        const rbBank = safeJson(rb.text) as Record<string, unknown> | null;
+        const rb = await relay(listQuestionBanks());
+        if (!rb.ok) throw new Error(`read-back list failed (HTTP ${rb.status})`);
+        const rbBank = extractBanks(safeJson(rb.text)).find((b) => b.id === newBankId)?.doc;
+        if (!rbBank) {
+          throw new Error(
+            `read-back could not find bank ${newBankId} in the target's bank list`,
+          );
+        }
         const parity = verifyBankParity(
           { id: bankId, title, questions: questions as unknown[] },
-          rbBank?.question_bank ?? rbBank,
+          rbBank,
         );
         if (!parity.ok) {
           throw new Error(
@@ -220,7 +235,9 @@ export async function importBanks(
       onEvent({ kind: 'log', message: `  ${opts.dryRun ? 'planned' : 'OK'} → bank ${newBankId}` });
     } catch (e) {
       const orphanNote = createdBankId
-        ? ` — empty bank ${createdBankId} left on target (delete manually if needed)`
+        ? questionsPut
+          ? ` — bank ${createdBankId} exists on target and its questions WERE accepted (PUT 200); only the read-back failed — verify it in the UI before deleting or re-running`
+          : ` — empty bank ${createdBankId} left on target (delete manually if needed)`
         : '';
       outcomes.push({
         sourceBankId: bankId,

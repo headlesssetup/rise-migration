@@ -13,7 +13,6 @@ import {
   cellKey,
   collectCells,
   formalityGroups,
-  inlineTranslationChanges,
   isL10nRef,
   isLocalizedStack,
   materializeLocale,
@@ -125,9 +124,12 @@ export type PlanStep =
     }
   | { kind: 'set-theme'; sourceCourseId: string; summary: string }
   | {
-      // Early write carries a `!importing:`-prefixed provisional title so a
-      // hard-crashed partial is unmistakably identifiable in the dashboard; the
-      // `final` write (the plan's LAST step) sets the clean title + description.
+      // The clean title, written ONCE, as soon as the course can be titled
+      // (right after the first lesson materializes it). No provisional
+      // `!importing:`/`!unfinished:` markers exist any more (operator decision,
+      // 2026-08-04): incomplete courses are identified via the run reports and
+      // the read-back, never via title mangling. `final` = the write that also
+      // carries the course description.
       kind: 'set-title';
       sourceCourseId: string;
       title: string;
@@ -151,13 +153,11 @@ export type PlanStep =
       kind: 'create-lesson';
       sourceLessonId: string;
       position: number;
+      /** Always a PLAIN string — on a stack it is the MATERIALIZED
+       *  default-locale title (the conversion extracts it into the lesson's
+       *  title cell itself; idea 2 ships no source l10nIds at all). */
       title: string;
       lessonType: string | null;
-      /** Stack content lesson: create with the SOURCE title ref ({l10nId}) +
-       *  an inline translationChanges add carrying the default-locale title.
-       *  Absent on monolingual lessons and on the pre-conversion placeholder
-       *  (which must be plain — the conversion extracts it into a cell). */
-      l10nTitleRef?: string;
       summary: string;
     }
   | {
@@ -256,20 +256,23 @@ export type PlanStep =
       location: string;
       summary: string;
     }
-  // --- Multi-language stacks (docs/rise-multilang.md) ------------------------
+  // --- Multi-language stacks (docs/rise-multilang.md, idea-2 shape) ----------
   | {
-      // Pre-conversion placeholder description ('.') so the conversion creates
-      // a description cell/ref we can fill per locale (there is no captured
-      // envelope for ADDING a description to an already-converted stack).
+      // The course description, written pre-conversion with the MATERIALIZED
+      // default-locale value (the conversion mints the description ref + its
+      // default cell from it — there is no captured envelope for ADDING a
+      // description to an already-converted stack).
       kind: 'set-course-description';
       value: string;
       summary: string;
     }
   | {
-      // POST …/translations — the "stack-shape factory": converts the minimal
-      // placeholder course and creates locale rows. One step per formality
-      // group (formality is a per-call parameter). AI runs only on the
-      // placeholder strings; every cell is overwritten from the source later.
+      // POST …/translations — the single conversion of the FULLY-BUILT
+      // default-language course (idea 2). One step per formality group
+      // (formality is a per-call parameter). The AI translates the REAL
+      // content — and, decisively, stamps `translatedAt` on every cell, so a
+      // migrated stack pends nothing. Target-locale rows are overwritten from
+      // the archive afterwards; default rows are NEVER written post-conversion.
       kind: 'convert-stack';
       sourceLanguage: string;
       targetLanguages: string[];
@@ -278,16 +281,18 @@ export type PlanStep =
     }
   | {
       // Poll GET …/translations until every expected language is `complete`,
-      // then GET_COURSE the target to learn its course-level l10n refs
-      // (title/description/cover…) for the cell writes.
+      // then GET_COURSE the target and PAIR every source ref to the ref the
+      // target's own conversion minted (core/l10n/pair.ts — course fields by
+      // path, lessons via the id map, blocks via the minted client ids).
       kind: 'await-stack';
       expectedLocales: string[];
       summary: string;
     }
   | {
-      // Media referenced ONLY from the translation tables (most stack media
-      // lives there, incl. per-language overrides) — same upload chain as
-      // block media; the keys are remapped inside cell values at write time.
+      // Media referenced ONLY from NON-DEFAULT locales' translation tables
+      // (per-language overrides): the default locale's media rode the
+      // materialized full build. Same upload chain as block media; keys are
+      // remapped inside cell values at write time.
       kind: 'upload-l10n-asset';
       sourceKey: string;
       locale: string;
@@ -296,10 +301,13 @@ export type PlanStep =
       summary: string;
     }
   | {
-      // One UPDATE_L10N_BATCH envelope: the listed source cells of ONE locale
-      // (values resolved from the archive at execution; media keys remapped;
-      // course-level ids mapped to the target's own refs). Batches are ordered
-      // DEFAULT LOCALE FIRST — the pending-flag write-order invariant.
+      // One UPDATE_L10N_BATCH envelope: the listed source cells of ONE
+      // NON-DEFAULT locale (values resolved from the archive at execution;
+      // media keys remapped; every id mapped through the pairing map to the
+      // target's own refs — an unmapped id is skipped, it was flagged at
+      // await-stack). Default-locale cells are NEVER written post-conversion
+      // (the write-order invariant, idea-2 form: a default write would re-pend
+      // the cell in every locale).
       kind: 'write-l10n';
       locale: string;
       l10nIds: string[];
@@ -322,19 +330,12 @@ export type PlanStep =
       summary: string;
     }
   | {
-      // Delete placeholder-era cells the conversion created that map to nothing
-      // in the source (computed at runtime from the await-stack snapshot;
-      // usually empty — every placeholder cell is normally reused via the ref
-      // map). `delete` removes an id across ALL locales, so only provably-ours
-      // ids qualify.
-      kind: 'cleanup-l10n';
-      summary: string;
-    }
-  | {
-      // FINAL step of a stack plan (replaces the monolingual final set-title,
-      // preserving the `!importing:` partial-marker invariant): write the clean
-      // title + description cells for EVERY locale (default first) onto the
-      // target's own refs.
+      // Title + description cells for EVERY writable NON-DEFAULT locale
+      // (fallback-resolved: a locale the source serves by default-language
+      // fallback gets the default value — D2: the target displays exactly what
+      // the source displays). The default locale is NEVER written here — its
+      // cells were minted by the conversion from the clean pre-conversion
+      // title/description.
       kind: 'set-stack-titles';
       summary: string;
     }
@@ -541,6 +542,25 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // the rest are flagged. Filled by the block loop, read by the flag sweep.
   const stackStorylineCells = new Map<string, string[]>();
   const stackStorylineAttached = new Map<string, Set<string>>();
+  // The stack's default locale ('' for monolingual) + the steps the block loop
+  // DEFERS to after the conversion (per-language storyline cell attaches —
+  // they need the pairing map, which only exists post-await).
+  const stackDefaultLocale = stack ? requireDefaultLocale(input.course) : '';
+  const postAwaitSteps: PlanStep[] = [];
+  // RAW-doc storyline cell ids by lesson+block: planLessonBody walks the
+  // MATERIALIZED blocks (idea 2), where the storyline slot holds the resolved
+  // OBJECT — the {l10nId} ref only exists on the raw source block.
+  const rawStorylineCellByBlock = new Map<string, string>();
+  if (stack) {
+    for (const lesson of input.course.lessons ?? []) {
+      const lid = typeof lesson.id === 'string' ? lesson.id : '';
+      for (const b of (lesson.items ?? []) as Block[]) {
+        const bid = typeof b.id === 'string' ? b.id : '';
+        const cell = storylineCellId(b);
+        if (lid && bid && cell) rawStorylineCellByBlock.set(blockKey(lid, bid), cell);
+      }
+    }
+  }
   if (stack) {
     for (const cell of storylineCells(input.course)) {
       const locales = stackStorylineCells.get(cell.l10nId) ?? [];
@@ -778,22 +798,42 @@ export function buildPlan(input: PlanInput): PlanStep[] {
 
       if (isStoryline(block)) {
         const attach = input.storylineAttach?.get(blockKey(sourceLessonId, sourceBlockId));
-        // On a STACK the block's media is an {l10nId} ref and each language's
-        // package lives in its own cell (docs/rise-multilang.md §4.3b). Attach
-        // per language: copy_review_item + a storyline cell write. NEVER patch
-        // the block's media — that would overwrite the ref and destroy every
-        // language's binding. Languages with no staged package are flagged by
-        // the flag-l10n-storyline sweep (which skips the ones attached here).
+        // On a STACK (idea 2) each language's package lives in its own cell
+        // (docs/rise-multilang.md §4.3b). The DEFAULT locale's package attaches
+        // like a monolingual block DURING the pre-conversion build (a plain
+        // media patch — the conversion then l10n-ifies OUR attached object into
+        // the ref + default cell). Every NON-default locale attaches AFTER the
+        // conversion via a storyline CELL write, addressed through the pairing
+        // map — those steps are DEFERRED to the post-await section. Languages
+        // with no staged package are flagged by the flag-l10n-storyline sweep.
         if (stack) {
-          const cellId = storylineCellId(block);
+          // The ref lives on the RAW source block (this loop walks the
+          // materialized twin, where the slot holds the resolved object).
+          const cellId = rawStorylineCellByBlock.get(blockKey(sourceLessonId, sourceBlockId)) ?? null;
           const attached = cellId ? stackStorylineAttached.get(cellId) : undefined;
           const cellLocales = cellId ? storylineCellLocales(cellId) : [];
+          const defPkg = input.storylineAttachL10n?.get(
+            `${blockKey(sourceLessonId, sourceBlockId)}|${stackDefaultLocale}`,
+          );
+          if (defPkg) {
+            steps.push({
+              kind: 'attach-storyline',
+              sourceLessonId,
+              sourceBlockId,
+              reviewPrefix: defPkg.reviewPrefix,
+              meta: defPkg.meta,
+              title: defPkg.title,
+              summary: `Attach Storyline [${stackDefaultLocale}] from ${defPkg.reviewPrefix} (default language, pre-conversion)`,
+            });
+            if (cellId) attached?.add(stackDefaultLocale);
+          }
           for (const locale of cellLocales) {
+            if (locale === stackDefaultLocale) continue;
             const pkg = input.storylineAttachL10n?.get(
               `${blockKey(sourceLessonId, sourceBlockId)}|${locale}`,
             );
             if (!pkg || !cellId) continue;
-            steps.push({
+            postAwaitSteps.push({
               kind: 'attach-storyline-l10n',
               sourceLessonId,
               sourceBlockId,
@@ -810,7 +850,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           // we could not resolve): the flag-l10n-storyline sweep has nothing to
           // report for it, so flag the block itself — never stay silent about a
           // storyline block.
-          if (cellLocales.length === 0) {
+          if (cellLocales.length === 0 && !defPkg) {
             steps.push({
               kind: 'flag-storyline',
               sourceLessonId,
@@ -959,103 +999,133 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         summary: `Create lesson "${lTitle}" (${lType})`,
       });
 
-      // Set a PROVISIONAL course title right after the FIRST lesson materializes
-      // the course (the bare shell is a title-less catalog row, and Rise rejects
-      // titling a lesson-less course). The `!importing:` prefix makes a
-      // hard-crashed partial unmistakable in the dashboard — the clean title is
-      // written by the final set-title step only when the import completes (a
-      // graceful Stop renames to `!unfinished:` instead).
+      // Set the CLEAN course title (+ description) right after the FIRST lesson
+      // materializes the course (the bare shell is a title-less catalog row, and
+      // Rise rejects titling a lesson-less course). Written ONCE — the
+      // `!importing:`/`!unfinished:` title markers are GONE (operator decision
+      // 2026-08-04): incomplete courses are identified via the run reports and
+      // the read-back / export-from-target pass, never via title mangling.
       if (idx === 0) {
         steps.push({
           kind: 'set-title',
           sourceCourseId,
-          title: `!importing: ${title}`,
-          summary: `Set provisional course title "!importing: ${title}"`,
+          title,
+          final: true,
+          summary: `Set course title "${title}"`,
         });
       }
 
       planLessonBody(lesson, sourceLessonId, lTitle, lType, icon);
     });
 
-    // Fallback provisional title for a lesson-less course (the per-first-lesson
-    // title above never fired). A confirmed bare shell is a real course, so
-    // titling it is safe; the final set-title below still writes the clean title.
+    // Title for a lesson-less course (the per-first-lesson write above never
+    // fired). A confirmed bare shell is a real course, so titling it is safe.
     if (ordered.length === 0) {
       steps.push({
         kind: 'set-title',
         sourceCourseId,
-        title: `!importing: ${title}`,
-        summary: `Set provisional course title "!importing: ${title}"`,
+        title,
+        final: true,
+        summary: `Set course title "${title}"`,
       });
     }
   } else {
-    // ------ STACK SEQUENCE (docs/rise-multilang.md §"import algorithm") ------
+    // ------ STACK SEQUENCE — idea 2 (docs/rise-multilang.md §6, v0.6.7) ------
+    // Build the FULL course in the DEFAULT language from the materialized doc
+    // (the monolingual path, exactly), then convert ONCE per formality group —
+    // the conversion translates the REAL content and stamps `translatedAt` on
+    // every cell (badge 0) — then overwrite every TARGET-locale row from the
+    // archive. No placeholders, no source l10nIds, no post-conversion default
+    // writes, no junk cleanup.
     const doc = input.course;
     // Loud failure: a stack whose default locale can't be resolved is malformed
-    // — silently guessing would break the write-order invariant for every cell.
+    // — silently guessing would corrupt every cell write.
     const defLocale = requireDefaultLocale(doc);
     const locales = stackLocales(doc);
     const localeCodes = locales
       .map((l) => String(l.locale ?? ''))
       .filter(Boolean);
 
-    // 3a. PLACEHOLDER first lesson (pre-conversion, so the shell can convert and
-    // the conversion has something to extract). It IS the future lesson 1: its
-    // sourceLessonId is the real first lesson's id, so every later step (update,
-    // blocks) addresses it transparently through the id map. Plain-string title
-    // (the conversion turns it into the lesson's title cell, which the cell
-    // writes then fill per locale via the target ref).
-    const first = ordered[0];
-    const firstMeta = first ? lessonMeta(first, 0) : null;
-    const placeholderTitle = first ? matTitle(0) : 'Content';
-    steps.push({
-      kind: 'create-lesson',
-      sourceLessonId: firstMeta?.sourceLessonId ?? '__l10n_placeholder__',
-      position: 0,
-      title: placeholderTitle,
-      lessonType: firstMeta?.lType === 'section' ? 'section' : null,
-      summary: `Create placeholder lesson "${placeholderTitle}" (becomes lesson 1)`,
-    });
-
-    // 3b. Provisional `!importing:` title (plain — the course is not converted
-    // yet), then a placeholder description so the conversion creates a
-    // description ref/cell we can fill (no captured envelope adds one later).
-    steps.push({
-      kind: 'set-title',
-      sourceCourseId,
-      title: `!importing: ${title}`,
-      summary: `Set provisional course title "!importing: ${title}"`,
-    });
-    if (isL10nRef(course.description)) {
+    // 3a. Lessons + blocks from the MATERIALIZED doc — plain default-locale
+    // titles and values throughout; the clean course title (+ description)
+    // lands right after the first lesson materializes the course. The
+    // `!importing:` marker machinery is GONE (operator decision 2026-08-04).
+    ordered.forEach((lesson, idx) => {
+      const { sourceLessonId, lType, icon } = lessonMeta(lesson, idx);
+      const lTitle = matTitle(idx);
       steps.push({
-        kind: 'set-course-description',
-        value: '.',
-        summary: 'Set placeholder description (conversion creates its l10n ref)',
+        kind: 'create-lesson',
+        sourceLessonId,
+        position: idx,
+        title: lTitle,
+        lessonType: lType === 'section' ? 'section' : null,
+        summary: `Create lesson "${lTitle}" (${lType})`,
+      });
+      if (idx === 0) {
+        steps.push({
+          kind: 'set-title',
+          sourceCourseId,
+          title,
+          summary: `Set course title "${title}"`,
+        });
+      }
+      planLessonBody(matLessons[idx] ?? lesson, sourceLessonId, lTitle, lType, icon);
+    });
+    if (ordered.length === 0) {
+      steps.push({
+        kind: 'set-title',
+        sourceCourseId,
+        title,
+        summary: `Set course title "${title}"`,
       });
     }
 
-    // 3c. Course images BEFORE conversion (plain objects; the conversion turns
-    // them into refs + default-locale cells itself — capture-proven shape; AI
-    // never touches media). Keys come from the MATERIALIZED course object.
-    planCourseImages(matCourse);
+    // 3b. Description, pre-conversion, with the MATERIALIZED default value —
+    // the conversion mints the description ref + default cell from it (no
+    // captured envelope adds a description to an already-converted stack).
+    const matDesc =
+      typeof matCourse.description === 'string' ? matCourse.description : '';
+    if (matDesc) {
+      steps.push({
+        kind: 'set-course-description',
+        value: matDesc,
+        summary: 'Set course description (default language, pre-conversion)',
+      });
+    }
 
-    // 3d. Convert to a stack: one POST per formality group; then poll to
-    // completion. Localization is free on every subscription; the orchestrator
-    // sanity-checks the locale codes against available-languages pre-write.
+    // 3c. Course images + theme BEFORE conversion (plain objects; the
+    // conversion turns localizable ones into refs + default-locale cells
+    // itself — capture-proven shape; AI never touches media). Keys come from
+    // the MATERIALIZED course object.
+    planCourseImages(matCourse);
+    if (course.theme && typeof course.theme === 'object') {
+      steps.push({
+        kind: 'set-theme',
+        sourceCourseId,
+        summary: 'Apply course theme + typefaces (verbatim round-trip)',
+      });
+    }
+
+    // 3d. Convert the BUILT course: one POST per formality group; then poll to
+    // completion. The orchestrator sanity-checks the locale codes against
+    // available-languages pre-write.
     for (const g of formalityGroups(doc)) {
       steps.push({
         kind: 'convert-stack',
         sourceLanguage: defLocale,
         targetLanguages: g.locales,
         formality: g.formality,
-        summary: `Add language(s) ${g.locales.join(', ')}${g.formality ? ` (formality: ${g.formality})` : ''} — AI runs on the placeholder only`,
+        summary: `Add language(s) ${g.locales.join(', ')}${g.formality ? ` (formality: ${g.formality})` : ''} — ONE conversion of the full course`,
       });
     }
     steps.push({
       kind: 'await-stack',
       expectedLocales: localeCodes,
-      summary: `Wait for the stack shape (${localeCodes.join(', ')}) to finish`,
+      summary: `Wait for the stack shape (${localeCodes.join(', ')}) to finish, then pair refs`,
     });
+    // Storyline cell attaches for non-default languages (deferred from the
+    // block loop — they need the pairing map from await-stack).
+    steps.push(...postAwaitSteps);
 
     // Tables for locales the target can never have (archived rows / row-less
     // tables) are not transferable — skipped from every write and flagged
@@ -1072,14 +1142,16 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     }
     const writableCodes = writableLocaleCodes(doc);
 
-    // 3e. Table-only media (the bulk of a stack's media lives in the l10n
-    // tables, incl. per-language overrides) — upload BEFORE any cell write so
-    // values carry remapped keys. Block-embedded media (e.g. attachments) rides
-    // the normal per-block loop below. Orphan-locale tables are excluded: their
-    // cells are never written, so their media would be unreferenced uploads.
+    // 3e. Table media of NON-DEFAULT locales (per-language overrides) — upload
+    // BEFORE any cell write so values carry remapped keys. The DEFAULT locale's
+    // media already rode the materialized full build (blocks/lessons/course
+    // images above). Orphan-locale tables are excluded: their cells are never
+    // written, so their media would be unreferenced uploads.
     const allTables = doc.l10n?.translations ?? {};
     const tables = Object.fromEntries(
-      Object.entries(allTables).filter(([code]) => writableCodes.has(code)),
+      Object.entries(allTables).filter(
+        ([code]) => writableCodes.has(code) && code !== defLocale,
+      ),
     );
     for (const [locale, table] of Object.entries(tables)) {
       for (const ak of collectAssetKeys(table, sourceCourseId)) {
@@ -1116,53 +1188,19 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       }
     }
 
-    // 3f. Content, copy-faithful with the SOURCE l10nId refs kept verbatim.
-    // Lesson 1 reuses the placeholder (update + blocks only); later lessons are
-    // created with their source title ref + an inline default-locale title cell.
-    ordered.forEach((lesson, idx) => {
-      const { sourceLessonId, lType, icon } = lessonMeta(lesson, idx);
-      const lTitle = matTitle(idx);
-      if (idx > 0) {
-        const titleRef = isL10nRef(lesson.title) ? lesson.title.l10nId : undefined;
-        steps.push({
-          kind: 'create-lesson',
-          sourceLessonId,
-          position: idx,
-          title: lTitle,
-          lessonType: lType === 'section' ? 'section' : null,
-          ...(titleRef ? { l10nTitleRef: titleRef } : {}),
-          summary: `Create lesson "${lTitle}" (${lType})`,
-        });
-      }
-      planLessonBody(lesson, sourceLessonId, lTitle, lType, icon);
-    });
-
-    // 3g. Fill every language: batched cell writes, DEFAULT LOCALE FIRST
-    // (write-order invariant — a default row written after its target rows
-    // would flag every cell "new content, untranslated"). Cells shipped inline
-    // at create time are skipped; the course title/description cells are
-    // reserved for the FINAL set-stack-titles step (partial-title invariant).
-    const inlineSkip = new Set<string>();
-    ordered.forEach((lesson, idx) => {
-      if (idx > 0 && isL10nRef(lesson.title)) {
-        const t = doc.l10n?.translations?.[defLocale]?.[lesson.title.l10nId];
-        if (t !== undefined) inlineSkip.add(cellKey(lesson.title.l10nId, defLocale));
-      }
-      // Items ride inline ONLY when planLessonBody actually emits create-blocks
-      // (it returns early for sections and empty lessons) — skipping their
-      // default cells here without an inline write would leave them unwritten,
-      // inverting the pending rule for every cell of that lesson.
-      const lType = typeof lesson.type === 'string' ? lesson.type : 'blocks';
-      if (lType === 'section' || (lesson.items ?? []).length === 0) return;
-      for (const ch of inlineTranslationChanges(lesson.items ?? [], doc)) {
-        inlineSkip.add(cellKey(ch.l10nId, defLocale));
-      }
-    });
+    // 3f. Fill the TARGET languages: batched cell writes, one locale per
+    // envelope, every id mapped through the pairing map at execution. The
+    // DEFAULT locale is NEVER written post-conversion (its rows exist from the
+    // build + conversion; a default write would re-pend the cell in every
+    // locale under the US `translatedAt` rule). Excluded from the batches:
+    //   - storyline cells (attached via Review 360, flagged where unattached),
+    //   - course title/description cells (the final set-stack-titles step).
+    const skip = new Set<string>();
     const titleDescIds = [course.title, course.description]
       .filter(isL10nRef)
       .map((r) => r.l10nId);
     for (const id of titleDescIds) {
-      for (const code of Object.keys(tables)) inlineSkip.add(cellKey(id, code));
+      for (const code of Object.keys(allTables)) skip.add(cellKey(id, code));
     }
     // Storyline cells are NEVER shipped verbatim (their contentPrefix belongs to
     // the SOURCE course and storyline keys bypass the foreign-key invariant):
@@ -1170,7 +1208,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     const slCells = storylineCells(doc);
     const slByRef = new Map<string, { locales: string[]; title?: string }>();
     for (const c of slCells) {
-      inlineSkip.add(cellKey(c.l10nId, c.locale));
+      skip.add(cellKey(c.l10nId, c.locale));
       const entry = slByRef.get(c.l10nId) ?? { locales: [] };
       entry.locales.push(c.locale);
       const sl = (c.value as { storyline?: { title?: unknown } }).storyline;
@@ -1190,7 +1228,8 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         summary: `⚠ Storyline in a stack${entry.title ? ` ("${entry.title}")` : ''} — attach manually for: ${pending.join(', ')}`,
       });
     }
-    const batches = planCellWrites(collectCells(doc), { skip: inlineSkip });
+    const targetCells = collectCells(doc).filter((c) => c.locale !== defLocale);
+    const batches = planCellWrites(targetCells, { skip });
     batches.forEach((batch, i) => {
       steps.push({
         kind: 'write-l10n',
@@ -1239,9 +1278,10 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     }
   }
 
-  // Theme AFTER the lessons exist — Rise rejects theming a lesson-less course
-  // ("add a lesson to your course before theming"). Applied once, course-level.
-  if (course.theme && typeof course.theme === 'object') {
+  // Monolingual theme — AFTER the lessons exist (Rise rejects theming a
+  // lesson-less course). The stack path emitted its own set-theme
+  // pre-conversion above.
+  if (!stack && course.theme && typeof course.theme === 'object') {
     steps.push({
       kind: 'set-theme',
       sourceCourseId,
@@ -1275,12 +1315,6 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   }
 
   if (stack) {
-    // Placeholder-era cells the conversion created that map to nothing in the
-    // source (computed at runtime from the await-stack snapshot; usually none).
-    steps.push({
-      kind: 'cleanup-l10n',
-      summary: 'Delete placeholder-era translation cells (if any)',
-    });
     if (input.course.l10n?.showLocaleSelector === true) {
       steps.push({
         kind: 'flag-locale-selector',
@@ -1288,22 +1322,13 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           '⚠ Source shows the learner language selector — enable it manually (Settings → Languages)',
       });
     }
-    // Final step of a stack plan (the partial-title invariant): write the clean
-    // title + description cells for EVERY locale onto the target's own refs.
+    // Title + description cells for every writable NON-DEFAULT locale (D2,
+    // fallback-resolved — the target displays exactly what the source
+    // displays). The default locale's cells came from the conversion of the
+    // clean pre-conversion title/description and are never re-written.
     steps.push({
       kind: 'set-stack-titles',
-      summary: `Set course title "${title}" + description in every language`,
-    });
-  } else {
-    // Final title write — the very LAST step, so anything short of a completed
-    // import (hard crash, mid-run failure, Stop) leaves the provisional
-    // `!importing:` / `!unfinished:` marker instead of a clean-titled duplicate.
-    steps.push({
-      kind: 'set-title',
-      sourceCourseId,
-      title,
-      final: true,
-      summary: `Set course title "${title}"`,
+      summary: `Set course title "${title}" + description in every target language`,
     });
   }
 

@@ -15,6 +15,7 @@
 // take the writes of an EU import).
 
 import { identityFromToken, type Identity } from '@/core/auth/jwt';
+import { bearerForPlane, noTokenForPlaneMessage, shouldCaptureBearer } from '@/core/auth/slots';
 import {
   buildFetchBlockTemplatesRequest,
   buildFetchTypefacesRequest,
@@ -186,14 +187,18 @@ export default defineBackground(() => {
     return latestPlane ? auth[latestPlane] : null;
   }
 
-  /** The bearer for a plane. `strict` (a PINNED request) never falls back to the
-   *  other plane's token — a cross-plane bearer is exactly the mix-up pinning
-   *  exists to prevent. Unpinned requests keep the pre-pinning fallback. */
-  function tokenFor(plane: Plane | null, strict = false): string | null {
-    const own = plane ? auth[plane].token : null;
-    if (own) return own;
-    if (strict) return null;
-    return latestPlane ? auth[latestPlane].token : null;
+  /** The bearer for a plane. A known plane uses its OWN slot or nothing — the
+   *  cross-plane fallback is GONE (F0): borrowing the other plane's token is
+   *  what poisoned the US slot on the first live cross-plane run (the sniffer
+   *  captured our own borrowed header back into the slot). Only a plane-less
+   *  caller (no Rise tab resolvable — status/display paths) may fall back to
+   *  the most recently captured slot. */
+  function tokenFor(plane: Plane | null): string | null {
+    return bearerForPlane(
+      plane,
+      { us: auth.us.token, eu: auth.eu.token },
+      latestPlane,
+    );
   }
 
   // Open the side panel when the toolbar icon is clicked.
@@ -207,6 +212,12 @@ export default defineBackground(() => {
 
   // --- Token capture: read Authorization off genuine Rise requests ----------
   // Keyed by the REQUEST's plane so a US and an EU session coexist.
+  // F0 GUARD: the sniffer also sees requests WE relay into the tab — it must
+  // never capture a header the extension itself attached. A value already held
+  // in the OTHER plane's slot cannot be a genuine SPA bearer for this plane
+  // (the SPA never sends one plane's token to the other plane's host); storing
+  // it would poison this slot with the other account's credentials — exactly
+  // the self-sniffing loop of the first live cross-plane run.
   browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
       const plane = risePlaneFromUrl(details.url);
@@ -216,7 +227,11 @@ export default defineBackground(() => {
       );
       const value = header?.value;
       if (value && /^Bearer\s+/i.test(value)) {
-        setToken(plane, value.replace(/^Bearer\s+/i, '').trim());
+        const token = value.replace(/^Bearer\s+/i, '').trim();
+        if (!shouldCaptureBearer(plane, token, { us: auth.us.token, eu: auth.eu.token })) {
+          return;
+        }
+        setToken(plane, token);
       }
     },
     { urls: RISE_TAB_GLOBS },
@@ -357,7 +372,16 @@ export default defineBackground(() => {
   async function relayFetch(spec: RelaySpec, pin?: TabPin): Promise<InPageResult> {
     const resolved = await resolveTarget(pin);
     if (!resolved.ok) return { ok: false, status: 0, error: resolved.error };
-    const { tabId, plane, pinned } = resolved.target;
+    const { tabId, plane } = resolved.target;
+    // F0: a bearer-carrying request with an EMPTY slot for its own plane BLOCKS
+    // loudly — it must never proceed bare (the server's 403 would trigger a
+    // reauth loop with a misleading message) and must never borrow the other
+    // plane's token. Presigned/cookie-only specs (noAuth/omitBearer) proceed:
+    // they don't use the bearer at all.
+    const token = tokenFor(plane);
+    if (!token && !spec.noAuth && !spec.omitBearer) {
+      return { ok: false, status: 0, error: noTokenForPlaneMessage(plane) };
+    }
     try {
       const [injection] = await chrome.scripting.executeScript({
         target: { tabId },
@@ -374,7 +398,7 @@ export default defineBackground(() => {
             noAuth: spec.noAuth,
             omitBearer: spec.omitBearer,
           },
-          tokenFor(plane, pinned),
+          token,
         ],
       });
       return (
@@ -414,10 +438,15 @@ export default defineBackground(() => {
       return rawFetch(spec, pin, 1);
     }
     if (r.status === 401 || r.status === 403) {
+      // F6: the bearer did not advance (or reauth is throttled) — the fix is a
+      // course-editor boot on THIS plane's account, not a plain re-login.
       return {
         ok: false,
         status: r.status,
-        error: `Unauthorized (${r.status}) from Rise. Make sure you are logged into the open Rise tab, then retry.`,
+        error:
+          `Unauthorized (${r.status}) from Rise and the bearer did not refresh. ` +
+          `Open a course EDITOR tab on the account this run targets (the dashboard does not ` +
+          `rotate the token), make sure you are logged in there, then retry.`,
       };
     }
     if (!r.ok) {
@@ -447,7 +476,13 @@ export default defineBackground(() => {
     if ((r.status === 401 || r.status === 403) && reauthAllowed() && (await reauth(pin)).advanced) {
       r = await relayFetch(spec, pin);
     }
-    return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error };
+    // F6: a still-unauthorized write after the refresh attempt gets the
+    // actionable instruction attached (the executor surfaces `error` verbatim).
+    const authHint =
+      r.status === 401 || r.status === 403
+        ? `Unauthorized (${r.status}) and the bearer did not refresh — open a course EDITOR tab on the TARGET account (the dashboard does not rotate the token), then retry.`
+        : undefined;
+    return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error ?? authHint };
   }
 
   // Token refresh strategy — reload the Rise tab and let the SPA do it.
@@ -869,18 +904,18 @@ export default defineBackground(() => {
         if (!resolved.ok) {
           return { type: 'STORYLINE_EXPORT_RESULT', result: { ok: false, error: resolved.error } };
         }
-        const { plane, pinned, url: tabUrl } = resolved.target;
+        const { plane, url: tabUrl } = resolved.target;
         // Keep the bearer fresh PER COURSE: the ws `identify` is token-authed and
         // fails silently (socket opens, no identify result) on a stale token —
         // the dominant failure on a long run. Re-read the rotated cookie cheaply;
         // reauth (tab reload) only when actually near expiry.
         if (tokenExpiringSoon(plane) && reauthAllowed()) await reauth(pin);
         else await grabTokenForUrl(tabUrl);
-        const token = tokenFor(plane, pinned);
+        const token = tokenFor(plane);
         if (!token) {
           return {
             type: 'STORYLINE_EXPORT_RESULT',
-            result: { ok: false, error: `No Rise token captured yet for the ${plane.toUpperCase()} plane.` },
+            result: { ok: false, error: noTokenForPlaneMessage(plane) },
           };
         }
         const wsUrl = wsExportUrlForPlane(plane);
@@ -940,12 +975,12 @@ export default defineBackground(() => {
         if (!resolved.ok) {
           return { type: 'STORYLINE_UPLOAD_RESULT', result: { ok: false, error: resolved.error } };
         }
-        const { plane, pinned } = resolved.target;
-        const token = tokenFor(plane, pinned);
+        const { plane } = resolved.target;
+        const token = tokenFor(plane);
         if (!token) {
           return {
             type: 'STORYLINE_UPLOAD_RESULT',
-            result: { ok: false, error: `No Rise token captured yet for the ${plane.toUpperCase()} plane.` },
+            result: { ok: false, error: noTokenForPlaneMessage(plane) },
           };
         }
         const userId = await readAccountUserId(pin);

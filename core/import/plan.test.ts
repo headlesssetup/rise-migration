@@ -199,7 +199,9 @@ describe('buildPlan ordering', () => {
     expect(positions).toEqual([0, 1, 2]);
   });
 
-  it('early title is a "!importing:" marker; the LAST step writes the clean title (H4)', () => {
+  it('writes the CLEAN title exactly once, right after the first lesson (no markers)', () => {
+    // Operator decision 2026-08-04: the `!importing:`/`!unfinished:` title
+    // mangling is gone — partial courses are identified via reports, not names.
     const steps = buildPlan(
       input({
         course: {
@@ -212,26 +214,24 @@ describe('buildPlan ordering', () => {
       title: string;
       final?: boolean;
     }>;
-    expect(titles.length).toBe(2);
-    // Early provisional marker — a hard-crashed partial stays identifiable.
-    expect(titles[0]!.title).toBe('!importing: My Course');
-    expect(titles[0]!.final).toBeFalsy();
-    // Clean title is the plan's very LAST step (only a completed import gets it).
-    expect(steps[steps.length - 1]).toMatchObject({
-      kind: 'set-title',
-      title: 'My Course',
-      final: true,
-    });
+    expect(titles).toHaveLength(1);
+    expect(titles[0]!.title).toBe('My Course'); // clean, never a marker
+    expect(titles[0]!.final).toBe(true); // the description rides this write
+    // …and it comes right after the first create-lesson (the shell can't be
+    // titled while lesson-less).
+    const firstLesson = steps.findIndex((s) => s.kind === 'create-lesson');
+    expect(steps[firstLesson + 1]!.kind).toBe('set-title');
+    expect(steps.some((s) => s.summary.includes('!importing'))).toBe(false);
   });
 
-  it('a lesson-less course also gets provisional + final title writes', () => {
+  it('a lesson-less course gets its single clean title write too', () => {
     const steps = buildPlan(input()); // default input has no lessons
     const titles = steps.filter((s) => s.kind === 'set-title') as Array<{
       title: string;
       final?: boolean;
     }>;
-    expect(titles.map((t) => t.title)).toEqual(['!importing: My Course', 'My Course']);
-    expect(titles[1]!.final).toBe(true);
+    expect(titles.map((t) => t.title)).toEqual(['My Course']);
+    expect(titles[0]!.final).toBe(true);
   });
 
   it('section lessons skip locks/blocks', () => {

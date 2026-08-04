@@ -173,6 +173,32 @@ materialize.
    Manage-languages mitm of the three imported stacks).
 7. F9 materialized titles in manual-work locations (cosmetic).
 
+## Capture round 3 (`capture_microlearning.mitm`, 2026-08-04) — F2 RESOLVED
+
+US editor, mitm on: create a Microlearning, type a course title, add 4 blocks.
+The full session settles F2 and removes its planned blocker:
+
+- `POST /manage/api/content {folderId:"all", type:"onePage"}` → the handshake
+  `GET_COURSE` already lists ONE lesson (`{title:"", type:"blocks", icon:null,
+  position:null, items:[]}`) on `course.lessons`. F2 confirmed byte-for-byte.
+- **The editor never creates, updates, or renames any lesson.** No
+  `CREATE_LESSON`, no `UPDATE_LESSON` in the whole capture. All 4 blocks ride
+  `CREATE_BLOCKS {lessonId:<shell lesson>}` chained by `previousBlockId`; the
+  title typing is 8× `UPDATE_COURSE_FIELD_THROTTLE` (course title, per-keystroke
+  throttle). After everything the lesson still reads `title:""`.
+- Cross-checked against the archive: BOTH onePage sources (monolingual `kUI5…`
+  and stack `Nu98…`) hold exactly one lesson with a **plain `""` title** — even
+  on the l10n-ified stack, where the course title is a ref, the lesson title
+  stays a plain empty string. A microlearning lesson has no title by design;
+  the course title is the only title.
+
+So the fix needs NO rename envelope (the blocker in the fix plan's batch 2 was
+"the shell lesson's title is empty and no captured envelope renames a lesson" —
+empty IS the faithful state): **adopt** the shell's lesson as lesson 1
+(`ids.set(sourceLessonId, shellLessonId)`, skip its CREATE_LESSON, keep the
+normal UPDATE_LESSON configure step). Side fact: on a onePage stack the
+lesson-1 title-ref pairing (F1) does not apply — the lesson title is not a ref.
+
 ## Capture round 2 (`capture_banks-and-count.mitm`, 2026-08-04) — F4 + F5 RESOLVED
 
 ### F4 resolution: the US editor has NO per-id bank GET

@@ -97,27 +97,17 @@ Facts that drive the migration design:
   target ROW, or target row missing ⇒ pending; target-only never flagged"),
   derived from EU captures, is FALSIFIED on US — the EU behavior itself needs
   re-measurement. Operator-verified on both models: editing a TARGET value
-  never raises a flag, and an AI run stamps + clears. The write-order invariant
-  (default before target) is kept — it is correct under the EU model and
-  harmless under the US one — but on a US target every imported text cell pends
-  until an AI run, regardless of order. The badge NUMBER (`updateCount`) is a
-  segment-ish tally smaller than the pending cell count; compare pending SETS
-  via the updates endpoint, never tallies.
-  **After a faithful import the badge is expected and unavoidable.** Cells the
-  source holds only in its default language (fallback cells — overwhelmingly
-  media records, plus non-translatable text like quiz choices, numbers, urls)
-  have no target-locale row to copy, so Rise counts each one as a source change.
-  Live measurement (2026-08-02): a stack whose source reported `updateCount: 2`
-  imported as "45 source changes" — exactly its 45 default-only cells (41 media,
-  4 text); its sibling: 57. The source shows a *lower* number only because its
-  own AI run stamped those cells as processed; **no API can set that marker** —
-  the only writer is a translation run, which a migration must never do (it would
-  AI-translate content the source deliberately left untranslated).
-  So: content is identical in every language; only the sync marker differs.
-  `defaultOnlyCells()` (`core/l10n/tables.ts`) PREDICTS the number from the
-  archive, and the import logs + reports it next to what Rise shows — matching
-  counts mean benign, a mismatch is a real signal. The reports also carry the
-  standing warning: **never click "Update Translations"** on a migrated stack.
+  never raises a flag, and an AI run stamps + clears. The badge NUMBER
+  (`updateCount`) is a segment-ish tally smaller than the pending cell count;
+  compare pending SETS via `GET …/translations/updates`
+  (`parseTranslationUpdates`, core/l10n/updates.ts), never tallies.
+  **This rule is WHY the import is full-course-first (§6, idea 2):** the single
+  conversion of the fully-built course stamps `translatedAt` on every cell, and
+  no default row is ever written after it — so a migrated stack is pending-free
+  under BOTH models (expected pending set after import: EMPTY; the read-back
+  records the actual set in the report). The historical placeholder pipeline
+  left 45/57-cell badges on the EU tests and would have pended ~every text cell
+  on US; both measurements are preserved in git history.
 - `defaultLocale` is operator-DECLARED at conversion, never validated (a German
   course declared `en-us` converts happily).
 - Label sets are **account-scoped**; the default locale row points at the
@@ -195,6 +185,11 @@ Poll §3 until every stack item is `complete`, or listen on the conveyor socket:
 `rise/l10n/UPDATE_PENDING_TRANSLATIONS` (document data never rides the socket).
 
 ### 4.2 Content writes on a stack — `translationChanges` (capture-proven)
+
+(Protocol reference — the idea-2 import, §6, no longer USES inline
+`translationChanges`: it builds pre-conversion with plain values and writes
+target rows post-conversion via bare batch updates. Kept because it is how the
+EDITOR writes on a converted stack.)
 
 Structure calls are the normal ducks envelopes; the l10n twist is that creates
 carry the cell values inline, with **client-generated l10nIds**:
@@ -361,7 +356,13 @@ whole stack (language switcher in Review); poll `POST
   overrides) is downloaded like any media; orphan locations format as
   `translations (ru) › …`.
 
-## 6. Import algorithm (implemented; core/import plan+executor stack branch)
+## 6. Import algorithm — full-course-first ("idea 2", v0.6.7; core/import plan+executor stack branch)
+
+The v0.6.x placeholder pipeline (minimal course → convert → copy cells with
+source l10nIds verbatim) is GONE. Its two structural problems — AI'd placeholder
+junk in fallback locales, and the US `translatedAt` pending rule flagging every
+imported text cell (§2) — are both solved by replaying the SOURCE's own history:
+full course → AI run → proofread overwrites.
 
 0. **Preflight** (orchestrator, zero writes): every non-default source locale
    code must appear in the target's
@@ -372,99 +373,91 @@ whole stack (language switcher in Review); poll `POST
    no locale row — are skipped from every write and flagged
    (`flag-l10n-locale`): convert-stack recreates live languages only, and
    writing cells for a locale unknown to the target is untested server
-   behavior. The badge prediction (`defaultOnlyCells`) counts live locales
-   only, for the same reason.
-1. Shell (`POST /manage/api/content` + GET_COURSE handshake) → **placeholder
-   lesson** (plain-string title = source lesson 1's default-locale title; it IS
-   the future lesson 1) → provisional `!importing:` title → placeholder
-   description `'.'` (creates the description ref at conversion) → course
-   images (cover/card/logo/lessonHeader) from the MATERIALIZED default locale,
-   uploaded + set as plain objects (conversion refs them itself; AI never
-   touches media).
+   behavior.
+1. **Build the FULL course in the DEFAULT language** from the MATERIALIZED doc
+   — exactly the monolingual path: shell (`POST /manage/api/content`, type
+   preserved, shell-lesson adoption for `onePage`) → every lesson with its
+   plain materialized title → the CLEAN course title right after lesson 1 (no
+   `!importing:` markers — operator decision 2026-08-04) → blocks
+   copy-faithful-materialized (fresh client ids, media uploaded + remapped, NO
+   l10n refs, NO inline translationChanges) → real description (plain,
+   materialized) → course images → theme. A storyline block's DEFAULT-language
+   package attaches here like a monolingual block (`copy_review_item` +
+   `media.storyline` patch).
 2. **`convert-stack`**: one `POST …/translations` per source formality group,
-   `sourceLanguage` = the source's `defaultLocale`. AI runs on the placeholder
-   strings only.
+   `sourceLanguage` = the source's `defaultLocale`. The AI translates the REAL
+   content — and stamps `translatedAt` on every cell, which is what makes the
+   badge 0 (§2, US rule).
 3. **`await-stack`**: paced poll of §3 until every language is `complete`
-   (default 240 polls ≈ 8 min ceiling), then GET_COURSE → assert l10n-ified,
-   learn the target's own course-level refs (`courseRefMap` source→target by
-   structural position + the lesson-1 title pair), snapshot the pre-content doc
-   as the junk-cleanup baseline. Unmatched source course refs → `l10n-ref`
-   manual flags.
-4. **Table media uploads** (`upload-l10n-asset`): every key found in the source
-   tables (all locales) through the normal GET_YURL→S3 chain into `keyMap`;
-   orphans blank+flag as usual.
-5. **Content, copy-faithful with SOURCE l10nIds kept verbatim** (no id mapping
-   for lesson/block cells): lesson 1 = `update-lesson` on the placeholder;
-   lessons 2+ = `create-lesson` with `title:{l10nId:<source id>}` + inline
-   default-locale title cell; every lesson's `create-blocks` ships the source
-   blocks (refs intact) + inline `translationChanges` (default locale,
-   media-remapped values, TARGET lesson id).
-6. **`write-l10n`**: every remaining source cell, batched ~20/envelope, ONE
-   locale per envelope, **default locale first** (pending rule §2), values
-   media-remapped, course-level ids mapped through the ref map, `lessonId` on
-   adds mapped to target lessons. Title/description cells are EXCLUDED here.
-7. **`set-locale-labelset`**: for non-default locales with a custom
-   `labelSetId`: `CREATE_LABEL_SET` (+ `UPDATE_LABELS` with the diff vs the
-   language's default set) + `UPDATE_LOCALE` bind; deduped run-wide by source
-   set id. (Course-level label sets for monolingual courses remain a documented
-   gap — no captured binding envelope.)
-8. **`cleanup-l10n`**: delete target cells that map to nothing in the source
-   (computed against the §3 snapshot — placeholder-era only; usually empty).
-9. **`set-stack-titles`** — the LAST step (partial-title invariant): clean
-   title + description cells for every locale (default first) onto the
-   target's own refs. A graceful Stop renames via the title CELL
-   (`!unfinished:`) once the course is converted — never a plain-string title
-   write, which would clobber the ref.
-10. `showLocaleSelector` true → `locale-selector` manual flag (§4.4).
+   (default 900 polls ≈ 30 min ceiling — a FULL course converts slower than the
+   15–70 s/language minimal conversions; real duration unmeasured, R1), then
+   GET_COURSE → assert l10n-ified → **pair every source ref to the target's
+   own refs** (`core/l10n/pair.ts`): course fields by key path, lessons via the
+   executor's id map, blocks via the minted client ids (never positional across
+   lessons — ids repeat), then a parallel walk inside each block. Unmatched
+   source refs → `l10n-ref` flags (cells skipped — a source id must never
+   ship); target-only refs over DEEP-EMPTY source slots (e.g. the no-logo
+   `course.media`) → EXPECTED at read-back; target-only refs over non-empty
+   plain values (version skew) → flagged for review.
+4. **Table media uploads** (`upload-l10n-asset`): keys found in NON-default
+   locales' tables (per-language overrides — the default locale's media rode
+   the build) through the normal GET_YURL→S3 chain into `keyMap`; orphans
+   blank+flag as usual.
+5. **`write-l10n`**: every TARGET-locale source cell, batched ~20/envelope, ONE
+   locale per envelope, values media-remapped, every id mapped through the
+   pairing map, all bare `update`s (the conversion minted every cell; the
+   capture-proven shape for writing further locales on an existing cell).
+   **The default locale is NEVER written post-conversion** — the write-order
+   invariant in idea-2 form: a default write would re-pend the cell in every
+   locale under the US `translatedAt` rule. Excluded: storyline cells
+   (attached via Review 360 — non-default languages as post-await cell
+   updates through the pairing map; flagged per language when unattachable or
+   when the conversion did not l10n-ify the slot) and title/description
+   (step 7).
+6. **`set-locale-labelset`**: unchanged (CREATE_LABEL_SET + UPDATE_LABELS diff
+   + UPDATE_LOCALE bind; deduped run-wide by source set id).
+7. **`set-stack-titles`** (last): title + description cells for every writable
+   NON-default locale, **fallback-resolved** (D2: a locale the source serves by
+   default-language fallback gets the default value — the target displays
+   exactly what the source displays). The default locale's cells came from the
+   conversion of the clean pre-conversion title/description.
+8. `showLocaleSelector` true → `locale-selector` manual flag (§4.4).
 
 **Read-back**: unfiltered `findForeignMediaKeys` over the target GET_COURSE
-(covers tables) + `verifyL10nParity` (locale sets; cell-by-cell equality modulo
-media tokens/volatile fields; extra-cell detection; tolerated absences are ONLY
-the announced ones — flagged storyline cells and unmatched course refs) +
-structural/course-field parity + per-language `pendingChangesCount` recorded in
-the report with the standing warning. Any unexpected divergence → the course is
-`partial`, never `imported`; known-gap divergences (course settings, the random
-default cover on a no-cover source) ride the EXPECTED bucket.
+(covers tables) + `verifyL10nParity` driven by the executor's pairing map
+(locale sets; cell-by-cell equality modulo media tokens/volatile fields;
+tolerated absences: flagged storyline cells, unmatched refs, and — inherent to
+idea 2 — the default-locale rows we never write, whose VALUES are verified
+through block/course-field parity instead) + structural/course-field parity +
+the **pending SET** from `GET …/translations/updates` (never counts:
+`pendingChangesCount` is lazy and `updateCount` is a segment tally — F5).
+Expected pending set after import: **EMPTY** — everything is stamped, so
+"Update translation" finds nothing to do and the standing warning reduces to
+"investigate before any AI run if the set is non-empty". Any unexpected
+divergence → `partial`, never `imported`.
 
-**Known artifact — surviving placeholder cells.** The conversion AI-translates
-the provisional `!importing:` title / `.` description / placeholder lesson-1
-title into EVERY locale, and step 9 overwrites only the locales the SOURCE
-holds — a locale the source serves by default-language fallback keeps the AI'd
-placeholder VISIBLY (the captured cell-delete removes an id across ALL locales;
-there is no per-locale delete to clean it with). The read-back surfaces these
-as `placeholder-cell` entries + an `l10n-placeholder` manual flag (report +
-log), status-neutral until the resolution policy is decided (overwrite with the
-default-locale value — a scoped form of mirroring — vs. hand-fix per language;
-NOTE an AI updates-run, §6b, would also overwrite them since the clean default
-row is newer). Rare in practice: a source whose own AI run processed its
-title/description has rows in every locale.
+**Known residue (reported, expected):** the conversion's AI text persists in
+default-only TEXT cells — locales the source serves by default-language
+fallback have no proofread row to overwrite the AI translation with (media is
+safe: the conversion creates no media rows, so media lands in the source's
+exact state). Predicted per course (`defaultOnlyTextCells`) and listed in the
+report as `aiTextCells`, status-neutral.
 
-**Resume** policy is unchanged (course granularity): a stack that failed
-mid-build keeps its `!importing:`/`!unfinished:` marker and is re-imported from
-scratch; delete the partial by hand.
+**Resume** policy is unchanged (course granularity): a failed/stopped stack is
+re-imported from scratch; the partial keeps its CLEAN title (no markers) and is
+identified via the run report/summary — delete it by hand before the re-run.
 
-## 6b. OPEN DECISION — the sync badge (nothing built)
+## 6b. CLOSED (2026-08-04) — the sync badge: solved by the import shape
 
-A migrated stack shows Rise's "N source changes detected" badge (45 / 57 on the
-two test courses) while the sources show 2. Content is verified identical; the
-target simply lacks the AI-run *stamps* the source's run left behind (§2, pending
-rule). Operator-verified: no dismiss affordance exists, and the ONLY way to clear
-the badge is a course-wide AI run.
-
-Status of the options — **mirroring default values into missing target rows is
-REJECTED** (it permanently disconnects those cells from default-language edits,
-with no in-editor way back: the bundle has `revertToSourceAudio` only, no image
-revert). Faking `translatedAt` is impossible (read-only, server-owned). The only
-remaining route is triggering Rise's own updates-run
-(`POST …/translations/updates {}`), which stamps image cells WITHOUT creating
-target rows — i.e. exactly the source's state, no disconnect — at the cost of AI
-text on the few genuinely-untranslated cells (or an ex-post correction of those).
-Badge 0 is an accepted outcome; reproducing the source's badge is not required.
-
-Unproven and load-bearing: whether an *incremental* run stamps pending MEDIA the
-way the initial `translateAll` did. Settle it with one click on the scratch
-course before building anything — see
-`docs/handover-2026-08-02-multilang.md` §1.
+Resolved by the idea-2 rework above, on operator decision (translation credits
+unlimited; `!importing:` markers dropped rather than accepting even a 2-cell
+badge). The conversion of the FULLY-BUILT course stamps `translatedAt` on every
+cell BEFORE the target-locale overwrites, and no default row is ever written
+after it — quiet under both the EU row-comparison model and the US
+`translatedAt` model, no post-hoc updates-run, no mirroring. Historical context
+(mirroring rejected; `translatedAt` unforgeable; the updates-run route and its
+costs) is preserved in git history and `docs/STATUS.md`. The migrator still
+never calls `POST …/translations/updates {}`.
 
 ## 7. Known gaps / open questions
 

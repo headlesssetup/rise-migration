@@ -286,6 +286,41 @@ describe('verifyL10nParity (multi-language stacks)', () => {
     expect(r.ok).toBe(true);
     expect(r.cells).toEqual({ source: 0, target: 0, compared: 0 });
   });
+
+  it('F3: a target-only ref over a DEEP-EMPTY source slot is EXPECTED, not a divergence', () => {
+    // The empty-logo artifact: the source has no course.media at all (or a
+    // deep-empty object), yet the conversion mints a ref + a default-locale
+    // cell for the slot. Every no-logo stack went `partial` on exactly this.
+    const tgt = JSON.parse(JSON.stringify(goodTarget)) as {
+      course: Record<string, unknown>;
+      l10n: { translations: Record<string, Record<string, unknown>> };
+    };
+    tgt.course.media = { l10nId: 'tgt-logo' };
+    tgt.l10n.translations['en-us']!['tgt-logo'] = { image: null };
+    const r = verifyL10nParity(source, tgt as never);
+    expect(r.issues).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.expected).toEqual([
+      {
+        kind: 'extra-cell',
+        locale: 'en-us',
+        l10nId: 'tgt-logo',
+        detail: 'target-only ref over an empty source slot (conversion artifact)',
+      },
+    ]);
+
+    // Same with a deep-empty (not absent) source slot.
+    const src2 = JSON.parse(JSON.stringify(source)) as { course: Record<string, unknown> };
+    src2.course.media = { image: null };
+    expect(verifyL10nParity(src2 as never, tgt as never).ok).toBe(true);
+
+    // A NON-empty source slot still counts the unmapped target cell as an issue.
+    const src3 = JSON.parse(JSON.stringify(source)) as { course: Record<string, unknown> };
+    src3.course.media = { image: { key: 'rise/courses/SRC/logo.png' } };
+    const r3 = verifyL10nParity(src3 as never, tgt as never);
+    expect(r3.ok).toBe(false);
+    expect(r3.issues.some((i) => i.kind === 'extra-cell' && i.l10nId === 'tgt-logo')).toBe(true);
+  });
 });
 
 describe('verifyParity — course-field read-back (theme, images, settings)', () => {

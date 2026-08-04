@@ -95,7 +95,12 @@ export function checkSourceNotTarget(
       matchedBy === 'sub'
         ? namesDiffer
           ? `matched by signed-in user id (JWT sub) while the account names differ ("${source.name}" vs "${target.name}") — the captured token may predate an account switch: reload the target Rise COURSE EDITOR tab and re-check before overriding`
-          : 'matched by signed-in user id (JWT sub)'
+          : // A sub match with matching/absent names is either a genuine
+            // same-account write OR a target token slot holding the SOURCE
+            // account's bearer (stale, or — pre-F0 — cross-plane-poisoned).
+            // Either way the run would write with the source's credentials, so
+            // the remedy is the same: refresh the target slot, don't override.
+            'matched by signed-in user id (JWT sub) — if the target tab really is a different account, its token slot is stale or mis-filled: reload the target Rise COURSE EDITOR tab and re-check before overriding'
         : `matched by account name ("${target.name}")`;
     return {
       ok: false,

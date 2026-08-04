@@ -3,3 +3,5 @@
 export * from './stack';
 export * from './materialize';
 export * from './tables';
+export * from './updates';
+export * from './pair';

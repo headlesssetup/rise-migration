@@ -189,8 +189,9 @@ describe('executePlan — dry run predicts surviving keys (8b)', () => {
   });
 });
 
-describe('executePlan — title lifecycle (H4)', () => {
-  it('writes "!importing: <title>" early and the clean title (+description) LAST', async () => {
+describe('executePlan — title lifecycle', () => {
+  it('writes the CLEAN title exactly once (+description on the same step) — no markers', async () => {
+    // Operator decision 2026-08-04: no `!importing:`/`!unfinished:` mangling.
     const input = imageCourse();
     (input.course.course as Record<string, unknown>).description = 'A course about things';
     const titles: string[] = [];
@@ -213,13 +214,114 @@ describe('executePlan — title lifecycle (H4)', () => {
       mintId: counterMint(),
     });
     expect(res.ok).toBe(true);
-    // Provisional marker first, clean title last — a hard crash in between
-    // leaves an unmistakable "!importing:" course, never a plain-titled twin.
-    expect(titles).toEqual(['!importing: My Course', 'My Course']);
-    // Description rides only with the final title write.
-    expect(descs).toEqual(['A course about things']);
-    // The clean-title write is the very last envelope of the run.
-    expect(res.envelopes[res.envelopes.length - 1]!.step).toBe('set-title');
+    expect(titles).toEqual(['My Course']); // once, clean, never a marker
+    expect(descs).toEqual(['A course about things']); // rides the same step
+  });
+});
+
+describe('executePlan — onePage shell-lesson adoption (F2)', () => {
+  // A microlearning source: ONE lesson, EMPTY title (capture-proven: a onePage
+  // lesson has no title by design — the course title is the only title).
+  function onePageInput(lessonTitle = ''): PlanInput {
+    const input = imageCourse();
+    (input.course.course as Record<string, unknown>).type = 'onePage';
+    (input.course.lessons![0] as Record<string, unknown>).title = lessonTitle;
+    return input;
+  }
+  // Handshake doc mirrors the capture: the shell ALREADY holds one empty lesson.
+  function shellHandlers(): Record<string, (body: unknown) => unknown> {
+    return {
+      ...happyHandlers,
+      GET_COURSE: () => ({
+        payload: {
+          course: { id: 'NEWCOURSE', title: '', type: 'onePage', lessons: ['SHELL1'] },
+          lessons: [{ id: 'SHELL1', title: '', type: 'blocks', icon: null, position: null, items: [] }],
+        },
+      }),
+    };
+  }
+
+  it('adopts the shell lesson as lesson 1 — no CREATE_LESSON, blocks/update address it', async () => {
+    const input = onePageInput();
+    const bodies: { url: string; payload: Record<string, unknown> }[] = [];
+    const { relay, calls } = mockRelay(shellHandlers());
+    const spyRelay: Relay = async (spec) => {
+      if (spec.body) bodies.push({ url: spec.url, payload: JSON.parse(spec.body) as Record<string, unknown> });
+      return relay(spec);
+    };
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: spyRelay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    // The single source lesson ADOPTED the shell lesson — nothing was created.
+    expect(calls.some((c) => c.url.endsWith('/lessons/CREATE_LESSON'))).toBe(false);
+    expect(res.idMap['L1']).toBe('SHELL1');
+    // Follow-ups address the adopted lesson.
+    const upd = bodies.find((b) => b.url.endsWith('/lessons/UPDATE_LESSON'));
+    expect((upd?.payload.payload as Record<string, unknown>)?.id).toBe('SHELL1');
+    const cb = bodies.find((b) => b.url.endsWith('/lessons/CREATE_BLOCKS'));
+    expect((cb?.payload.payload as Record<string, unknown>)?.lessonId).toBe('SHELL1');
+  });
+
+  it('does NOT adopt for a TITLED lesson 1 (no rename envelope exists) and logs the shell note', async () => {
+    const input = onePageInput('Real Title');
+    const logs: string[] = [];
+    const { relay, calls } = mockRelay(shellHandlers());
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+      log: (m) => logs.push(m),
+    });
+    expect(res.ok).toBe(true);
+    // Titled lesson 1 → created normally (faithful title beats lesson count;
+    // the read-back surfaces the extra shell lesson loudly).
+    expect(calls.some((c) => c.url.endsWith('/lessons/CREATE_LESSON'))).toBe(true);
+    expect(res.idMap['L1']).toBe('NEWLESSON');
+  });
+
+  it('a lessonless handshake (regular/aiOutline shell) changes nothing', async () => {
+    const input = imageCourse();
+    const { relay, calls } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(calls.some((c) => c.url.endsWith('/lessons/CREATE_LESSON'))).toBe(true);
+  });
+
+  it('never adopts a NON-empty shell lesson (title or items present)', async () => {
+    const input = onePageInput();
+    const handlers = {
+      ...happyHandlers,
+      GET_COURSE: () => ({
+        payload: {
+          course: { id: 'NEWCOURSE', lessons: ['SHELL1'] },
+          lessons: [{ id: 'SHELL1', title: 'occupied', items: [{ id: 'x' }] }],
+        },
+      }),
+    };
+    const { relay, calls } = mockRelay(handlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(calls.some((c) => c.url.endsWith('/lessons/CREATE_LESSON'))).toBe(true);
+    expect(res.idMap['L1']).toBe('NEWLESSON');
   });
 });
 

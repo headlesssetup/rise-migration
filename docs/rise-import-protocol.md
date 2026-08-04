@@ -834,6 +834,16 @@ its own dry-run + live run. They share state through small id-map artifacts unde
 - **Microlearning = a course with `type:"onePage"`.** `POST /manage/api/content
   {createBookmark:false, folderId, type:"onePage"}` → `{id}`. A normal course omits
   `type` (defaults to a multi-lesson course). Single-lesson in the UI, same API.
+  ⚠ **A `onePage` shell ships WITH one pre-created lesson** (capture-proven,
+  `capture_microlearning.mitm` 2026-08-04): the handshake `GET_COURSE` already
+  lists ONE lesson `{title:"", type:"blocks", icon:null, position:null, items:[]}`
+  on `course.lessons`. The editor NEVER creates/updates/renames it — all blocks go
+  straight into it via `CREATE_BLOCKS {lessonId:<shell lesson>}`, and the lesson
+  title stays `""` forever (a microlearning lesson has no title by design; the
+  course title, typed via `UPDATE_COURSE_FIELD_THROTTLE`, is the only title).
+  Regular and `aiOutline` shells are LESSONLESS (capture-confirmed, first US run).
+  The importer therefore **adopts** the shell's empty lesson as lesson 1
+  (id-mapped, no `CREATE_LESSON`) instead of creating a phantom second lesson.
 - **Delete a typeface:** `POST …/ducks/rise/typefaces/DELETE_TYPEFACE {id, courseId}`
   → 200 (echoes the course's remaining typeface ids). Needs a live courseId. (Lets a
   cleanup/purge remove typefaces this tool created.)

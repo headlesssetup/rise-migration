@@ -113,6 +113,12 @@ body `{type, payload}`, bearer auth.
 1. **Create the course shell**
    `POST /manage/api/content` body `{"createBookmark":false,"folderId":"all"}`
    → `{"id":"<newCourseId>"}`
+   Carry the source `type` (e.g. `"onePage"` for a microlearning) verbatim.
+   ⚠ A `type:"onePage"` shell is created WITH one pre-created lesson
+   (`{title:"", type:"blocks", items:[]}` — capture-proven 2026-08-04); the
+   editor writes blocks straight into it and never renames it. Regular and
+   `aiOutline` shells are lessonless. Adopt the shell lesson as lesson 1 —
+   creating another leaves a phantom extra lesson.
 
 2. **Set course fields**
    `rise/courses/UPDATE_COURSE` payload `{id, theme}` (or `UPDATE_COURSE_FIELD` for

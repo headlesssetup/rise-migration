@@ -10,10 +10,11 @@
 // barrel) keeps the same surface after the split.
 
 import {
-  courseRefMap,
   defaultLocaleOf,
-  defaultOnlyCells,
+  defaultOnlyTextCells,
   isLocalizedStack,
+  parseTranslationUpdates,
+  pendingKey,
   resolveStackTitle,
   stackLocales,
 } from '@/core/l10n';
@@ -37,6 +38,7 @@ import {
   formatEstimate,
   type ImportEstimate,
   getTranslations,
+  getTranslationUpdates,
   getSubscription,
   getAvailableLanguages,
   summarizeFlags,
@@ -51,6 +53,7 @@ import {
   type FidelityReport,
   type ManualWorkItem,
   type ParityReport,
+  type PendingSetReport,
   type L10nParityReport,
   type RunCsvCourse,
   verifyTypefaceBindings,
@@ -874,7 +877,8 @@ export async function runImport(
     // pending-translation counts (informational — see the report warning).
     let l10nParity: L10nParityReport | undefined;
     let l10nPending: Record<string, number> | undefined;
-    let l10nPendingExpected: Record<string, number> | undefined;
+    let l10nPendingSet: PendingSetReport | undefined;
+    let aiTextCells: string[] | undefined;
     if (!opts.dryRun && res.ok && res.newCourseId) {
       await pacedDelay(pacing);
       onEvent({ kind: 'log', message: `Verifying parity (read-back GET_COURSE ${res.newCourseId})…` });
@@ -998,41 +1002,37 @@ export async function runImport(
               for (const loc of s.locales) toleratedMissing.add(`${s.l10nId} ${loc}`);
             }
           }
-          // Unmatched course-level refs (flagged l10n-ref at await-stack) are
-          // deliberately NOT written — under their source ids they'd be orphan
-          // rows nothing references. Their announced absence is tolerated.
-          const { unmatched: unmatchedRefs } = courseRefMap(course, targetDoc);
-          for (const u of unmatchedRefs) {
-            for (const code of Object.keys(course.l10n?.translations ?? {})) {
-              toleratedMissing.add(`${u.l10nId} ${code}`);
+          // Refs the pairing could not match (flagged l10n-ref at await-stack)
+          // are deliberately NOT written — the target has no ref to address.
+          // Their announced absence is tolerated. Also tolerated MISSING: the
+          // default-locale rows of source cells — idea 2 never writes default
+          // rows; their VALUES are verified through the materialized build
+          // (block/course-field parity), not the cell tables.
+          const pairMap = new Map(Object.entries(res.l10nRefMap ?? {}));
+          const allLocaleCodes = Object.keys(course.l10n?.translations ?? {});
+          for (const table of Object.values(course.l10n?.translations ?? {})) {
+            for (const id of Object.keys(table)) {
+              if (!pairMap.has(id)) {
+                for (const code of allLocaleCodes) toleratedMissing.add(`${id} ${code}`);
+              }
             }
           }
-          l10nParity = verifyL10nParity(course, targetDoc, { toleratedMissing });
-          // Surviving conversion-era placeholder rows (locales the source
-          // serves by fallback): visible junk text — flag for manual work and
-          // warn loudly. Not a status-flipping failure YET: there is no
-          // captured per-locale delete, and the resolution policy (overwrite
-          // with default-locale values vs. hand-fix) is an open operator
-          // decision — see the report field's doc in core/import/verify.ts.
+          l10nParity = verifyL10nParity(course, targetDoc, {
+            toleratedMissing,
+            idMap: pairMap,
+            toleratedExtra: new Set(res.l10nExpectedExtra ?? []),
+          });
+          // Target rows in locales the source serves by fallback are the
+          // conversion's AI translations of REAL content (idea 2) — expected,
+          // status-neutral, listed as aiTextCells in the report. No manual-work
+          // flag: the operator reviews the report list, nothing is broken.
           if (l10nParity.placeholderJunk?.length) {
-            const byLocale = new Map<string, number>();
-            for (const j of l10nParity.placeholderJunk) {
-              byLocale.set(j.locale ?? '?', (byLocale.get(j.locale ?? '?') ?? 0) + 1);
-            }
-            const summary = [...byLocale.entries()].map(([c, n]) => `${c}: ${n}`).join(', ');
-            res.flags.push({
-              kind: 'l10n-placeholder',
-              detail:
-                `${l10nParity.placeholderJunk.length} placeholder cell(s) survive in languages the ` +
-                `source serves by default-language fallback (${summary}) — those languages show the ` +
-                'AI-translated provisional title/description; fix by hand in the editor per language.',
-            });
             onEvent({
               kind: 'log',
               message:
-                `${pfx} ⚠ ${l10nParity.placeholderJunk.length} placeholder cell(s) survive (${summary}) — ` +
-                'these languages VISIBLY show the provisional title/description (the source falls back ' +
-                `to its default language there); see ${courseId}.report.md`,
+                `${pfx} NOTE ${l10nParity.placeholderJunk.length} cell(s) hold the conversion's AI ` +
+                `translation in languages the source serves by default-language fallback — expected ` +
+                `under the full-course-first import; see the AI-text list in ${courseId}.report.md`,
             });
           }
           // Per-language label-set bindings: every source locale with a CUSTOM
@@ -1067,6 +1067,14 @@ export async function runImport(
               report.error ??
               `Language read-back FAILED: ${l10nParity.issues.length} translation divergence(s) on ${res.newCourseId}`;
           }
+          // Pending translations — measured as a SET (F5). `pendingChangesCount`
+          // is LAZY (0 at read-back, populated hours later) and the badge
+          // number is a segment-ish tally, so counts are recorded as decoration
+          // only; `…/translations/updates` lists each pending (l10nId, locale)
+          // entry and is the truth. Expected set after this import shape: EMPTY
+          // (the conversion stamps every cell; no default row is written after
+          // it). Non-empty → warn + record, never fail the course on it (the
+          // signal itself can materialize lazily — the report says to re-check).
           await pacedDelay(pacing);
           const tr = await relay(getTranslations(res.newCourseId));
           if (tr.ok && tr.text) {
@@ -1080,51 +1088,43 @@ export async function runImport(
               const n = typeof it.pendingChangesCount === 'number' ? it.pendingChangesCount : 0;
               if (code && n > 0) l10nPending[code] = n;
             }
-            // Predict the count from the ARCHIVE (cells the source has only in
-            // the default language) so the operator can match it against Rise's
-            // badge: equal ⇒ expected/benign, different ⇒ a real signal.
-            const expected = defaultOnlyCells(course);
-            l10nPendingExpected = Object.fromEntries(
-              Object.entries(expected).map(([c, v]) => [c, v.total]),
-            );
-            if (Object.keys(l10nPending).length) {
-              const parts = Object.entries(l10nPending).map(([c, n]) => {
-                const e = expected[c];
-                if (!e) return `${c}: ${n}`;
-                const verdict = n === e.total ? 'as expected' : `EXPECTED ${e.total}`;
-                return `${c}: ${n} (${verdict}; ${e.media} media, ${e.text} text)`;
-              });
-              const mismatch = Object.entries(l10nPending).some(
-                ([c, n]) => (expected[c]?.total ?? -1) !== n,
-              );
-              onEvent({
-                kind: 'log',
-                message:
-                  `${pfx} NOTE: Rise shows "source changes detected" — ${parts.join(', ')}. ` +
-                  'These are cells the SOURCE holds only in its default language (fallback ' +
-                  'cells — mostly media): the content is identical, only Rise\'s sync marker ' +
-                  'differs, and it cannot be set via the API. Do NOT click "Update Translations" ' +
-                  '(it would AI-translate them).' +
-                  (mismatch ? ' ⚠ The count does NOT match the archive — investigate.' : ''),
-              });
-            }
-            // Symmetric check: the archive PREDICTS pending cells but Rise
-            // shows none for that locale — as anomalous as the reverse (e.g.
-            // an AI run fired on the target). Warn, don't stay silent.
-            const pendingByLocale = l10nPending ?? {};
-            const silentLocales = Object.entries(expected)
-              .filter(([c, v]) => v.total > 0 && !(c in pendingByLocale))
-              .map(([c, v]) => `${c}: expected ${v.total}, Rise shows 0`);
-            if (silentLocales.length) {
-              onEvent({
-                kind: 'log',
-                message:
-                  `${pfx} ⚠ Pending-count anomaly — ${silentLocales.join(', ')}. ` +
-                  'The archive predicts fallback cells for these languages but Rise reports no ' +
-                  'pending changes; a translation run may have fired on the target — investigate.',
-              });
-            }
           }
+          await pacedDelay(pacing);
+          const up = await relay(getTranslationUpdates(res.newCourseId));
+          if (up.ok && up.text) {
+            const parsed = parseTranslationUpdates(safeJson(up.text));
+            l10nPendingSet = {
+              count: parsed.pending.length,
+              keys: parsed.pending.map(pendingKey).slice(0, 50),
+              updateCount: parsed.updateCount,
+              inProgress: parsed.inProgress,
+            };
+            if (parsed.pending.length === 0) {
+              onEvent({
+                kind: 'log',
+                message: `${pfx} pending translations: 0 — every cell stamped (expected)`,
+              });
+            } else {
+              onEvent({
+                kind: 'log',
+                message:
+                  `${pfx} ⚠ pending translations: ${parsed.pending.length} cell(s) ` +
+                  `(badge tally ${parsed.updateCount ?? '—'}) — expected 0 after this import shape. ` +
+                  'The signal can materialize lazily; re-check Manage languages later and see ' +
+                  `${courseId}.report.md. Do NOT run "Update translation" before understanding the list.`,
+              });
+            }
+          } else {
+            onEvent({
+              kind: 'log',
+              message: `${pfx} ⚠ pending-set read-back unavailable (HTTP ${up.status}) — check Manage languages manually`,
+            });
+          }
+          // Default-only TEXT cells: the one knowable divergence of this import
+          // shape — the conversion's AI text persists where the source serves a
+          // locale by default-language fallback (media lands exactly; text
+          // cannot). Listed in the report for review.
+          aiTextCells = defaultOnlyTextCells(course).map((c) => `${c.l10nId} ${c.locale}`);
         }
       } else {
         onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
@@ -1151,7 +1151,7 @@ export async function runImport(
     const manual = resolveManualWork(res.flags, blockIndex);
     await storage.writeImportArtifact(
       `${courseId}.report.md`,
-      buildCourseReportMarkdown({ report, parity, l10nParity, l10nPending, l10nPendingExpected, manual }),
+      buildCourseReportMarkdown({ report, parity, l10nParity, l10nPending, l10nPendingSet, aiTextCells, manual }),
     );
     await storage.writeImportArtifact(
       `${courseId}.report.json`,
@@ -1160,7 +1160,8 @@ export async function runImport(
         parity,
         l10nParity,
         l10nPending,
-        l10nPendingExpected,
+        l10nPendingSet,
+        aiTextCells,
         manual,
         idMap: res.idMap,
       }),
@@ -1168,9 +1169,9 @@ export async function runImport(
 
     // Any UNEXPECTED read-back divergence — a surviving foreign key, a
     // translation-cell divergence, or a structural/course-field parity issue
-    // (missing/changed blocks, a leftover `!importing:` title) — means the
-    // course exists but is NOT faithful. Known-gap divergences (course
-    // settings, flagged media) ride the expected bucket and do not downgrade.
+    // (missing/changed blocks, a wrong title) — means the course exists but is
+    // NOT faithful. Known-gap divergences (course settings, flagged media)
+    // ride the expected bucket and do not downgrade.
     const readBackDiverged =
       readBackForeign.length > 0 ||
       (l10nParity && !l10nParity.ok) ||

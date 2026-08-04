@@ -10,15 +10,11 @@
 
 import { IdMap, newId } from './ids';
 import {
-  courseRefMap,
   defaultLocaleOf,
-  inlineTranslationChanges,
   isL10nRef,
   isLocalizedStack,
-  junkCellIds,
-  lessonIdByRef,
   materializeLocale,
-  valueTypeOf,
+  pairL10nRefs,
   writableLocaleCodes,
   type L10nChange,
 } from '@/core/l10n';
@@ -33,7 +29,13 @@ import {
 import { collectBuiltinRefs, hasBuiltinRef, probeBuiltinRefs } from './builtin-assets';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
-import { findBankRef, MAX_UPLOAD_BASE64, type PlanStep, type PlanInput, type SourceBank } from './plan';
+import {
+  findBankRef,
+  MAX_UPLOAD_BASE64,
+  type PlanStep,
+  type PlanInput,
+  type SourceBank,
+} from './plan';
 import {
   targetByName,
   usedTypefaceIds,
@@ -76,7 +78,6 @@ export async function executePlan(
   const pace = deps.pace ?? (async () => {});
   const log = deps.log ?? (() => {});
   const dryRun = deps.dryRun ?? false;
-  const { lessons: srcLessons, blocks: srcBlocks } = indexSource(deps.input.course);
   const author = deps.input.author;
 
   const result: ExecResult = {
@@ -96,6 +97,12 @@ export async function executePlan(
   // never gets set (handshake failed / skipped), the rollback treats the shell as
   // suspect rather than reporting a hollow success.
   let materialized = false;
+  // Pre-created SHELL lessons observed on the create-course handshake GET_COURSE
+  // (F2, capture-proven: a `onePage` shell ships WITH one empty-titled `blocks`
+  // lesson the editor writes straight into; regular/aiOutline shells are
+  // lessonless). Each unclaimed empty shell lesson is ADOPTED by the first
+  // matching create-lesson step instead of creating a duplicate.
+  const shellLessons: { id: string }[] = [];
   // sourceBlockId → {newId, globalBlockId} (from CREATE_BLOCKS metadata).
   const blockMeta = new Map<string, { newId: string; globalBlockId?: string }>();
   // sourceKey → new target key (after upload) for media patches.
@@ -103,51 +110,54 @@ export async function executePlan(
   // sourceBankId → ordered new question ids (for INSERT_QUESTION_BANK_QUESTIONS).
   const bankQuestionIds = new Map<string, string[]>();
 
-  // --- Multi-language stack state (docs/rise-multilang.md) ---
+  // --- Multi-language stack state (docs/rise-multilang.md, idea-2 shape) ---
   const stack = isLocalizedStack(deps.input.course);
   const srcTables = deps.input.course.l10n?.translations ?? {};
   const srcDefaultLocale = defaultLocaleOf(deps.input.course) ?? 'en-us';
-  // Source course-level l10nId → the TARGET's own ref id (title/description/
-  // cover… — created by the conversion; learned at await-stack from GET_COURSE).
+  // Source l10nId → the TARGET's own ref id, for EVERY ref (course fields,
+  // lesson titles, block-internal refs) — built at await-stack by pairing the
+  // raw source doc against the converted target (core/l10n/pair.ts). No source
+  // l10nId ever ships to the target under idea 2.
   const stackRefMap = new Map<string, string>();
-  // True once the first convert-stack POST fired: from then until await-stack
-  // fills stackRefMap, the target may already be converted server-side, so a
-  // plain-string title write could clobber the title ref (see the stop path).
-  let stackConversionStarted = false;
-  // Storyline cells already written once (attach-storyline-l10n): the first
-  // language's write is an `add`, further languages on the same cell are
-  // `update`s (captured two-language sequence, capture2aug).
-  const storylineCellsWritten = new Set<string>();
-  // Target GET_COURSE snapshot taken at await-stack (pre-content) — the baseline
-  // for junk-cell cleanup (only placeholder-era cells can be in it).
+  // Target GET_COURSE snapshot taken at await-stack (post-conversion) — tells
+  // the cell writer which (ref, locale) rows the conversion created.
   let targetStackDoc: GetCourseDocument | null = null;
-  // Source lesson-scoped l10nId → source lesson id (adds carry the TARGET
-  // lesson id, mapped through `ids` at write time).
-  const srcLessonByRef = stack ? lessonIdByRef(deps.input.course) : new Map<string, string>();
-  // Materialized default locale (display strings + plain course-image objects
-  // for the pre-conversion writes).
+  // Materialized default locale — the CONTENT the build ships (display strings,
+  // plain media objects, plain course images). The RAW doc (with refs) is used
+  // only for pairing + cell values.
   const matDoc = stack ? materializeLocale(deps.input.course).doc : deps.input.course;
+  // Content index over the doc the build ships (materialized for stacks).
+  const { lessons: srcLessons, blocks: srcBlocks } = indexSource(matDoc);
 
-  // Course-level source refs that had NO counterpart on the converted target
-  // (flagged l10n-ref at await-stack). Their cells are skipped: written under
-  // the source id they would be orphan rows nothing references — and being
-  // source ids, the junk cleanup can never remove them.
+  // Source refs with NO counterpart on the converted target (pairing gaps,
+  // flagged l10n-ref at await-stack). Their cells are skipped: the target has
+  // no ref to address, and source ids must never ship.
   const unmatchedCourseRefs = new Set<string>();
 
-  /** Remap media keys inside a cell value + map ids/lessons for one batch add. */
+  /** One target-locale cell write: value from the archive (media-remapped), id
+   *  mapped through the pairing map. Post-conversion every mapped cell EXISTS
+   *  on the target (the conversion minted it), so writes are bare `update`s —
+   *  the capture-proven shape for writing further locales on an existing cell
+   *  (capture2aug §4.3b). An unmapped id returns null (flagged at pairing). */
   const buildCellChange = (l10nId: string, locale: string): L10nChange | null => {
     const value = srcTables[locale]?.[l10nId];
     if (value === undefined) return null;
     if (unmatchedCourseRefs.has(l10nId)) return null; // flagged, not orphaned
-    const srcLesson = srcLessonByRef.get(l10nId);
-    const targetLesson = srcLesson ? ids.get(srcLesson) : undefined;
+    const targetId = stackRefMap.get(l10nId);
+    if (!targetId) {
+      if (!dryRun) return null; // dry-run has no pairing — keep the preview count
+      return {
+        action: 'update',
+        l10nId,
+        locale,
+        value: remapMediaKeys(value as never, keyMap) as typeof value,
+      };
+    }
     return {
-      action: 'add',
-      l10nId: stackRefMap.get(l10nId) ?? l10nId,
-      ...(targetLesson ? { lessonId: targetLesson } : {}),
+      action: 'update',
+      l10nId: targetId,
       locale,
       value: remapMediaKeys(value as never, keyMap) as typeof value,
-      valueType: valueTypeOf(value),
     };
   };
 
@@ -302,56 +312,14 @@ export async function executePlan(
       if (deps.shouldStop?.()) {
         result.stopped = true;
         result.idMap = ids.toJSON();
-        // Mark the partial course so it's identifiable in the dashboard (an
-        // unfinished import otherwise leaves a hard-to-spot course). Best-effort,
-        // and only once the course exists. A re-run's FINAL set-title restores the
-        // clean title when the import resumes + completes.
-        if (!dryRun && newCourseId) {
-          const srcTitleRaw = deps.input.course.course?.title;
-          const srcTitle =
-            typeof srcTitleRaw === 'string'
-              ? srcTitleRaw
-              : typeof matDoc.course?.title === 'string'
-                ? matDoc.course.title
-                : '';
-          try {
-            await pace(); // an authoring write like any other — keep it human-paced
-            const titleRefTarget = isL10nRef(srcTitleRaw)
-              ? stackRefMap.get(srcTitleRaw.l10nId)
-              : undefined;
-            if (titleRefTarget) {
-              // Post-conversion stack: the course title is a ref — writing a
-              // plain string would clobber it. Rename via the title CELL
-              // (default locale) instead.
-              await deps.relay(
-                env.updateL10nBatch(newCourseId, [
-                  {
-                    action: 'update',
-                    l10nId: titleRefTarget,
-                    locale: srcDefaultLocale,
-                    value: `!unfinished: ${srcTitle}`,
-                  },
-                ]),
-              );
-              log(`Marked partial course title "!unfinished: ${srcTitle}"`);
-            } else if (stack && stackConversionStarted) {
-              // A Stop landed BETWEEN convert-stack and await-stack: the target
-              // may already be converted (title is a ref) but its ref id is
-              // unknown, so ANY title write here risks clobbering the ref. The
-              // course still carries the `!importing:` title from the early
-              // provisional write — already unmistakable — so skip the rename.
-              log(
-                'Stop during stack conversion — keeping the "!importing:" title (a rename now could clobber the title ref)',
-              );
-            } else {
-              await deps.relay(env.updateCourseTitle(newCourseId, `!unfinished: ${srcTitle}`));
-              log(`Marked partial course title "!unfinished: ${srcTitle}"`);
-            }
-          } catch {
-            /* best-effort — the stop still succeeds */
-          }
-        }
-        log(`Stopped before step ${stepIdx + 1}/${total} — partial course kept (resumable on re-run)`);
+        // No title marker is written (operator decision 2026-08-04: the
+        // `!importing:`/`!unfinished:` mangling is gone) — the partial course
+        // keeps its clean title and is identified via the run report/summary,
+        // which lists its id for manual cleanup before a re-import.
+        log(
+          `Stopped before step ${stepIdx + 1}/${total} — partial course ${newCourseId || '(none)'} kept ` +
+            '(no title marker; see the run report for cleanup)',
+        );
         return result;
       }
       stepIdx++;
@@ -441,6 +409,29 @@ export async function executePlan(
                 log(`${pfx()} OK   GET_COURSE handshake — course ready (attempt ${attempt}/${tries})`);
                 confirmed = true;
                 materialized = true;
+                // F2: record any PRE-CREATED shell lessons (onePage ships one:
+                // title "", type "blocks", no items) for adoption below. Only
+                // genuinely EMPTY lessons qualify — anything else is unexpected
+                // and left alone (the read-back would surface it loudly).
+                const shell = Array.isArray(rb.lessons)
+                  ? (rb.lessons as Record<string, unknown>[])
+                  : [];
+                for (const l of shell) {
+                  const emptyTitle = l.title === '' || l.title === null || l.title === undefined;
+                  const noItems = !Array.isArray(l.items) || l.items.length === 0;
+                  if (typeof l.id === 'string' && l.id && emptyTitle && noItems) {
+                    shellLessons.push({ id: l.id });
+                  } else if (typeof l.id === 'string') {
+                    log(
+                      `${pfx()} ⚠ shell lesson ${l.id} is not empty (title/items present) — not adopting it`,
+                    );
+                  }
+                }
+                if (shellLessons.length) {
+                  log(
+                    `${pfx()} NOTE shell ships ${shellLessons.length} pre-created lesson(s) (onePage) — lesson 1 will ADOPT it, not duplicate it`,
+                  );
+                }
               } else {
                 log(`${pfx()} …    GET_COURSE not ready yet (attempt ${attempt}/${tries}, HTTP ${r.status})`);
               }
@@ -558,8 +549,8 @@ export async function executePlan(
           // title/description (confirmed envelope, but flag if it doesn't take).
           try {
             await send(env.updateCourseTitle(newCourseId, step.title), step.kind);
-            // The description rides only with the FINAL title write (the early
-            // write is the provisional `!importing:` marker — see plan.ts).
+            // The monolingual description rides the (single) `final` title
+            // write; a stack's description is its own pre-conversion step.
             const desc = deps.input.course.course?.description;
             if (step.final && typeof desc === 'string' && desc) {
               await send(
@@ -577,35 +568,32 @@ export async function executePlan(
           break;
         }
         case 'create-lesson': {
-          // Stack content lesson: create with the SOURCE title ref + an inline
-          // default-locale title cell (capture-proven translationChanges add).
-          // Plain-string title otherwise (monolingual, or the pre-conversion
-          // placeholder — whose title the conversion extracts into a cell).
-          let title: string | { l10nId: string } = step.title;
-          let translationChanges: L10nChange[] | undefined;
-          if (step.l10nTitleRef) {
-            title = { l10nId: step.l10nTitleRef };
-            const v = srcTables[srcDefaultLocale]?.[step.l10nTitleRef];
-            if (v !== undefined) {
-              translationChanges = [
-                {
-                  action: 'add',
-                  l10nId: step.l10nTitleRef,
-                  locale: srcDefaultLocale,
-                  value: remapMediaKeys(v as never, keyMap) as typeof v,
-                  valueType: valueTypeOf(v),
-                },
-              ];
-            }
+          // F2 ADOPTION: a onePage shell already holds ONE empty lesson (title
+          // "", type blocks, no items — capture-proven) which the editor writes
+          // straight into; creating our own would leave a phantom extra lesson.
+          // Adopt an unclaimed shell lesson instead of CREATE_LESSON — but only
+          // when this step's intended title is ALSO empty (a microlearning
+          // lesson has no title by design, so empty IS the faithful state; no
+          // captured envelope renames a lesson, so a titled lesson 1 must be
+          // created normally and the read-back will surface the extra lesson).
+          if (!dryRun && shellLessons.length > 0 && step.title === '') {
+            const adopted = shellLessons.shift()!;
+            ids.set(step.sourceLessonId, adopted.id);
+            log(
+              `${pfx()} OK   adopted the shell's pre-created lesson ${adopted.id} as "${step.sourceLessonId}" (no CREATE_LESSON)`,
+            );
+            break;
           }
+          // Always a PLAIN title: a stack's lessons are built in the default
+          // language (materialized) and the conversion extracts titles into
+          // cells itself — idea 2 ships no l10n refs and no inline cells.
           const resp = await send(
             env.createLesson({
               author,
               courseId: newCourseId,
               position: step.position,
-              title,
+              title: step.title,
               type: step.lessonType,
-              translationChanges,
             }),
             step.kind,
           );
@@ -684,30 +672,15 @@ export async function executePlan(
             // Provisional mapping (confirmed below in a live run).
             blockMeta.set(blockKey(step.sourceLessonId, ref.sourceBlockId), { newId: newBlockId });
           }
-          // Stack: inline the default-locale cells for every {l10nId} ref in
-          // these blocks (action:'add' + the TARGET lesson id — capture-proven).
-          // Values are media-remapped: table media was uploaded pre-content.
-          let translationChanges: L10nChange[] | undefined;
-          if (stack) {
-            const srcSubtrees = step.blocks.map(
-              (r) => srcBlocks.get(blockKey(step.sourceLessonId, r.sourceBlockId))?.block,
-            );
-            translationChanges = inlineTranslationChanges(
-              srcSubtrees,
-              deps.input.course,
-              newLessonId,
-            ).map((ch) => ({
-              ...ch,
-              value: remapMediaKeys(ch.value as never, keyMap) as typeof ch.value,
-            }));
-          }
+          // Idea 2: stack blocks ship MATERIALIZED (srcBlocks indexes the
+          // materialized doc) — plain default-language values, no refs, no
+          // inline translationChanges. The conversion l10n-ifies them itself.
           const resp = await send(
             env.createBlocks({
               courseId: newCourseId,
               lessonId: newLessonId,
               previousBlockId: null,
               blocks: built,
-              translationChanges,
             }),
             step.kind,
           );
@@ -747,6 +720,7 @@ export async function executePlan(
             result.flags.push({
               kind: 'missing-bank-ref',
               sourceBlockId: step.sourceBlockId,
+              sourceLessonId: step.sourceLessonId,
               detail: 'draw-from-bank block has no resolvable source bank id',
             });
             throw new WriteError('draw-from-bank block missing a bank reference', step.kind);
@@ -859,6 +833,7 @@ export async function executePlan(
           result.flags.push({
             kind: 'storyline',
             sourceBlockId: step.sourceBlockId,
+            sourceLessonId: step.sourceLessonId,
             detail: 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
           });
           log(`${pfx()} ⚠ FLAG storyline — block ${step.sourceBlockId} needs manual Review 360 attach`);
@@ -868,6 +843,7 @@ export async function executePlan(
           result.flags.push({
             kind: 'draw-from-bank',
             sourceBlockId: step.sourceBlockId,
+            sourceLessonId: step.sourceLessonId,
             detail:
               'Draw-from-bank block created as an unbound placeholder — attach a question bank manually (bank recreation is off)',
           });
@@ -878,6 +854,7 @@ export async function executePlan(
           result.flags.push({
             kind: 'orphan-media',
             sourceBlockId: step.sourceBlockId,
+            sourceLessonId: step.sourceLessonId,
             sourceKey: step.sourceKey,
             detail: 'Media is 403/deleted at source — imported with the media slot blanked',
           });
@@ -911,12 +888,11 @@ export async function executePlan(
               step.kind,
             );
           } catch (e) {
-            log(`WARN placeholder description not set (continuing): ${(e as Error).message}`);
+            log(`WARN course description not set (continuing): ${(e as Error).message}`);
           }
           break;
         }
         case 'convert-stack': {
-          stackConversionStarted = true;
           await send(
             env.createTranslations(newCourseId, {
               sourceLanguage: step.sourceLanguage,
@@ -932,9 +908,12 @@ export async function executePlan(
             // Poll the stack state until every expected language is `complete`.
             // Paced like every authoring read; one recorded envelope, per-poll
             // progress in the log ([i/N] stays visibly alive during the wait).
+            // The default ceiling is sized for a FULL-COURSE conversion
+            // (idea 2) — minimal conversions ran 15-70 s/language, a real
+            // course's duration is unmeasured (R1), so allow ~30 min.
             const spec = env.getTranslations(newCourseId);
             result.envelopes.push({ step: step.kind, label: spec.label });
-            const tries = Math.max(1, deps.stackAwaitTries ?? 240);
+            const tries = Math.max(1, deps.stackAwaitTries ?? 900);
             const expected = new Set(step.expectedLocales);
             let ready = false;
             for (let attempt = 1; attempt <= tries && !ready; attempt++) {
@@ -973,9 +952,11 @@ export async function executePlan(
             }
             log(`${pfx()} OK   stack shape ready (${step.expectedLocales.join(', ')})`);
 
-            // Learn the target's own course-level refs (title/description/
-            // cover…) for the cell writes, and snapshot the pre-content doc as
-            // the junk-cleanup baseline.
+            // PAIR every source ref to the ref the target's own conversion
+            // minted (course fields by path, lessons via the id map, blocks
+            // via the minted client ids — core/l10n/pair.ts). This map is the
+            // ONLY way a cell write addresses the target; no source l10nId
+            // ever ships under idea 2.
             const rb = await send(env.getCourse(newCourseId), step.kind);
             const targetDoc = payloadOf(rb) as GetCourseDocument;
             if (!isLocalizedStack(targetDoc)) {
@@ -986,23 +967,38 @@ export async function executePlan(
               );
             }
             targetStackDoc = targetDoc;
-            const { map, unmatched } = courseRefMap(deps.input.course, targetDoc);
-            for (const [s, t] of map) stackRefMap.set(s, t);
-            // The placeholder IS lesson 1: map its title ref (source lesson-1
-            // title → the target placeholder's title cell).
-            const srcFirst = deps.input.course.lessons?.[0];
-            const tgtFirst = targetDoc.lessons?.[0];
-            if (srcFirst && tgtFirst && isL10nRef(srcFirst.title) && isL10nRef(tgtFirst.title)) {
-              stackRefMap.set(srcFirst.title.l10nId, tgtFirst.title.l10nId);
-            }
-            for (const u of unmatched) {
+            const pairing = pairL10nRefs(deps.input.course, targetDoc, {
+              lessonId: (l) => ids.get(l),
+              blockId: (l, b) => blockMeta.get(blockKey(l, b))?.newId,
+            });
+            for (const [s, t] of pairing.map) stackRefMap.set(s, t);
+            result.l10nRefMap = Object.fromEntries(stackRefMap);
+            // Target-only refs over DEEP-EMPTY source slots are conversion
+            // artifacts (the empty-logo class) — recorded so read-back parity
+            // treats their cells as EXPECTED, never as divergences.
+            result.l10nExpectedExtra = pairing.targetOnlyEmpty.map((r) => r.l10nId);
+            for (const u of pairing.unmatched) {
               unmatchedCourseRefs.add(u.l10nId);
               result.flags.push({
                 kind: 'l10n-ref',
-                detail: `Course-level localized value at ${u.path} has no counterpart on the target — set it manually per language`,
+                detail: `Localized value at ${u.path} has no counterpart on the target (its Rise does not localize that field) — set it manually per language`,
               });
               log(`${pfx()} ⚠ FLAG l10n-ref — ${u.path} unmatched on target`);
             }
+            for (const u of pairing.targetOnly) {
+              result.flags.push({
+                kind: 'l10n-ref',
+                detail: `Target localized ${u.path}, which the source held as plain text — the conversion's AI text shows in non-default languages there; review it`,
+              });
+              log(`${pfx()} ⚠ FLAG l10n-ref — ${u.path} localized only on the target (AI text)`);
+            }
+            log(
+              `${pfx()} OK   paired ${pairing.map.size} ref(s)` +
+                (pairing.unmatched.length ? `, ${pairing.unmatched.length} unmatched` : '') +
+                (pairing.targetOnlyEmpty.length
+                  ? `, ${pairing.targetOnlyEmpty.length} empty-slot target ref(s) (expected)`
+                  : ''),
+            );
           } else {
             result.envelopes.push({
               step: step.kind,
@@ -1020,13 +1016,18 @@ export async function executePlan(
           const changes = step.l10nIds
             .map((id) => buildCellChange(id, step.locale))
             .filter((c): c is L10nChange => c !== null);
+          const skipped = step.l10nIds.length - changes.length;
           if (changes.length === 0) {
-            log(`${pfx()} skip write-l10n [${step.locale}] — no cells resolved`);
+            log(
+              `${pfx()} skip write-l10n [${step.locale}] — no cells resolved` +
+                (skipped ? ` (${skipped} unpaired/flagged)` : ''),
+            );
             break;
           }
           await send(env.updateL10nBatch(newCourseId, changes), step.kind);
           log(
-            `${pfx()} [${step.batchIndex}/${step.batchTotal} l10n batches] OK ${changes.length} cell(s) [${step.locale}]`,
+            `${pfx()} [${step.batchIndex}/${step.batchTotal} l10n batches] OK ${changes.length} cell(s) [${step.locale}]` +
+              (skipped ? ` (${skipped} skipped — unpaired/flagged)` : ''),
           );
           break;
         }
@@ -1066,48 +1067,25 @@ export async function executePlan(
           );
           break;
         }
-        case 'cleanup-l10n': {
-          if (dryRun || !targetStackDoc) {
-            log(`${pfx()} ${dryRun ? 'DRY ' : 'skip'} cleanup-l10n (runtime-computed)`);
-            break;
-          }
-          const junk = junkCellIds(deps.input.course, targetStackDoc, stackRefMap.values());
-          if (junk.length === 0) {
-            log(`${pfx()} OK   cleanup-l10n — no placeholder-era cells to delete`);
-            break;
-          }
-          for (let i = 0; i < junk.length; i += 20) {
-            const slice = junk.slice(i, i + 20);
-            await send(
-              env.updateL10nBatch(
-                newCourseId,
-                slice.map((l10nId) => ({ action: 'delete', l10nId })),
-              ),
-              step.kind,
-            );
-          }
-          log(`${pfx()} OK   cleanup-l10n — deleted ${junk.length} placeholder cell(s)`);
-          break;
-        }
         case 'set-stack-titles': {
-          // The FINAL step: clean title + description cells for EVERY locale
-          // (default first — write-order invariant) onto the target's own refs.
+          // Title + description cells for every writable NON-DEFAULT locale,
+          // FALLBACK-RESOLVED (D2): a locale the source serves by
+          // default-language fallback gets the default value — the target then
+          // displays exactly what the source displays there. The default
+          // locale is NEVER written (its cells came from the conversion of the
+          // clean pre-conversion title/description; a default write would
+          // re-pend the cell in every locale).
           const course = deps.input.course.course ?? {};
           const refs = [course.title, course.description].filter(isL10nRef);
-          // Writable locales only: an archived/row-less locale's table was
-          // skipped everywhere else (flag-l10n-locale) — writing its title
-          // cell here would hit a locale the target course doesn't have.
           const writable = writableLocaleCodes(deps.input.course);
-          const locales = [
-            srcDefaultLocale,
-            ...Object.keys(srcTables).filter(
-              (c) => c !== srcDefaultLocale && writable.has(c),
-            ),
-          ];
+          const locales = Object.keys(srcTables).filter(
+            (c) => c !== srcDefaultLocale && writable.has(c),
+          );
           for (const locale of locales) {
             const changes: L10nChange[] = [];
             for (const ref of refs) {
-              const value = srcTables[locale]?.[ref.l10nId];
+              const value =
+                srcTables[locale]?.[ref.l10nId] ?? srcTables[srcDefaultLocale]?.[ref.l10nId];
               const target = stackRefMap.get(ref.l10nId);
               if (value === undefined || (!dryRun && !target)) continue;
               changes.push({
@@ -1124,12 +1102,31 @@ export async function executePlan(
           break;
         }
         case 'attach-storyline-l10n': {
-          // STACK per-language attach (docs/rise-multilang.md §4.3b): copy THIS
-          // language's uploaded package into the course, then write the storyline
-          // CELL for that locale. The block already carries the {l10nId} ref
-          // (copy-faithful) — patching its media would clobber every language.
+          // STACK per-language attach, idea-2 form (docs/rise-multilang.md
+          // §4.3b): the DEFAULT language's package was patched onto the block
+          // pre-conversion; each further language copies ITS uploaded package
+          // and writes the storyline CELL for that locale — addressed through
+          // the pairing map. If the conversion did NOT l10n-ify the block's
+          // storyline media (no paired ref), a per-language package is
+          // impossible on this course: flag it, write nothing (R3).
           const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           if (!meta) throw new WriteError('attach before block create', step.kind);
+          const cellId = dryRun
+            ? (stackRefMap.get(step.l10nId) ?? step.l10nId)
+            : stackRefMap.get(step.l10nId);
+          if (!cellId) {
+            result.flags.push({
+              kind: 'l10n-storyline',
+              detail:
+                `${step.title ? `"${step.title}" — ` : ''}the conversion did not localize this ` +
+                `block's Storyline slot, so a per-language package cannot be attached for ` +
+                `"${step.locale}" — every language shares the default package; attach manually if needed`,
+            });
+            log(
+              `${pfx()} ⚠ FLAG storyline [${step.locale}] — block's storyline slot not l10n-ified on target (no per-language attach possible)`,
+            );
+            break;
+          }
           const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
           await send(
             env.copyReviewItem({
@@ -1140,31 +1137,18 @@ export async function executePlan(
             step.kind,
           );
           const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
-          const targetLesson = ids.get(step.sourceLessonId);
-          const cellId = stackRefMap.get(step.l10nId) ?? step.l10nId;
-          // Captured sequence (capture2aug, byte-verified): the FIRST language's
-          // cell write is an `add` carrying lessonId + valueType:"storyline"; a
-          // further language on the SAME cell is an `update` with ONLY
-          // {l10nId, locale, value} — no lessonId, no valueType. Mirror exactly.
-          const firstAttach = !storylineCellsWritten.has(cellId);
-          storylineCellsWritten.add(cellId);
           const value = env.buildStorylineMedia({
             contentPrefix,
             meta: step.meta,
             title: step.title,
           });
+          // The cell EXISTS post-conversion (the default package was extracted
+          // into it), so a further language is a bare `update` — the
+          // capture-proven shape for the 2nd language on an existing cell
+          // (capture2aug §4.3b).
           await send(
             env.updateL10nBatch(newCourseId, [
-              firstAttach
-                ? {
-                    action: 'add',
-                    l10nId: cellId,
-                    ...(targetLesson ? { lessonId: targetLesson } : {}),
-                    locale: step.locale,
-                    value,
-                    valueType: 'storyline',
-                  }
-                : { action: 'update', l10nId: cellId, locale: step.locale, value },
+              { action: 'update', l10nId: cellId, locale: step.locale, value },
             ]),
             step.kind,
           );

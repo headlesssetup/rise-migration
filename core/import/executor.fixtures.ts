@@ -149,44 +149,110 @@ export function l10nStorylineAttach(): Map<
   ]);
 }
 
-/** Scripted happy-path handlers for a full stack import. GET_COURSE is stateful:
- *  the 1st call is the post-create handshake (plain shell), later calls return
- *  the CONVERTED target (l10n-ified refs + a junk placeholder cell). */
+/** The deterministic "conversion" the fixture applies: target ref id for a
+ *  source l10nId. Tests assert against these. */
+export function tgtRef(sourceL10nId: string): string {
+  return `tgt-${sourceL10nId}`;
+}
+
+const isRefObj = (v: unknown): v is { l10nId: string } =>
+  !!v &&
+  typeof v === 'object' &&
+  !Array.isArray(v) &&
+  Object.keys(v as object).length === 1 &&
+  typeof (v as { l10nId?: unknown }).l10nId === 'string';
+
+/** Parallel walk: wherever the SOURCE holds an {l10nId} ref, the converted
+ *  target holds {l10nId: tgt-<id>} at the same path; everywhere else it keeps
+ *  the BUILT (materialized) value — exactly what Rise's conversion does to a
+ *  full default-language course (idea 2). */
+function refify(src: unknown, built: unknown): unknown {
+  if (isRefObj(src)) return { l10nId: tgtRef(src.l10nId) };
+  if (Array.isArray(src) && Array.isArray(built)) {
+    return built.map((b, i) => refify(src[i], b));
+  }
+  if (
+    src && built &&
+    typeof src === 'object' && typeof built === 'object' &&
+    !Array.isArray(src) && !Array.isArray(built)
+  ) {
+    const out: Record<string, unknown> = { ...(built as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+      if (k in (built as object)) out[k] = refify(v, (built as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return built;
+}
+
+/** Scripted happy-path handlers for a full IDEA-2 stack import. Stateful: it
+ *  records the lessons/blocks the executor CREATES (and the block patches),
+ *  and the post-conversion GET_COURSE returns the l10n-ified version of that
+ *  build — refs minted per `tgtRef`, default-locale cells extracted from the
+ *  built values, AI text rows for the other locales (media gets NO rows,
+ *  matching the capture-proven conversion behavior). */
 export function l10nHandlers(): Record<string, (body: unknown) => unknown> {
+  const source = JSON.parse(JSON.stringify(l10nSample)) as GetCourseDocument;
   let getCourseCalls = 0;
   let lessonN = 0;
-  const targetDoc = {
-    course: {
-      id: 'NEWCOURSE',
-      title: { l10nId: 'tgt-title' },
-      description: { l10nId: 'tgt-desc' },
-      media: { l10nId: 'tgt-logo' },
-      coverImage: { media: { l10nId: 'tgt-cover' } },
-      defaultLocaleId: 'tgt-row-en',
-      localizationMetadata: { isLocalized: true, localizedAt: 't' },
-      lessons: ['NEWLESSON1'],
-    },
-    lessons: [{ id: 'NEWLESSON1', title: { l10nId: 'tgt-l1title' }, items: [] }],
-    l10n: {
-      defaultLocale: 'en-us',
-      showLocaleSelector: false,
-      locales: [
-        { id: 'tgt-row-en', locale: 'en-us' },
-        { id: 'tgt-row-ru', locale: 'ru' },
-        { id: 'tgt-row-ar', locale: 'ar' },
-      ],
-      translations: {
-        'en-us': {
-          'tgt-title': '!importing: Fixture Stack Course',
-          'tgt-desc': '.',
-          'tgt-l1title': 'Lesson One',
-          'junk-1': 'AI leftover',
-        },
-        ru: { 'tgt-title': 'AI перевод', 'tgt-desc': '.', 'tgt-l1title': 'AI урок' },
-        ar: { 'tgt-title': 'AI عنوان', 'tgt-desc': '.', 'tgt-l1title': 'AI درس' },
+  const createdLessonIds: string[] = [];
+  const builtBlocks = new Map<string, Record<string, unknown>[]>(); // new lesson id → blocks
+
+  const convertedDoc = (): Record<string, unknown> => {
+    const srcCourse = source.course as Record<string, unknown>;
+    // Source lessons in AUTHORITATIVE order (the executor creates them in that
+    // order, so created lesson N pairs with authoritative source lesson N).
+    const srcOrdered = [...(source.lessons ?? [])].sort((a, b) => {
+      const order = (srcCourse.lessons as string[]) ?? [];
+      return order.indexOf(String(a.id)) - order.indexOf(String(b.id));
+    });
+    const lessons = createdLessonIds.map((newId, i) => {
+      const src = srcOrdered[i] ?? {};
+      const blocks = builtBlocks.get(newId) ?? [];
+      const srcBlocks = (src.items ?? []) as Record<string, unknown>[];
+      return {
+        id: newId,
+        title: isRefObj(src.title) ? { l10nId: tgtRef(src.title.l10nId) } : (src.title ?? ''),
+        items: blocks.map((b, bi) => refify(srcBlocks[bi], b)),
+      };
+    });
+    // Tables: default rows for every source default cell (extracted from the
+    // build); AI TEXT rows for the other locales; NO media rows for them.
+    const srcTables = source.l10n?.translations ?? {};
+    const en: Record<string, unknown> = {};
+    for (const [id, v] of Object.entries(srcTables['en-us'] ?? {})) en[tgtRef(id)] = v;
+    const ai = (code: string): Record<string, unknown> => {
+      const t: Record<string, unknown> = {};
+      for (const [id, v] of Object.entries(srcTables['en-us'] ?? {})) {
+        if (typeof v === 'string') t[tgtRef(id)] = `AI ${code} ${v.slice(0, 20)}`;
+      }
+      return t;
+    };
+    return {
+      course: {
+        id: 'NEWCOURSE',
+        title: { l10nId: tgtRef('aaaa1111-0000-4000-8000-000000000001') },
+        description: { l10nId: tgtRef('aaaa1111-0000-4000-8000-000000000002') },
+        media: { l10nId: tgtRef('aaaa1111-0000-4000-8000-000000000003') },
+        coverImage: { media: { l10nId: tgtRef('aaaa1111-0000-4000-8000-000000000004') } },
+        defaultLocaleId: 'tgt-row-en',
+        localizationMetadata: { isLocalized: true, localizedAt: 't' },
+        lessons: createdLessonIds,
       },
-    },
+      lessons,
+      l10n: {
+        defaultLocale: 'en-us',
+        showLocaleSelector: false,
+        locales: [
+          { id: 'tgt-row-en', locale: 'en-us' },
+          { id: 'tgt-row-ru', locale: 'ru' },
+          { id: 'tgt-row-ar', locale: 'ar' },
+        ],
+        translations: { 'en-us': en, ru: ai('ru'), ar: ai('ar') },
+      },
+    };
   };
+
   return {
     'GET /manage/api/content/NEWCOURSE/translations': () => ({
       stackItems: [
@@ -201,17 +267,34 @@ export function l10nHandlers(): Record<string, (body: unknown) => unknown> {
       getCourseCalls += 1;
       return getCourseCalls === 1
         ? { payload: { course: { id: 'NEWCOURSE', lessons: [] } } }
-        : { payload: targetDoc };
+        : { payload: convertedDoc() };
     },
-    CREATE_LESSON: () => ({ payload: { lesson: { id: `NEWLESSON${++lessonN}` } } }),
+    CREATE_LESSON: () => {
+      const id = `NEWLESSON${++lessonN}`;
+      createdLessonIds.push(id);
+      return { payload: { lesson: { id } } };
+    },
     CREATE_BLOCKS: (body: unknown) => {
-      const blocks = (body as { payload: { blocks: { id: string }[] } }).payload.blocks;
+      const p = (body as { payload: { lessonId: string; blocks: Record<string, unknown>[] } })
+        .payload;
+      builtBlocks.set(p.lessonId, [...(builtBlocks.get(p.lessonId) ?? []), ...p.blocks]);
       return {
         payload: {
           success: true,
-          blockMetadata: blocks.map((b, i) => ({ id: b.id, globalBlockId: `g${i}` })),
+          blockMetadata: p.blocks.map((b, i) => ({ id: b.id, globalBlockId: `g${i}` })),
         },
       };
+    },
+    UPDATE_BLOCK_DEBOUNCE: (body: unknown) => {
+      // Record block patches (media remap / storyline attach) so the converted
+      // doc reflects the FINAL pre-conversion state of each block.
+      const p = (body as { payload: { lessonId: string; item: Record<string, unknown> } }).payload;
+      const list = builtBlocks.get(p.lessonId);
+      if (list && p.item && typeof p.item === 'object') {
+        const i = list.findIndex((b) => b.id === p.item.id);
+        if (i >= 0) list[i] = p.item;
+      }
+      return { payload: { success: true } };
     },
     GET_YURL: (body: unknown) => {
       const fn = (body as { payload: { filename: string } }).payload.filename;

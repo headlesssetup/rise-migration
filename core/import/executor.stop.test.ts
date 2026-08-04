@@ -20,16 +20,19 @@ function simpleCourse(): PlanInput {
   };
 }
 
-describe('executePlan — graceful stop marks the partial course title', () => {
-  it('amends the title to "!unfinished: <title>" once the course exists', async () => {
+// Operator decision 2026-08-04: NO title markers. A graceful Stop keeps the
+// partial course exactly as-is (clean title) — it is identified via the run
+// report/summary, never via `!unfinished:` renames.
+describe('executePlan — graceful stop keeps the partial course untouched', () => {
+  it('stops cleanly and writes NO title amendment once the course exists', async () => {
     const input = simpleCourse();
     const steps = buildPlan(input);
 
-    let titleSet: string | undefined;
+    const titleWrites: string[] = [];
     // Note: our key must precede happyHandlers' 'UPDATE_COURSE' (substring match).
     const { relay } = mockRelay({
       UPDATE_COURSE_FIELD_THROTTLE: (body: any) => {
-        titleSet = body?.payload?.course?.title;
+        titleWrites.push(body?.payload?.course?.title);
         return { payload: {} };
       },
       ...happyHandlers,
@@ -48,13 +51,14 @@ describe('executePlan — graceful stop marks the partial course title', () => {
 
     expect(res.stopped).toBe(true);
     expect(res.newCourseId).toBe('NEWCOURSE');
-    expect(titleSet).toBe('!unfinished: My Course');
+    // No marker write fired on the stop path (the run stopped before the plan's
+    // own set-title step, so NO title write happened at all).
+    expect(titleWrites).toEqual([]);
   });
 
-  it('paces the stop-path title write like any other authoring write (8a)', async () => {
+  it('issues NO extra relay traffic on the stop path (the last write finished, then silence)', async () => {
     const input = simpleCourse();
     const steps = buildPlan(input);
-    // Record the interleaving of paced gaps and relayed writes.
     const events: string[] = [];
     const { relay } = mockRelay(happyHandlers);
     const tracingRelay: typeof relay = async (spec) => {
@@ -74,12 +78,15 @@ describe('executePlan — graceful stop marks the partial course title', () => {
       shouldStop: () => ++checks > 1, // stop right after the course shell exists
     });
     expect(res.stopped).toBe(true);
-    const titleIdx = events.findIndex((e) => e.includes('UPDATE_COURSE_FIELD_THROTTLE'));
-    expect(titleIdx).toBeGreaterThan(0);
-    expect(events[titleIdx - 1]).toBe('pace'); // the write was paced, not fired raw
+    // The stop happened after create-course + its handshake — nothing else
+    // (no title/marker write) followed.
+    const relays = events.filter((e) => e.startsWith('relay:'));
+    expect(relays.some((e) => e.includes('UPDATE_COURSE_FIELD_THROTTLE'))).toBe(false);
+    const last = relays[relays.length - 1]!;
+    expect(last.includes('GET_COURSE') || last.includes('/manage/api/content')).toBe(true);
   });
 
-  it('does not amend when no course was created yet (stop at step 1)', async () => {
+  it('does not touch anything when no course was created yet (stop at step 1)', async () => {
     const input = simpleCourse();
     const steps = buildPlan(input);
     let titleSet: string | undefined;
