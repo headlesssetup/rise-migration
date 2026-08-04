@@ -58,6 +58,28 @@ parity then counts it as an unexpected `extra-cell` → every no-logo stack goes
 `partial`. Fix direction: classify a target-only ref whose SOURCE slot is
 deep-empty as EXPECTED (the l10n analog of the random-default-cover rule).
 
+### F0 — REAL BUG (found via F6+F7, capture-proven): cross-plane token poisoning
+JWT decode of `capture_import` shows Konstantin's EU bearer (`auth0|b5221c80…`,
+same `exp` as on rise.eu) attached to SEVEN requests on `rise.articulate.com`:
+1× `GET /manage/api/content/search` (the pre-pin identity/guard probe), 3× bank
+creates (accepted!), 3× question PUTs (403 "unauthorized"). Mechanism: with no
+US course editor ever opened, `auth.us.token` was empty; an UNPINNED probe used
+`tokenFor`'s cross-plane fallback (`latestPlane` = eu) → the EU token rode a US
+request → the webRequest token sniffer keyed that request by its URL's plane
+and **captured our own header into the US slot** (self-sniffing feedback loop)
+→ even strict/pinned calls then got the EU token "legitimately". Consequences
+observed: (a) the first bank run's 403s; (b) the same-account guard fired
+because the target identity WAS Konstantin's — substantively a TRUE positive
+("about to write with the source account's token") with a misleading label; the
+operator overrode it believing it false. Opening a US course editor let the
+SPA's genuine requests re-capture Elza's token and everything after was
+correct. Fix direction: (1) the sniffer must never capture a header the
+extension itself attached (e.g. skip when the value equals a token already held
+in ANY slot); (2) drop the cross-plane fallback for authoring calls entirely —
+an empty target-plane slot should BLOCK with "open a course editor on the
+target account", never borrow; (3) the guard identity must come from the
+target plane's own slot only. Supersedes the F6/F7 readings below.
+
 ### F4 — US-PLANE DIFFERENCE: single-bank GET returns 404
 Second bank run: `PUT /api/rise-authoring/question_banks/{id}` → **200 with the
 full bank + questions echoed** (the write SUCCEEDED), then the v0.6.5 read-back
@@ -65,37 +87,48 @@ full bank + questions echoed** (the write SUCCEEDED), then the v0.6.5 read-back
 deterministically, for all 3 banks, seconds after the 200. On EU this GET
 worked. Either the US build lacks the single-bank route or it lags; the LIST
 endpoint (`GET /api/rise-authoring/question_banks`) returned 200 with full
-data in the same session. Consequences: (a) the 3 banks were mislabeled
-"FAILED … empty bank left on target" — they are NOT empty (PUT echo proves the
-questions are there); (b) they stayed out of the bound map, so draw-from-bank
-blocks were flagged instead of bound. Fix direction: fall back to the LIST
-read-back (find by id) when the single GET 404s; correct the failure message.
+data in the same session (and the run-2 GETs carried the CORRECT Elza token —
+verified against the F0 poison list — so the 404 is genuine, not auth-shaped).
+Consequences: (a) the 3 banks were mislabeled "FAILED … empty bank left on
+target" — they are NOT empty (PUT echo proves the questions are there);
+(b) they stayed out of the bound map, so draw-from-bank blocks were flagged
+instead of bound. Fix direction (operator-corrected): a deterministic 404 means
+WE have the wrong route for this plane — capture the US editor's own bank read
+(open Question Banks, open one bank, with mitm on) and mirror it; do not paper
+over with a speculative fallback. Also correct the failure message.
 
-### F5 — INSTRUMENTATION: `stackItems[].pendingChangesCount` reads 0 at import time
-Both stacks: predicted 11 / 2 pending fallback cells; `pendingChangesCount` = 0
-in EVERY poll and at read-back (capture-verified). The new symmetric anomaly
-warning fired — good — but its "a translation run may have fired" hypothesis is
-likely wrong: the EU "45/57" evidence was the UI BADGE (the `…/translations/
-updates` endpoint's `updateCount`), never `pendingChangesCount` right after an
-import. So we are likely comparing the prediction against the wrong field, or
-too early (lazy server-side computation). **Operator check pending:** open the
-two imported stacks' Manage-languages screens now — if the badge shows 11 / 2,
-the prediction is right and the read-back must use the updates endpoint (or a
-delay); if 0, US stamps differently (would be a major, pleasant surprise).
+### F5 — INSTRUMENTATION: pending counts are lazy AND in different units
+(RESOLVED by the operator's UI check, 2026-08-04.) `pendingChangesCount` = 0 in
+every poll and at read-back (capture-verified) — but hours later the badges
+show: "Just a co" **8** (predicted 0 — but that course is corrupted by F1, and
+its crossed/missing rows ARE pending cells), Email **63** (predicted 11),
+LOCALIZED micro **4** (predicted 2). Conclusions: (1) the badge/pending number
+materializes LAZILY — reading stackItems seconds after import is useless;
+(2) the badge counts **text segments**, not cells (the Articulate docs' term;
+the EU 45=45 coincidence held only because those cells were 41 IMAGES ≈ 1 unit
+each; Email's 11 text-heavy cells → 63 segments; micro's 2 → 4) — so
+predicted-vs-shown TALLIES can never be compared 1:1. Fix direction: compare
+the SET of pending cells, not counts — `GET …/translations/updates` lists each
+pending (l10nId, locale) entry; read it (possibly delayed / on a later pass or
+documented as operator-checked) and match l10nIds against `defaultOnlyCells`.
+**Capture wanted:** open Manage-languages of the three imported stacks with
+mitm on — the updates payloads are the recalibration data.
 
-### F6 — first-run bank 403s: behavior correct, message insufficient
-No US course editor was ever opened → the plane's `_articulate_rise_` bearer
-couldn't rotate; `reauth` correctly refused to retry (token exp hadn't
-advanced), and the PUTs failed 403 `{"error":{"type":"unauthorized"}}`. Working
-as designed — but the operator got "write questions failed (HTTP 403)" with no
-hint. Fix direction: when a 403 fails and reauth reports no-advance, say
-"open a course editor on the TARGET account and re-run" explicitly.
+### F6 — first-run bank 403s: SUPERSEDED by F0
+Initial reading ("valid token, no editor open, reauth rightly refused") was
+incomplete: the PUTs 403'd because they carried the SOURCE account's EU bearer
+(F0 poisoning), which rise-authoring rejected as "unauthorized". The message
+improvement stands: on a 403 with a non-advancing token, tell the operator to
+open a course editor on the TARGET account.
 
-### F7 — same-account guard across planes (screenshot)
-Source (EU) and target (US) share the operator's Articulate ID, so the guard
-matched by JWT `sub` and demanded an override even though the planes differ.
-Correctly cautious, but the message should be plane-aware ("same signed-in
-user, DIFFERENT plane — cross-plane migration under one login needs override").
+### F7 — same-account guard match: SUPERSEDED by F0
+The operator used two DIFFERENT Articulate IDs (Konstantin EU / Elza US). The
+guard matched because the target identity was computed from the POISONED US
+slot holding Konstantin's token — a true positive in substance (the run really
+was about to write with the source account's credentials), mislabeled as
+"same account". The fix is F0 (never borrow cross-plane; block on an empty
+target slot), after which this situation reads "no token for the target plane —
+open a course editor there" instead of tempting an override.
 
 ### F8 — confirmations (no action)
 - Stack web export → `build/raw` HTTP 500 on both stacks at the (unsubscribed)
@@ -127,10 +160,21 @@ materialize.
   lesson (micro courses) and unbound/unattached flags.
 
 ## Proposed fix list (NOT built — awaiting "build")
-1. F1 executor lesson-1 pairing via orderLessons (small, regression-tested).
-2. F2 onePage: reuse the shell's lesson as lesson 1 (+ doc updates).
-3. F3 parity: target-only ref over a deep-empty source slot → expected.
-4. F4 bank read-back: LIST fallback on single-GET 404 + honest message.
-5. F5 pending read-back via `…/translations/updates` (and/or defer) — after
-   the operator's badge check decides which signal is real.
-6. F6/F7 messages; F9 materialized titles in manual-work locations.
+1. **F0 token poisoning** (top priority — safety class): sniffer never
+   captures our own attached header; no cross-plane fallback for authoring
+   calls (empty target slot ⇒ BLOCK with "open a course editor on the target
+   account"); guard identity from the target plane's slot only.
+2. F1 executor lesson-1 pairing via orderLessons (small, regression-tested).
+3. F2 onePage: reuse the shell's lesson as lesson 1 (+ doc updates).
+4. F3 parity: target-only ref over a deep-empty source slot → expected.
+5. F4 bank read-back: mirror the US editor's own read route (needs the US
+   bank mitm) + honest failure message.
+6. F5 pending comparison by SET via `…/translations/updates` (needs the
+   Manage-languages mitm of the three imported stacks).
+7. F9 materialized titles in manual-work locations (cosmetic).
+
+## Captures wanted from the operator (both quick)
+- US plane: open Question Banks, open one bank (→ the editor's bank READ
+  route, for F4).
+- US plane: open Manage-languages on the three imported stacks (→ the
+  `…/translations/updates` payloads, for F5 recalibration).
