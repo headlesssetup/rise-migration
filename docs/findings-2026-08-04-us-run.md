@@ -173,8 +173,49 @@ materialize.
    Manage-languages mitm of the three imported stacks).
 7. F9 materialized titles in manual-work locations (cosmetic).
 
-## Captures wanted from the operator (both quick)
-- US plane: open Question Banks, open one bank (→ the editor's bank READ
-  route, for F4).
-- US plane: open Manage-languages on the three imported stacks (→ the
-  `…/translations/updates` payloads, for F5 recalibration).
+## Capture round 2 (`capture_banks-and-count.mitm`, 2026-08-04) — F4 + F5 RESOLVED
+
+### F4 resolution: the US editor has NO per-id bank GET
+Opening a bank in the US editor fires ONLY:
+- `GET /api/rise-authoring/question_banks` (the LIST — full bank objects WITH
+  `questions[]` inline: keys `{author_id, deleted, folder_id, id,
+  last_edited_by, questions, title, updated_at, version}`), and
+- `GET /api/rise-runtime/question-banks/{id}/transcodes` (media transcodes).
+So the per-id authoring GET our read-back used does not exist on US (the 404
+was the genuine answer), and the CORRECT read-back — the editor's own route —
+is the LIST, filtered by id. Fix direction updated accordingly (this satisfies
+"use the right address": it IS what the editor does).
+Side observation to eyeball: the LIST shows `emom9rnw…` (a 403-run "empty"
+bank) with 1 question — reconcile in the UI before deleting.
+
+### F5 resolution: the REAL pending rule (US, capture-proven from full payloads)
+The three `…/translations/updates` payloads (updateCount 63 / 8 / 4, matching
+the badges exactly) list **255 / 25 / 8 pending (cell, locale) entries** —
+essentially EVERY target-locale text cell we wrote, not just the predicted
+default-only cells (11 / 0 / 2). Decisive fields: every entry carries
+`targetValue` = our proofread Russian (Rise SEES the target rows) and
+`translatedAt: null` (except the 3 conversion-stamped placeholder cells). So on
+US the rule is: **pending ⟺ default row's `updatedAt` > the cell's
+`translatedAt` (AI stamp) — a manually-written target row does NOT clear it.**
+The EU-derived rule ("target row newer than default ⇒ quiet"), which the
+write-order invariant was built on, is FALSIFIED on the US plane — either
+plane version skew or the EU 45-badge measurement needs re-examination
+(re-measure on EU when convenient). `updateCount` (the badge number) is a
+smaller segment-ish tally (63 for 255 cells) — decorative; the SET is the
+truth. `mondrianUpdates`/`aiScenarioUpdates` are non-empty (2/2) on every
+course — separate subsystems, not ours.
+
+Consequences for the §6b badge decision:
+- On US targets, EVERY migrated stack pends ~all its text cells; "document the
+  badge" means a huge badge and a full pending list — much less palatable.
+- The updates-run route inflates: an AI run would overwrite ALL proofread
+  target text (not 4 cells) with AI. It can still work as: run → re-write ALL
+  target rows from the archive (target edits never flag — that rule IS
+  operator-verified) → badge 0 with correct content; but that is a full AI
+  pass (credits, on paid plans) + a full second write pass + transient AI text.
+- **Idea 2 (full course first, convert once) is now clearly the superior
+  shape**: the initial conversion stamps every cell BEFORE we overwrite the
+  target rows, and default rows are never touched post-conversion — quiet
+  under BOTH rule models, no second pass, no post-hoc run. Its open cost
+  question stays: does the conversion consume credits on paid plans
+  (creditsUsed check pending).

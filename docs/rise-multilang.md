@@ -87,11 +87,22 @@ Facts that drive the migration design:
   the asset from the source" — official docs). A single-row cell is what every
   language shares; that's why swapping an image sometimes "changes all
   languages" (that cell had one row).
-- **Pending ("N source changes detected") rule** (capture + live-verified): a
-  cell counts as pending for a target locale iff the default-locale row is NEWER
-  than that locale's row, or **the target row is missing**. Target-only cells are
-  never flagged. ⇒ **write default-locale values BEFORE target-locale values**
-  (otherwise EVERY cell is pending).
+- **Pending ("N source changes detected") rule** — ⚠ REVISED 2026-08-04, and
+  now plane-caveated. The US plane's `…/translations/updates` payloads
+  (capture_banks-and-count, full fields) prove the US rule is
+  **`translatedAt`-based**: a (cell, locale) is pending iff the default row's
+  `updatedAt` is newer than the cell's AI stamp (`translatedAt`) — a manually
+  written target row does NOT clear it (all pending entries carried our written
+  `targetValue`). The rule previously stated here ("default row newer than the
+  target ROW, or target row missing ⇒ pending; target-only never flagged"),
+  derived from EU captures, is FALSIFIED on US — the EU behavior itself needs
+  re-measurement. Operator-verified on both models: editing a TARGET value
+  never raises a flag, and an AI run stamps + clears. The write-order invariant
+  (default before target) is kept — it is correct under the EU model and
+  harmless under the US one — but on a US target every imported text cell pends
+  until an AI run, regardless of order. The badge NUMBER (`updateCount`) is a
+  segment-ish tally smaller than the pending cell count; compare pending SETS
+  via the updates endpoint, never tallies.
   **After a faithful import the badge is expected and unavoidable.** Cells the
   source holds only in its default language (fallback cells — overwhelmingly
   media records, plus non-translatable text like quiz choices, numbers, urls)
