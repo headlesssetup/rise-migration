@@ -56,3 +56,8 @@ yarn-error.log*
 package-lock.json
 # pnpm-lock.yaml
 # yarn.lock
+
+# Operator test archives + local store — customer content, never commit
+.pnpm-store/
+_export_test_4aug/
+_multilang_capture/

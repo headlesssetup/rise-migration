@@ -491,10 +491,16 @@ export function verifyL10nParity(
   source: GetCourseDocument,
   target: GetCourseDocument,
   opts: {
-    /** `cellKey(l10nId, locale)` entries whose ABSENCE on the target is
-     *  expected — the flagged storyline cells the planner deliberately does not
-     *  copy (docs/rise-multilang.md §4.3b). Without this, every flagged stack
-     *  import false-fails its language read-back on exactly those cells. */
+    /** `cellKey(l10nId, locale)` entries whose ABSENCE **or DIVERGENCE** on
+     *  the target is expected — the flagged storyline cells the planner
+     *  deliberately does not copy (docs/rise-multilang.md §4.3b). Divergence
+     *  is tolerated too (G1, findings 2026-08-05): under idea 2 the conversion
+     *  MINTS a cell for the flagged slot from the blanked block we shipped, so
+     *  the cell EXISTS with `contentPrefix:""` — present-but-blanked is the
+     *  expected state of an unattached storyline slot, and the announced
+     *  `l10n-storyline` manual flag already tells the operator what to do.
+     *  Without this, a stack whose storyline could not be staged (the Localize
+     *  gate) could never read back `imported`. */
     toleratedMissing?: Set<string>;
     /** IDEA-2 imports: the executor's pairing map (source l10nId → target
      *  l10nId, ALL refs — course fields, lesson titles, block-internal). When
@@ -615,7 +621,10 @@ export function verifyL10nParity(
       const a = JSON.stringify(canonicalize(value));
       const b = JSON.stringify(canonicalize(tgtValue));
       if (a !== b) {
-        issues.push({
+        // A tolerated (flagged-storyline) cell that EXISTS diverges by design:
+        // the conversion minted it from the blanked block, so it holds
+        // `contentPrefix:""` until the operator attaches the package (G1).
+        (opts.toleratedMissing?.has(`${id} ${code}`) ? expected : issues).push({
           kind: 'cell-changed',
           locale: code,
           l10nId: id,
@@ -683,16 +692,16 @@ export function l10nParityToMarkdown(r: L10nParityReport): string {
   lines.push(`## Language parity${r.ok ? ' — OK' : ' — DIVERGENCES'}`);
   if (r.expected?.length) {
     lines.push(
-      `- ${r.expected.length} expected absence(s) (flagged storyline cells — not copied by design)`,
+      `- ${r.expected.length} expected divergence(s)/absence(s) (flagged storyline cells — not copied by design; ` +
+        'an unattached slot holds a blanked package reference until the operator attaches it)',
     );
   }
   if (r.placeholderJunk?.length) {
     lines.push(
-      `- **⚠ ${r.placeholderJunk.length} placeholder cell(s) survive** in languages the source serves by fallback: ` +
-        'the conversion AI-translated the provisional title/description into every language, and only the ' +
-        'languages the source actually holds were overwritten. Those languages VISIBLY show the placeholder ' +
-        'text (the source falls back to its default language there). Fix each by hand in the editor, or wait ' +
-        'for the pending tooling decision (no per-locale cell delete exists in the captured API).',
+      `- ${r.placeholderJunk.length} cell(s) hold the conversion's AI translation in languages the source ` +
+        'serves by default-language fallback — expected under the full-course-first import (there is no ' +
+        'proofread source row to overwrite the AI text with; media is unaffected). Review each in the editor ' +
+        'if AI text is unacceptable there:',
     );
     for (const x of r.placeholderJunk.slice(0, 15)) {
       lines.push(`  - [${x.locale}] ${x.l10nId}${x.detail ? ` — ${x.detail}` : ''}`);

@@ -2,7 +2,7 @@
   "name": "rise-migration",
   "description": "Rise Export/Import Tool — account exporter (courses, question banks, folders, assets, account extras)",
   "private": true,
-  "version": "0.6.7",
+  "version": "0.6.8",
   "type": "module",
   "scripts": {
     "dev": "wxt",

@@ -465,6 +465,32 @@ describe('verifyL10nParity — tolerated missing cells (flagged storyline)', () 
       'cell-sl ru',
     ]);
   });
+
+  it('G1: a tolerated cell that EXISTS with a blanked package reference is expected too', () => {
+    // The 067-run false-partial: under idea 2 the conversion MINTS the flagged
+    // storyline cell from the blanked block we shipped, so the cell is PRESENT
+    // with contentPrefix:"" — present-but-blanked, not absent. Both partials
+    // of the 2026-08-05 run were exactly this one cell-changed each.
+    const tgt = JSON.parse(JSON.stringify(target)) as {
+      l10n: { translations: Record<string, Record<string, unknown>> };
+    };
+    tgt.l10n.translations['en-us']!['cell-sl'] = {
+      storyline: { contentPrefix: '', src: '' },
+    };
+    tgt.l10n.translations.ru!['cell-sl'] = {
+      storyline: { contentPrefix: '', src: '' },
+    };
+    const tolerated = new Set(['cell-sl en-us', 'cell-sl ru']);
+    const r = verifyL10nParity(source, tgt as never, { toleratedMissing: tolerated });
+    expect(r.issues).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(r.expected).toHaveLength(2);
+    expect(r.expected![0]).toMatchObject({ kind: 'cell-changed', l10nId: 'cell-sl' });
+    // …and an UNANNOUNCED divergence on the same shape still fails.
+    const r2 = verifyL10nParity(source, tgt as never);
+    expect(r2.ok).toBe(false);
+    expect(r2.issues.every((i) => i.kind === 'cell-changed')).toBe(true);
+  });
 });
 
 describe('verifyL10nParity — surviving placeholder cells (conversion junk)', () => {
@@ -514,10 +540,11 @@ describe('verifyL10nParity — surviving placeholder cells (conversion junk)', (
       locale: 'ru',
       l10nId: 'tgt-desc',
     });
-    // Not status-flipping (policy pending; no per-locale delete exists) but
-    // never hidden: the markdown renders it loudly.
+    // Not status-flipping (expected residue under idea 2 — no proofread source
+    // row exists to overwrite the AI text with) but never hidden: the markdown
+    // renders it with the per-cell list.
     expect(r.ok).toBe(true);
-    expect(l10nParityToMarkdown(r)).toMatch(/placeholder cell\(s\) survive/);
+    expect(l10nParityToMarkdown(r)).toMatch(/conversion's AI translation/);
   });
 
   it('is empty when the source holds every locale the target does', () => {
