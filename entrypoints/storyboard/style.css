@@ -1,0 +1,165 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px 16px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  margin: 0 0 10px;
+}
+
+.card {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.card-danger {
+  border-color: #c0392b;
+}
+
+.hint {
+  opacity: 0.7;
+  font-size: 12.5px;
+  margin: 6px 0;
+}
+
+.error {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.block-card {
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+
+.block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.chip-auto {
+  background: color-mix(in srgb, #2e7d32 18%, transparent);
+  color: #2e7d32;
+}
+
+.chip-placeholder {
+  background: color-mix(in srgb, #e67e22 20%, transparent);
+  color: #b35c0e;
+}
+
+.chip-unparsed {
+  background: color-mix(in srgb, #c0392b 18%, transparent);
+  color: #c0392b;
+}
+
+.slide {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.exp {
+  opacity: 0.65;
+  font-size: 12px;
+}
+
+.summary {
+  margin: 6px 0 2px;
+  font-size: 13px;
+}
+
+.summary ul,
+.notes {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.notes {
+  font-size: 12px;
+  color: #b35c0e;
+}
+
+details {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+details summary {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+details pre {
+  white-space: pre-wrap;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.ack {
+  display: block;
+  margin: 10px 0;
+  font-weight: 600;
+}
+
+button {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.approve {
+  font-weight: 700;
+  margin-top: 8px;
+}
+
+.done {
+  margin-top: 10px;
+  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  padding-top: 8px;
+}
