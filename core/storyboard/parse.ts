@@ -355,8 +355,12 @@ function parseItemsCell(
     const listOnly = rest.filter(isListPara);
     if (listOnly.length > 0) {
       notes.push('Vienumi atvasināti no saraksta rindkopām (virsraksts = treknraksts/pirms domuzīmes)');
+      // The loop above put EVERY paragraph into `intro` (no item ever started)
+      // — rebuild it from the non-list paragraphs only, or the list content
+      // would ship twice: once as lead-in text, once as the items.
+      const introOnly = rest.filter((p) => !isListPara(p)).map(paraToHtml);
       return {
-        intent: { kind, heading, intro, items: listOnly.map(splitListItem) },
+        intent: { kind, heading, intro: introOnly, items: listOnly.map(splitListItem) },
         notes,
       };
     }

@@ -438,6 +438,8 @@ describe('parseStoryboard — cell parsing', () => {
       { title: 'Vācija', body: '<p>konkurētspēja, enerģētika</p>' },
       { title: 'Itālija', body: '<p>migrācija, fiskālā politika</p>' },
     ]);
+    // The bullets are the CARDS — they must not also ship as lead-in text.
+    expect(b.intent.intro).toEqual(['<p>Klikšķini uz reģiona.</p>']);
   });
 
   it('parses sorting piles (bold) and cards (list), tolerating italics', () => {

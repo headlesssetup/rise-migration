@@ -84,7 +84,8 @@ function IntentSummary({ intent }: { intent: BlockIntent }) {
           <ul>
             {intent.events.map((e, i) => (
               <li key={i}>
-                <b>{e.date}</b> — {e.body.replace(/<[^>]+>/g, '')}
+                <b>{e.date}</b> — {e.title}
+                {e.body && ` (${e.body.replace(/<[^>]+>/g, '')})`}
               </li>
             ))}
           </ul>
@@ -131,31 +132,61 @@ function IntentSummary({ intent }: { intent: BlockIntent }) {
   }
 }
 
-function BlockCard({ block }: { block: PlannedBlock }) {
+function BlockRow({ block, showSource }: { block: PlannedBlock; showSource: boolean }) {
   const { intent, provenance, notes } = block;
   return (
-    <div className="block-card">
-      <div className="block-head">
+    <tr>
+      <td className="col-slide">
+        {provenance.slideNo != null ? provenance.slideNo : `r${provenance.tableRow}`}
+      </td>
+      <td className="col-kind">
         <span className={chipClass(intent.kind)}>{KIND_LABEL[intent.kind]}</span>
-        <span className="slide">
-          {provenance.slideNo != null ? `Slaids ${provenance.slideNo}` : `Rinda ${provenance.tableRow}`}
-        </span>
-        <span className="exp">{provenance.experience.replace(/\s+/g, ' ').slice(0, 80)}</span>
-      </div>
-      <IntentSummary intent={intent} />
-      {notes.length > 0 && (
-        <ul className="notes">
-          {notes.map((n, i) => (
-            <li key={i}>{n}</li>
-          ))}
-        </ul>
-      )}
-      <details>
-        <summary>Avota teksts (SD šūna)</summary>
-        <pre>{provenance.rawScreenText}</pre>
-        {provenance.comments && <p className="hint">Komentāri: {provenance.comments}</p>}
-      </details>
-    </div>
+      </td>
+      <td className="col-content">
+        <IntentSummary intent={intent} />
+        {showSource && (
+          <details>
+            <summary>Avota teksts (SD šūna)</summary>
+            <pre>{provenance.rawScreenText}</pre>
+            {provenance.comments && <p className="hint">Komentāri: {provenance.comments}</p>}
+          </details>
+        )}
+      </td>
+      <td className="col-notes">
+        {notes.length > 0 && (
+          <ul className="notes">
+            {notes.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function LessonTable({ blocks }: { blocks: PlannedBlock[] }) {
+  // Only the FIRST block of an SD row carries the source-cell toggle — the
+  // follow-up blocks (continue gates, placeholders) share the same cell.
+  let lastRow = -1;
+  return (
+    <table className="plan-table">
+      <thead>
+        <tr>
+          <th className="col-slide">Slaids</th>
+          <th className="col-kind">Bloka tips</th>
+          <th className="col-content">Saturs</th>
+          <th className="col-notes">Brīdinājumi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {blocks.map((b, j) => {
+          const showSource = b.provenance.tableRow !== lastRow;
+          lastRow = b.provenance.tableRow;
+          return <BlockRow block={b} showSource={showSource} key={j} />;
+        })}
+      </tbody>
+    </table>
   );
 }
 
@@ -302,22 +333,40 @@ export function App() {
           {planned.unparsed.length > 0 && (
             <section className="card card-danger">
               <h2>⚠ Neatpazītas rindas — netiks importētas</h2>
-              {planned.unparsed.map((u, i) => (
-                <div className="block-card" key={i}>
-                  <div className="block-head">
-                    <span className="chip chip-unparsed">Neatpazīts</span>
-                    <span className="slide">
-                      {u.provenance.slideNo != null ? `Slaids ${u.provenance.slideNo}` : `Rinda ${u.provenance.tableRow}`}
-                    </span>
-                    <span className="exp">{u.provenance.experience.replace(/\s+/g, ' ').slice(0, 80)}</span>
-                  </div>
-                  <p className="error">{u.reason}</p>
-                  <details>
-                    <summary>Avota teksts</summary>
-                    <pre>{u.provenance.rawScreenText}</pre>
-                  </details>
-                </div>
-              ))}
+              <table className="plan-table">
+                <thead>
+                  <tr>
+                    <th className="col-slide">Slaids</th>
+                    <th className="col-kind">Bloka tips</th>
+                    <th className="col-content">Saturs (avots)</th>
+                    <th className="col-notes">Brīdinājumi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {planned.unparsed.map((u, i) => (
+                    <tr key={i}>
+                      <td className="col-slide">
+                        {u.provenance.slideNo != null ? u.provenance.slideNo : `r${u.provenance.tableRow}`}
+                      </td>
+                      <td className="col-kind">
+                        <span className="chip chip-unparsed">Neatpazīts</span>
+                      </td>
+                      <td className="col-content">
+                        <p className="summary">{u.provenance.experience.replace(/\s+/g, ' ')}</p>
+                        <details>
+                          <summary>Avota teksts</summary>
+                          <pre>{u.provenance.rawScreenText}</pre>
+                        </details>
+                      </td>
+                      <td className="col-notes">
+                        <ul className="notes">
+                          <li className="error">{u.reason}</li>
+                        </ul>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
           )}
 
@@ -326,10 +375,11 @@ export function App() {
               <h2>
                 {i + 1} / {planned.lessons.length} · {l.title}
               </h2>
-              {l.blocks.map((b, j) => (
-                <BlockCard block={b} key={j} />
-              ))}
-              {l.blocks.length === 0 && <p className="hint">(nav bloku)</p>}
+              {l.blocks.length > 0 ? (
+                <LessonTable blocks={l.blocks} />
+              ) : (
+                <p className="hint">(nav bloku)</p>
+              )}
             </section>
           ))}
 

@@ -1,15 +1,29 @@
+/* Light mode by design — the review doubles as a client-facing sign-off page. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 14px;
+  --ink: #1c1e21;
+  --muted: #5f6570;
+  --line: #d9dce1;
+  --line-soft: #e8eaee;
+  --bg-soft: #f6f7f9;
+  --green: #1e7a34;
+  --green-bg: #e6f4ea;
+  --amber: #9a5b00;
+  --amber-bg: #fdf1dc;
+  --red: #b3261e;
+  --red-bg: #fceeee;
 }
 
 body {
   margin: 0;
+  background: #fff;
+  color: var(--ink);
 }
 
 .app {
-  max-width: 900px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 20px 16px 60px;
   display: flex;
@@ -23,49 +37,82 @@ h1 {
 }
 
 h2 {
-  font-size: 13px;
+  font-size: 12.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  opacity: 0.75;
+  color: var(--muted);
   margin: 0 0 10px;
 }
 
 .card {
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 12px 14px;
+  background: #fff;
 }
 
 .card-danger {
-  border-color: #c0392b;
+  border-color: var(--red);
 }
 
 .hint {
-  opacity: 0.7;
+  color: var(--muted);
   font-size: 12.5px;
   margin: 6px 0;
 }
 
 .error {
-  color: #c0392b;
+  color: var(--red);
   font-weight: 600;
 }
 
-.block-card {
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: 6px;
-  padding: 8px 10px;
-  margin: 8px 0;
+/* --- the plan table ------------------------------------------------------ */
+
+.plan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
 
-.block-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
+.plan-table th {
+  text-align: left;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--line);
+  white-space: nowrap;
+}
+
+.plan-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+
+.plan-table tbody tr:nth-child(even) {
+  background: var(--bg-soft);
+}
+
+.col-slide {
+  width: 52px;
+  font-weight: 700;
+  font-size: 12.5px;
+  text-align: right;
+}
+
+.col-kind {
+  width: 170px;
+}
+
+.col-notes {
+  width: 26%;
 }
 
 .chip {
+  display: inline-block;
   font-size: 11px;
   font-weight: 700;
   border-radius: 10px;
@@ -74,59 +121,63 @@ h2 {
 }
 
 .chip-auto {
-  background: color-mix(in srgb, #2e7d32 18%, transparent);
-  color: #2e7d32;
+  background: var(--green-bg);
+  color: var(--green);
 }
 
 .chip-placeholder {
-  background: color-mix(in srgb, #e67e22 20%, transparent);
-  color: #b35c0e;
+  background: var(--amber-bg);
+  color: var(--amber);
 }
 
 .chip-unparsed {
-  background: color-mix(in srgb, #c0392b 18%, transparent);
-  color: #c0392b;
-}
-
-.slide {
-  font-weight: 700;
-  font-size: 12px;
-}
-
-.exp {
-  opacity: 0.65;
-  font-size: 12px;
+  background: var(--red-bg);
+  color: var(--red);
 }
 
 .summary {
-  margin: 6px 0 2px;
-  font-size: 13px;
+  margin: 0;
+}
+
+.summary p {
+  margin: 0 0 4px;
 }
 
 .summary ul,
 .notes {
-  margin: 4px 0;
-  padding-left: 20px;
+  margin: 2px 0;
+  padding-left: 18px;
 }
 
 .notes {
   font-size: 12px;
-  color: #b35c0e;
+  color: var(--amber);
+  list-style: '⚠ ';
+}
+
+.notes li {
+  padding-left: 2px;
+  margin-bottom: 3px;
+}
+
+.notes li.error {
+  color: var(--red);
 }
 
 details {
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 12px;
 }
 
 details summary {
   cursor: pointer;
-  opacity: 0.6;
+  color: var(--muted);
 }
 
 details pre {
   white-space: pre-wrap;
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  background: var(--bg-soft);
+  border: 1px solid var(--line-soft);
   padding: 8px;
   border-radius: 4px;
   max-height: 300px;
@@ -143,9 +194,14 @@ button {
   font: inherit;
   padding: 6px 14px;
   border-radius: 6px;
-  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--ink);
   cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #eceef2;
 }
 
 button:disabled {
@@ -156,10 +212,13 @@ button:disabled {
 button.approve {
   font-weight: 700;
   margin-top: 8px;
+  background: var(--green-bg);
+  border-color: var(--green);
+  color: var(--green);
 }
 
 .done {
   margin-top: 10px;
-  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  border-top: 1px solid var(--line);
   padding-top: 8px;
 }
