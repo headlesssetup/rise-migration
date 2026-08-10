@@ -97,8 +97,28 @@ function paraToHtml(p: SdPara): string {
   return `<p>${runsToHtml(p)}</p>`;
 }
 
+/** Paragraphs → HTML; consecutive list paragraphs become a `<ul>` so bulleted
+ *  content inside item bodies keeps its bullets in Rise. */
 function parasToHtml(paras: SdPara[]): string {
-  return paras.map(paraToHtml).join('');
+  let out = '';
+  let inList = false;
+  for (const p of paras) {
+    if (isListPara(p)) {
+      if (!inList) {
+        out += '<ul>';
+        inList = true;
+      }
+      out += `<li>${runsToHtml(p)}</li>`;
+    } else {
+      if (inList) {
+        out += '</ul>';
+        inList = false;
+      }
+      out += paraToHtml(p);
+    }
+  }
+  if (inList) out += '</ul>';
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,17 +255,60 @@ function parseTextCell(paras: SdPara[], sd: SdDoc): CellParse {
   };
 }
 
+/** Split a list paragraph into item title + body: the leading BOLD runs are
+ *  the title (`**Vācija** – konkurētspēja…`), else the text before the first
+ *  ` – `/` — `/` - ` separator; no separator → title-only. */
+function splitListItem(p: SdPara): IntentItem {
+  const rs = p.runs;
+  let i = 0;
+  while (i < rs.length && (rs[i]!.text.trim() === '' || rs[i]!.bold)) i++;
+  const boldPrefix = rs.slice(0, i).filter((r) => r.bold);
+  if (boldPrefix.length > 0 && i < rs.length) {
+    const title = boldPrefix
+      .map((r) => r.text)
+      .join('')
+      .trim()
+      .replace(/[\s–—:-]+$/, '');
+    const restRuns = rs.slice(i).map((r) => ({ ...r }));
+    restRuns[0]!.text = restRuns[0]!.text.replace(/^[\s–—:-]+/, '');
+    return { title, body: paraToHtml({ runs: restRuns }) };
+  }
+  const text = paraText(p).trim();
+  const m = /\s[–—-]\s/.exec(text);
+  if (m) {
+    return {
+      title: text.slice(0, m.index).trim(),
+      body: `<p>${escapeHtml(text.slice(m.index + m[0].length).trim())}</p>`,
+    };
+  }
+  return { title: text, body: '' };
+}
+
 function parseItemsCell(
   paras: SdPara[],
   kind: 'accordion' | 'tabs' | 'flashcards' | 'process',
 ): CellParse {
-  // Brackets stay: a BOLD `[…]` paragraph is a clickable ITEM TITLE (the SD's
-  // convention for accordion panels / tabs / cards); only a NON-bold `[…]`
-  // paragraph is a button/navigation.
+  // Brackets stay: a `[…]` paragraph is a clickable ITEM TITLE (accordion
+  // panel / tab / card). Authors are inconsistent about bolding them (rows 12/
+  // 25/26/38 bold, row 50 plain), so: when BOLD bracket items exist they are
+  // the items (non-bold brackets stay navigation); otherwise any bracket that
+  // isn't a gate/navigation button is an item.
   const { paras: ps, notes } = prepare(paras, { keepBrackets: true });
   if (ps.length === 0) return { reason: 'tukša ekrāna teksta šūna', notes };
 
-  const isItemBracket = (p: SdPara) => isBracketOnly(p) && isBoldPara(p);
+  const isGateBracket = (p: SdPara) => {
+    const label = paraText(p).trim().replace(/^\[|\]$/g, '').trim();
+    return (
+      CONTINUE_BUTTON_RE.test(label) ||
+      ATTACHMENT_BUTTON_RE.test(label) ||
+      /^nākamā/i.test(label)
+    );
+  };
+  const hasBoldBrackets = ps.some((p) => isBracketOnly(p) && isBoldPara(p));
+  const isItemBracket = (p: SdPara) =>
+    isBracketOnly(p) &&
+    !isGateBracket(p) &&
+    (hasBoldBrackets ? isBoldPara(p) : paraText(p).trim().length > 2);
   const bracketMode = ps.some(isItemBracket);
 
   const first = ps[0]!;
@@ -275,18 +338,25 @@ function parseItemsCell(
   }
   if (current) items.push({ title: current.title, body: parasToHtml(current.body) });
 
+  // Plain-bracket mode guard: a trailing body-less bracket is far more likely
+  // a navigation button than a real (empty) panel — demote it, loudly.
+  if (bracketMode && !hasBoldBrackets && items.length > 1) {
+    const last = items[items.length - 1]!;
+    if (last.body === '') {
+      items.pop();
+      notes.push(`Poga/navigācija izlaista: [${last.title}]`);
+    }
+  }
+
   if (items.length === 0) {
-    // Fallback: list paragraphs as title-only items (e.g. a structure overview).
+    // Fallback: list paragraphs as items (e.g. flip cards written as
+    // `**Vācija** – konkurētspēja, enerģētika`): the bold lead (or the text
+    // before the first dash) is the title/front, the remainder the body/back.
     const listOnly = rest.filter(isListPara);
     if (listOnly.length > 0) {
-      notes.push('Vienumi atvasināti no saraksta rindkopām (bez treknraksta virsrakstiem)');
+      notes.push('Vienumi atvasināti no saraksta rindkopām (virsraksts = treknraksts/pirms domuzīmes)');
       return {
-        intent: {
-          kind,
-          heading,
-          intro,
-          items: listOnly.map((p) => ({ title: paraText(p).trim(), body: '' })),
-        },
+        intent: { kind, heading, intro, items: listOnly.map(splitListItem) },
         notes,
       };
     }
@@ -317,10 +387,14 @@ function parseTimelineCell(paras: SdPara[]): CellParse {
         notes.push(`Poga/navigācija izlaista: ${text}`);
         continue;
       }
+      // `[date: name]` → the name is the event TITLE (operator feedback,
+      // pilot 2026-08-10); `[date: name: description]` adds a body.
+      const rest = inner.slice(colon + 1).trim();
+      const colon2 = rest.indexOf(':');
       events.push({
         date: inner.slice(0, colon).trim(),
-        title: '',
-        body: `<p>${escapeHtml(inner.slice(colon + 1).trim())}</p>`,
+        title: colon2 === -1 ? rest : rest.slice(0, colon2).trim(),
+        body: colon2 === -1 ? '' : `<p>${escapeHtml(rest.slice(colon2 + 1).trim())}</p>`,
       });
     } else if (events.length === 0) {
       intro.push(paraToHtml(p));
@@ -591,6 +665,24 @@ function computeSlideNumbers(rows: SdCell[][]): (number | null)[] {
 
 const EMPTY_AUDIO_RE = /^[\s\-–—]*$/;
 
+// Gate buttons → Rise's continue divider; attachment-ish buttons (a PDF/file
+// the SD only names) → flagged placeholder. Everything else stays navigation.
+const CONTINUE_BUTTON_RE = /^(sākt|tālāk|turpināt|continue)[!.]?$/i;
+const ATTACHMENT_BUTTON_RE = /instrukcij|lejupielā|\bpdf\b|pielikum/i;
+
+/** Bracket-only, non-hyperlink button paragraphs of a cell, in order. */
+function gateButtons(paras: SdPara[]): { kind: 'continue' | 'attachment'; label: string }[] {
+  const out: { kind: 'continue' | 'attachment'; label: string }[] = [];
+  for (const p of paras) {
+    if (p.hidden || !isBracketOnly(p)) continue;
+    if (p.runs.some((r) => r.link)) continue; // links-row buttons, not gates
+    const label = paraText(p).trim().replace(/^\[|\]$/g, '').trim();
+    if (CONTINUE_BUTTON_RE.test(label)) out.push({ kind: 'continue', label });
+    else if (ATTACHMENT_BUTTON_RE.test(label)) out.push({ kind: 'attachment', label });
+  }
+  return out;
+}
+
 /** Parse a whole SD document model into the PlannedCourse. */
 export function parseStoryboard(sd: SdDoc): PlannedCourse {
   const title = findCourseTitle(sd);
@@ -720,11 +812,34 @@ export function parseStoryboard(sd: SdDoc): PlannedCourse {
     }
 
     if (parsed.intent) {
+      // Gate/attachment buttons become their own blocks — drop the redundant
+      // "navigation skipped" notes the cell parser recorded for them.
+      const gates = gateButtons(screen);
+      const gateLabels = new Set(gates.map((g) => `Poga/navigācija izlaista: [${g.label}]`));
       current.blocks.push({
         intent: parsed.intent,
         provenance,
-        notes: [...classNotes, ...parsed.notes],
+        notes: [...classNotes, ...parsed.notes.filter((n) => !gateLabels.has(n))],
       });
+      for (const g of gates) {
+        if (g.kind === 'continue') {
+          current.blocks.push({
+            intent: { kind: 'continue', label: g.label },
+            provenance,
+            notes: [],
+          });
+        } else {
+          const slide = provenance.slideNo != null ? `slaidu nr. ${provenance.slideNo}` : `rindu ${i}`;
+          current.blocks.push({
+            intent: {
+              kind: 'attachment-placeholder',
+              label: `Pievienot failu/saiti: "${g.label}" — skat. ${slide}`,
+            },
+            provenance,
+            notes: [],
+          });
+        }
+      }
     } else {
       unparsed.push({ provenance, reason: parsed.reason ?? 'neatpazīta rinda' });
     }

@@ -377,6 +377,39 @@ export function mapIntent(intent: BlockIntent, mint: Mints): MappedRow {
         ],
         notes,
       };
+
+    case 'continue':
+      // Donor: editor-created continue divider (capture_creation4aug) —
+      // items[0] = {type:'', title, buttonColor:'brand', completeHint}.
+      return {
+        blocks: [
+          {
+            id: mint.cuid(),
+            type: 'divider',
+            family: 'continue',
+            variant: 'continue',
+            items: [
+              {
+                id: mint.cuid(),
+                type: '',
+                title: intent.label,
+                buttonColor: 'brand',
+                completeHint: 'Pabeidz augstāk esošo saturu, lai turpinātu.',
+              },
+            ],
+            settings: { v: 2 },
+          },
+        ],
+        notes,
+      };
+
+    case 'attachment-placeholder':
+      return {
+        blocks: [
+          textBlock(mint, undefined, `<p><strong>📎 ${escapeHtml(intent.label)}</strong></p>`),
+        ],
+        notes,
+      };
   }
 }
 

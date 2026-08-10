@@ -110,6 +110,18 @@ export type BlockIntent =
       /** Flagged text block: "replace with Storyline/Mighty, see slide N". */
       kind: 'storyline-placeholder';
       label: string;
+    }
+  | {
+      /** A `[SĀKT]`/`[TĀLĀK]`-style gate → Rise's continue divider. */
+      kind: 'continue';
+      /** Button label verbatim from the SD (e.g. `SĀKT`). */
+      label: string;
+    }
+  | {
+      /** `[Instrukcija]`/`[Lejupielādēt …]` — a PDF/attachment that does not
+       *  exist in the SD; flagged text placeholder (text-only course). */
+      kind: 'attachment-placeholder';
+      label: string;
     };
 
 export interface PlannedBlock {

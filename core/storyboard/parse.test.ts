@@ -217,8 +217,9 @@ describe('parseStoryboard — cell parsing', () => {
     expect(b.intent).toMatchObject({ kind: 'text', heading: 'Virsraksts' });
     if (b.intent.kind !== 'text') return;
     expect(b.intent.paragraphs).toEqual(['<p>Rindkopa viena.</p>']);
-    expect(b.notes.some((n) => n.includes('[TĀLĀK]'))).toBe(true);
     expect(b.notes.some((n) => n.includes('Neredzama piezīme'))).toBe(true);
+    // [TĀLĀK] is a gate → its own continue block, not a dropped note.
+    expect(planned.lessons[0]!.blocks[1]!.intent).toEqual({ kind: 'continue', label: 'TĀLĀK' });
   });
 
   it('turns a text row with list paragraphs into a list intent (ordered by numFmt)', () => {
@@ -288,7 +289,61 @@ describe('parseStoryboard — cell parsing', () => {
     );
     // A bold body paragraph must NOT start a new item in bracket mode.
     expect(b.intent.items[1]!.body).toContain('Galvenais jautājums');
-    expect(b.notes.some((n) => n.includes('[TĀLĀK]'))).toBe(true);
+    // [TĀLĀK] is a gate → its own continue block after the tabs.
+    expect(planned.lessons[0]!.blocks[1]!.intent.kind).toBe('continue');
+  });
+
+  it('parses PLAIN (non-bold) bracket items with bulleted bodies (row-50 form)', () => {
+    const planned = parseStoryboard(
+      doc([
+        divider('T'),
+        row('Rise elements: Accordion', [
+          p('Procesa atbilstības pārbaudes saraksts', { bold: true }),
+          p('Atver katru jomu un izlasi tās kontroljautājumus.'),
+          p('[Juridiskais pamats un procedūra]'),
+          p('Vai ir noteikts juridiskais pamats?', { numId: '7' }),
+          p('Vai gaita atbilst principiem?', { numId: '7' }),
+          p('[Iestāžu līdzdalība]'),
+          p('Vai katra iestāde ir iesaistīta?', { numId: '7' }),
+          p('[TĀLĀK]'),
+        ]),
+      ]),
+    );
+    const b = planned.lessons[0]!.blocks[0]!;
+    if (b.intent.kind !== 'accordion') throw new Error('expected accordion');
+    expect(b.intent.heading).toBe('Procesa atbilstības pārbaudes saraksts');
+    expect(b.intent.items).toEqual([
+      {
+        title: 'Juridiskais pamats un procedūra',
+        body: '<ul><li>Vai ir noteikts juridiskais pamats?</li><li>Vai gaita atbilst principiem?</li></ul>',
+      },
+      {
+        title: 'Iestāžu līdzdalība',
+        body: '<ul><li>Vai katra iestāde ir iesaistīta?</li></ul>',
+      },
+    ]);
+    // [TĀLĀK] became a continue block, not an item.
+    expect(planned.lessons[0]!.blocks[1]!.intent.kind).toBe('continue');
+  });
+
+  it('keeps non-bold brackets as navigation when BOLD bracket items exist (mixed cell)', () => {
+    const planned = parseStoryboard(
+      doc([
+        divider('T'),
+        row('Rise elements: Flipcards', [
+          p('Kategorijas', { bold: true }),
+          p('[Ekskluzīvā kompetence]', { bold: true }),
+          p('Tikai ES drīkst pieņemt aktus.'),
+          p('[Ko tas nozīmē praksē?]'),
+        ]),
+      ]),
+    );
+    const b = planned.lessons[0]!.blocks[0]!;
+    if (b.intent.kind !== 'flashcards') throw new Error('expected flashcards');
+    expect(b.intent.items).toEqual([
+      { title: 'Ekskluzīvā kompetence', body: '<p>Tikai ES drīkst pieņemt aktus.</p>' },
+    ]);
+    expect(b.notes.some((n) => n.includes('[Ko tas nozīmē praksē?]'))).toBe(true);
   });
 
   it('parses timeline events from bracket paragraphs', () => {
@@ -307,10 +362,82 @@ describe('parseStoryboard — cell parsing', () => {
     const b = planned.lessons[0]!.blocks[0]!;
     if (b.intent.kind !== 'timeline') throw new Error('expected timeline');
     expect(b.intent.events).toEqual([
-      { date: '1951/1952', title: '', body: '<p>EOTK dibināšana</p>' },
-      { date: '1992/1993', title: '', body: '<p>Māstrihtas līgums</p>' },
+      { date: '1951/1952', title: 'EOTK dibināšana', body: '' },
+      { date: '1992/1993', title: 'Māstrihtas līgums', body: '' },
     ]);
-    expect(b.notes.some((n) => n.includes('[TĀLĀK]'))).toBe(true);
+    // [TĀLĀK] is a gate button → its own continue block after the timeline.
+    const gate = planned.lessons[0]!.blocks[1]!;
+    expect(gate.intent).toEqual({ kind: 'continue', label: 'TĀLĀK' });
+  });
+
+  it('splits `[date: name: description]` timeline events into title + body', () => {
+    const planned = parseStoryboard(
+      doc([
+        divider('T'),
+        row('Rise elements: Timeline', [p('[2007/2009: Lisabonas līgums: Reformēja iestādes.]')]),
+      ]),
+    );
+    const b = planned.lessons[0]!.blocks[0]!;
+    if (b.intent.kind !== 'timeline') throw new Error('expected timeline');
+    expect(b.intent.events).toEqual([
+      { date: '2007/2009', title: 'Lisabonas līgums', body: '<p>Reformēja iestādes.</p>' },
+    ]);
+  });
+
+  it('turns [SĀKT]/[TĀLĀK] into continue blocks and [Instrukcija] into an attachment placeholder', () => {
+    const planned = parseStoryboard(
+      doc([
+        divider('T'),
+        row('Sākumlapas teksts', [
+          p('Ņem vērā', { bold: true }),
+          p('Kurss izstrādāts 2026. gadā.'),
+          p('Apskati kursa lietošanas instrukciju', { bold: true }),
+          p('[Instrukcija]'),
+          p('[SĀKT]'),
+        ]),
+      ]),
+    );
+    const blocks = planned.lessons[0]!.blocks;
+    expect(blocks.map((b) => b.intent.kind)).toEqual([
+      'text',
+      'attachment-placeholder',
+      'continue',
+    ]);
+    const attach = blocks[1]!.intent;
+    if (attach.kind !== 'attachment-placeholder') throw new Error('expected attachment');
+    expect(attach.label).toContain('Instrukcija');
+    expect(attach.label).toContain('slaidu nr. 1');
+    const cont = blocks[2]!.intent;
+    if (cont.kind !== 'continue') throw new Error('expected continue');
+    expect(cont.label).toBe('SĀKT');
+    // The converted buttons must not ALSO appear as "navigation skipped" notes.
+    expect(blocks[0]!.notes.some((n) => n.includes('[SĀKT]') || n.includes('[Instrukcija]'))).toBe(false);
+  });
+
+  it('splits list-fallback flip cards on the bold lead (front) and dash (back)', () => {
+    const planned = parseStoryboard(
+      doc([
+        divider('T'),
+        row('Rise elements: Flipcards', [
+          p('ES dalībvalstīm aktuālie jautājumi', { bold: true }),
+          p('Klikšķini uz reģiona.'),
+          {
+            runs: [
+              { text: 'Vācija', bold: true, italic: false },
+              { text: ' – konkurētspēja, enerģētika', bold: false, italic: false },
+            ],
+            numId: '7',
+          },
+          p('Itālija – migrācija, fiskālā politika', { numId: '7' }),
+        ]),
+      ]),
+    );
+    const b = planned.lessons[0]!.blocks[0]!;
+    if (b.intent.kind !== 'flashcards') throw new Error('expected flashcards');
+    expect(b.intent.items).toEqual([
+      { title: 'Vācija', body: '<p>konkurētspēja, enerģētika</p>' },
+      { title: 'Itālija', body: '<p>migrācija, fiskālā politika</p>' },
+    ]);
   });
 
   it('parses sorting piles (bold) and cards (list), tolerating italics', () => {

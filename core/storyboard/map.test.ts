@@ -179,6 +179,24 @@ describe('mapIntent — block shapes', () => {
     expect(notes.some((n) => n.includes('pilots pārbauda'))).toBe(true);
   });
 
+  it('maps continue to the divider donor and attachment placeholders to flagged text', () => {
+    const cont = mapIntent({ kind: 'continue', label: 'SĀKT' }, mints()).blocks[0]!;
+    expect(cont).toMatchObject({ family: 'continue', variant: 'continue', type: 'divider' });
+    expect((cont.items as Record<string, unknown>[])[0]!).toMatchObject({
+      type: '',
+      title: 'SĀKT',
+      buttonColor: 'brand',
+    });
+    expect(Object.keys(cont).sort()).toEqual(EDITOR_KEYS);
+
+    const att = mapIntent(
+      { kind: 'attachment-placeholder', label: 'Pievienot failu: "Instrukcija"' },
+      mints(),
+    ).blocks[0]!;
+    expect(att.variant).toBe('paragraph');
+    expect((att.items as Record<string, unknown>[])[0]!.paragraph).toContain('📎');
+  });
+
   it('maps note to impact/note and links to a buttons/button stack (donor shapes)', () => {
     const note = mapIntent({ kind: 'note', paragraphs: ['<p>n</p>'] }, mints()).blocks[0]!;
     expect(note).toMatchObject({ family: 'impact', variant: 'note', type: 'text' });

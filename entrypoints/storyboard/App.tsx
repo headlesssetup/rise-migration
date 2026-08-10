@@ -33,7 +33,9 @@ function errText(e: unknown): string {
 
 /** Placeholder kinds land amber in review; everything else is auto-built. */
 function chipClass(kind: BlockIntent['kind']): string {
-  return kind === 'video-placeholder' || kind === 'storyline-placeholder'
+  return kind === 'video-placeholder' ||
+    kind === 'storyline-placeholder' ||
+    kind === 'attachment-placeholder'
     ? 'chip chip-placeholder'
     : 'chip chip-auto';
 }
@@ -52,6 +54,8 @@ const KIND_LABEL: Record<BlockIntent['kind'], string> = {
   links: 'Pogu saraksts (saites)',
   'video-placeholder': 'Video — aizvietotājs',
   'storyline-placeholder': 'Storyline/Mighty — aizvietotājs',
+  continue: 'Turpināt (poga)',
+  'attachment-placeholder': 'Pielikums — aizvietotājs',
 };
 
 function IntentSummary({ intent }: { intent: BlockIntent }) {
@@ -120,7 +124,10 @@ function IntentSummary({ intent }: { intent: BlockIntent }) {
       );
     case 'video-placeholder':
     case 'storyline-placeholder':
+    case 'attachment-placeholder':
       return <p className="summary">{intent.label}</p>;
+    case 'continue':
+      return <p className="summary">[{intent.label}]</p>;
   }
 }
 
