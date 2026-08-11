@@ -218,25 +218,32 @@ export default defineBackground(() => {
   // (the SPA never sends one plane's token to the other plane's host); storing
   // it would poison this slot with the other account's credentials — exactly
   // the self-sniffing loop of the first live cross-plane run.
-  browser.webRequest.onBeforeSendHeaders.addListener(
-    (details) => {
-      const plane = risePlaneFromUrl(details.url);
-      if (!plane) return;
-      const header = details.requestHeaders?.find(
-        (h) => h.name.toLowerCase() === 'authorization',
-      );
-      const value = header?.value;
-      if (value && /^Bearer\s+/i.test(value)) {
-        const token = value.replace(/^Bearer\s+/i, '').trim();
-        if (!shouldCaptureBearer(plane, token, { us: auth.us.token, eu: auth.eu.token })) {
-          return;
+  //
+  // Registration is try/caught: a host-permission mismatch on the filter must
+  // NOT prevent onMessage from registering (that left the panel on Connecting…).
+  try {
+    browser.webRequest.onBeforeSendHeaders.addListener(
+      (details) => {
+        const plane = risePlaneFromUrl(details.url);
+        if (!plane) return;
+        const header = details.requestHeaders?.find(
+          (h) => h.name.toLowerCase() === 'authorization',
+        );
+        const value = header?.value;
+        if (value && /^Bearer\s+/i.test(value)) {
+          const token = value.replace(/^Bearer\s+/i, '').trim();
+          if (!shouldCaptureBearer(plane, token, { us: auth.us.token, eu: auth.eu.token })) {
+            return;
+          }
+          setToken(plane, token);
         }
-        setToken(plane, token);
-      }
-    },
-    { urls: RISE_TAB_GLOBS },
-    ['requestHeaders', 'extraHeaders'],
-  );
+      },
+      { urls: RISE_TAB_GLOBS },
+      ['requestHeaders', 'extraHeaders'],
+    );
+  } catch (e) {
+    console.error('webRequest token sniffer failed to register:', e);
+  }
 
   // Find the Rise tab to operate in — prefer the active/last-focused one (the
   // plane the operator is looking at), else any open Rise tab (US or EU).

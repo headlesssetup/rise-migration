@@ -20,9 +20,13 @@ describe('rpcTimeoutFor', () => {
     expect(rpcTimeoutFor('STORYLINE_UPLOAD')).toBeGreaterThan(180_000);
   });
 
-  it('defaults everything else to the standard deadline', () => {
+  it('defaults paced reads/writes to the standard deadline', () => {
     expect(rpcTimeoutFor('RELAY_WRITE')).toBe(RPC_TIMEOUT_MS);
     expect(rpcTimeoutFor('GET_COURSE')).toBe(RPC_TIMEOUT_MS);
+  });
+
+  it('fails the session poll fast so Connecting cannot hang silently', () => {
+    expect(rpcTimeoutFor('GET_SESSION_STATE')).toBe(5_000);
   });
 });
 
@@ -32,9 +36,9 @@ describe('rpc', () => {
     stubSendMessage(() => new Promise(() => {}));
     const pending = rpc({ type: 'GET_SESSION_STATE' });
     const assertion = expect(pending).rejects.toThrow(
-      /did not answer GET_SESSION_STATE within 120s/,
+      /did not answer GET_SESSION_STATE within 5s/,
     );
-    await vi.advanceTimersByTimeAsync(RPC_TIMEOUT_MS + 10);
+    await vi.advanceTimersByTimeAsync(5_010);
     await assertion;
   });
 

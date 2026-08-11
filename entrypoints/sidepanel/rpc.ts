@@ -15,6 +15,9 @@ export const RPC_TIMEOUT_MS = 120_000;
 // 30s identify + 240s build; upload: the bytes PUT + a 180s contentPrefix poll)
 // or the panel would abandon a still-healthy job.
 const TIMEOUT_BY_TYPE: Partial<Record<BackgroundRequest['type'], number>> = {
+  // Status poll must fail fast — a 120s hang left the panel on "Connecting…"
+  // with no error while the service worker was dead / not answering.
+  GET_SESSION_STATE: 5_000,
   STORYLINE_EXPORT: 300_000,
   STORYLINE_UPLOAD: 600_000,
 };

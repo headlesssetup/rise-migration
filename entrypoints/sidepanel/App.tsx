@@ -102,6 +102,7 @@ function fmtRemaining(ms: number): string {
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('export');
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [countAttempt, setCountAttempt] = useState(0);
@@ -195,11 +196,29 @@ export function App() {
   }, [importStatus]);
 
   // Poll session state (identity + token + Rise tab presence + account name).
+  // Failures used to be silent — a dead service worker left "Connecting…" forever.
   useEffect(() => {
     let alive = true;
+    let inFlight = false;
     const tick = async () => {
-      const resp = await rpc({ type: 'GET_SESSION_STATE' });
-      if (alive && resp.type === 'SESSION_STATE') setSession(resp.state);
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const resp = await rpc({ type: 'GET_SESSION_STATE' });
+        if (!alive) return;
+        if (resp.type === 'SESSION_STATE') {
+          setSession(resp.state);
+          setSessionError(null);
+        } else if (resp.type === 'ERROR') {
+          setSessionError(resp.error);
+        } else {
+          setSessionError(`Unexpected reply: ${resp.type}`);
+        }
+      } catch (e) {
+        if (alive) setSessionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        inFlight = false;
+      }
     };
     void tick();
     const id = setInterval(tick, 3000);
@@ -715,6 +734,7 @@ export function App() {
         <h2>Setup</h2>
         <SessionView
           session={session}
+          sessionError={sessionError}
           totalCount={totalCount}
           onRefreshCount={refreshCount}
           refreshDisabled={busy}

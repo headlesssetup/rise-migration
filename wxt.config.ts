@@ -13,14 +13,16 @@ export default defineConfig({
     // cookie (it IS the access token) — no need to observe a request or have the
     // operator open a course to grab the token.
     permissions: ['sidePanel', 'storage', 'webRequest', 'scripting', 'cookies'],
-    // Covers both Rise planes (rise.articulate.com / rise.eu.articulate.com),
-    // the auth host (id[.eu].articulate.com), and any other Articulate subdomain
-    // — needed for in-tab fetch injection, token capture, and refresh.
+    // US plane: rise|api|id|….articulate.com. EU plane hosts are TWO labels deep
+    // (rise.eu.articulate.com) — `*.articulate.com` does NOT match those, so the
+    // EU pattern must be listed separately or webRequest/cookies/scripting miss
+    // the whole plane (and webRequest.addListener can refuse to register).
     // articulateusercontent.{com,eu} are separate apex domains that serve
     // uploaded media (public-read by key) — Phase 2 downloads asset bytes from
     // them (US = .com, EU = .eu). Both are needed for plane-aware export.
     host_permissions: [
       'https://*.articulate.com/*',
+      'https://*.eu.articulate.com/*',
       'https://articulateusercontent.com/*',
       'https://articulateusercontent.eu/*',
       // S3 upload buckets (presigned PUT). Listing them here exempts the side
