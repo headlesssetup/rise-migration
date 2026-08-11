@@ -722,6 +722,14 @@ export function App() {
         >
           Import (write)
         </button>
+        <button
+          onClick={() =>
+            void browser.tabs.create({ url: browser.runtime.getURL('/storyboard.html') })
+          }
+          title="INTEA scenārija .docx → rediģējams Rise kurss (atver pārskata cilni; parsēšanai nav vajadzīgs ne konts, ne tokens)"
+        >
+          Storyboard ↗
+        </button>
       </div>
       {importRunning && (
         <p className="hint">

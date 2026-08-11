@@ -1,6 +1,19 @@
 # Project Status
 
-_Last updated: 2026-08-04 (v0.6.7 — the fix pass from the first live cross-plane run + the idea-2 stack rework). Keep this current at each phase boundary._
+_Last updated: 2026-08-10 (Storyboard → Rise converter built; v0.6.7/0.6.8 migration status below unchanged). Keep this current at each phase boundary._
+
+## Storyboard → Rise converter (2026-08-10) — BUILT, pilot pending
+
+New capability, plan + status in `docs/rise-storyboard-plan.md`: an INTEA SD
+`.docx` storyboard becomes an editable Rise course. `core/storyboard/` (pure:
+docx → conventions engine → PlannedCourse → donor-shaped blocks → **synthetic
+source archive**) + a full-page review tab (`entrypoints/storyboard/`, opened
+from the panel's **Storyboard ↗** button; the review is the only gate — unparsed
+rows need explicit acknowledgement). The archive feeds the EXISTING import
+verbatim (verified: `buildPlan` accepts it; no media/bank/storyline/stack steps).
+Real VAS SD: 44/45 rows → 73 blocks / 7 lessons; production report (filming
+scripts) + plan artifact land in `_import/`. Pilot import (phase 5) NOT run yet
+— empty-video donor + impact/b-as-Note need an editor eyeball.
 
 ## Fix pass v0.6.7 (2026-08-04) — BUILT, needs live verification
 
