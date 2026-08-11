@@ -255,6 +255,21 @@ function parseTextCell(paras: SdPara[], sd: SdDoc): CellParse {
   };
 }
 
+// Gate buttons → Rise's continue divider; attachment-ish buttons (a PDF/file
+// the SD only names) → flagged placeholder. Everything else stays navigation.
+const CONTINUE_BUTTON_RE = /^(sākt|tālāk|turpināt|continue)[!.]?$/i;
+const ATTACHMENT_BUTTON_RE = /instrukcij|lejupielā|\bpdf\b|pielikum/i;
+
+/** Bracket paragraph that is a gate/navigation button, never content. */
+function isGateBracketPara(p: SdPara): boolean {
+  const label = paraText(p).trim().replace(/^\[|\]$/g, '').trim();
+  return (
+    CONTINUE_BUTTON_RE.test(label) ||
+    ATTACHMENT_BUTTON_RE.test(label) ||
+    /^nākamā/i.test(label)
+  );
+}
+
 /** Split a list paragraph into item title + body: the leading BOLD runs are
  *  the title (`**Vācija** – konkurētspēja…`), else the text before the first
  *  ` – `/` — `/` - ` separator; no separator → title-only. */
@@ -296,18 +311,10 @@ function parseItemsCell(
   const { paras: ps, notes } = prepare(paras, { keepBrackets: true });
   if (ps.length === 0) return { reason: 'tukša ekrāna teksta šūna', notes };
 
-  const isGateBracket = (p: SdPara) => {
-    const label = paraText(p).trim().replace(/^\[|\]$/g, '').trim();
-    return (
-      CONTINUE_BUTTON_RE.test(label) ||
-      ATTACHMENT_BUTTON_RE.test(label) ||
-      /^nākamā/i.test(label)
-    );
-  };
   const hasBoldBrackets = ps.some((p) => isBracketOnly(p) && isBoldPara(p));
   const isItemBracket = (p: SdPara) =>
     isBracketOnly(p) &&
-    !isGateBracket(p) &&
+    !isGateBracketPara(p) &&
     (hasBoldBrackets ? isBoldPara(p) : paraText(p).trim().length > 2);
   const bracketMode = ps.some(isItemBracket);
 
@@ -669,10 +676,6 @@ function computeSlideNumbers(rows: SdCell[][]): (number | null)[] {
 
 const EMPTY_AUDIO_RE = /^[\s\-–—]*$/;
 
-// Gate buttons → Rise's continue divider; attachment-ish buttons (a PDF/file
-// the SD only names) → flagged placeholder. Everything else stays navigation.
-const CONTINUE_BUTTON_RE = /^(sākt|tālāk|turpināt|continue)[!.]?$/i;
-const ATTACHMENT_BUTTON_RE = /instrukcij|lejupielā|\bpdf\b|pielikum/i;
 
 /** Bracket-only, non-hyperlink button paragraphs of a cell, in order. */
 function gateButtons(paras: SdPara[]): { kind: 'continue' | 'attachment'; label: string }[] {

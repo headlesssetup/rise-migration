@@ -34,6 +34,8 @@ export interface KcOption {
   text: string;
   /** Green (`00B050`) in the SD = correct — official convention. */
   correct: boolean;
+  /** Per-answer feedback (HTML) — scenario-style choices carry their own. */
+  feedback?: string;
 }
 
 export interface KcQuestion {
