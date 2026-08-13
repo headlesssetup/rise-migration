@@ -1,10 +1,12 @@
-// Storyboard → Rise converter tab (docs/rise-storyboard-plan.md phase 3).
-//
-// Full-page REVIEW is the only gate to import: pick the SD .docx → parse
-// locally (no auth, no network) → review every planned block beside its source
-// cell → approve → the synthetic archive course is written into the operator's
-// archive folder, where the normal Import flow picks it up. Unparsed rows are
-// surfaced loudly and must be explicitly acknowledged before approval.
+// Storyboard ⇄ Rise tab — two modes:
+//   SD → Rise (docs/rise-storyboard-plan.md phase 3): full-page REVIEW is the
+//   only gate to import — pick the SD .docx → parse locally (no auth, no
+//   network) → review every planned block beside its source cell → approve →
+//   the synthetic archive course lands in the archive folder for the normal
+//   Import flow. Unparsed rows must be explicitly acknowledged.
+//   Rise → docx (docs/rise-storyboard-format.md): render an ARCHIVED course as
+//   an SBDOC storyboard docx for client review / out-of-Rise editing. Pure
+//   read of the archive; the .docx downloads, nothing else is written.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileSystemStorage } from '@/core/storage/fs';
@@ -12,15 +14,22 @@ import {
   buildArchiveCourse,
   parseSdDocx,
   parseStoryboard,
+  renderStoryboardDocx,
   type BlockIntent,
   type PlannedBlock,
   type PlannedCourse,
+  type SbCourse,
 } from '@/core/storyboard';
+import type { GetCourseDocument } from '@/shared/types/rise';
 import {
   loadDirHandle,
   saveDirHandle,
   verifyPermission,
 } from '../sidepanel/folder-store';
+import {
+  parseManifestCourses,
+  type ManifestCourseEntry,
+} from '../sidepanel/archive-merge';
 import { writeBuiltCourse, type WrittenFiles } from './write';
 
 type DirPicker = (opts?: {
@@ -190,7 +199,7 @@ function LessonTable({ blocks }: { blocks: PlannedBlock[] }) {
   );
 }
 
-export function App() {
+function ImportView() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [planned, setPlanned] = useState<PlannedCourse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -294,8 +303,7 @@ export function App() {
     (planned.unparsed.length === 0 || ackUnparsed);
 
   return (
-    <div className="app">
-      <h1>Storyboard → Rise</h1>
+    <>
       <p className="hint">
         INTEA scenārija dokuments (.docx) → rediģējams Rise kurss. Parsēšana notiek lokāli;
         pēc apstiprināšanas kurss nonāk arhīva mapē un to importē parastā Import plūsma
@@ -432,6 +440,210 @@ export function App() {
           </section>
         </>
       )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------- Rise → docx ---
+
+function sanitizeFileName(title: string): string {
+  const clean = title.replace(/[\\/:*?"<>|]/g, '·').replace(/\s+/g, ' ').trim();
+  return clean === '' ? 'kurss' : clean.slice(0, 120);
+}
+
+function downloadDocx(name: string, bytes: Uint8Array): void {
+  const blob = new Blob([bytes as BlobPart], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function ExportDocxView() {
+  const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null);
+  const [folderNeedsGrant, setFolderNeedsGrant] = useState(false);
+  const [courses, setCourses] = useState<ManifestCourseEntry[] | null>(null);
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rendered, setRendered] = useState<{ model: SbCourse; fileName: string } | null>(null);
+
+  // Same shared archive-folder handle the panel and the import mode use.
+  useEffect(() => {
+    void (async () => {
+      const handle = await loadDirHandle();
+      if (!handle) return;
+      setFolder(handle);
+      setFolderNeedsGrant(!(await verifyPermission(handle, false)));
+    })();
+  }, []);
+
+  // Course list: manifest first (has titles), saved course files as fallback.
+  useEffect(() => {
+    if (!folder || folderNeedsGrant) return;
+    void (async () => {
+      try {
+        const storage = new FileSystemStorage(folder);
+        const fromManifest = parseManifestCourses(await storage.readManifest());
+        if (fromManifest.length > 0) {
+          setCourses(fromManifest);
+          return;
+        }
+        setCourses((await storage.listSaved()).map((id) => ({ id })));
+      } catch (e) {
+        setError(errText(e));
+        setCourses([]);
+      }
+    })();
+  }, [folder, folderNeedsGrant]);
+
+  const connectFolder = useCallback(async () => {
+    try {
+      if (folder && folderNeedsGrant && (await verifyPermission(folder, false))) {
+        setFolderNeedsGrant(false);
+        return;
+      }
+      const picker = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker;
+      if (!picker) {
+        setError('File System Access API nav pieejams šajā pārlūkā.');
+        return;
+      }
+      const handle = await picker({ mode: 'read' });
+      await saveDirHandle(handle);
+      setFolder(handle);
+      setFolderNeedsGrant(false);
+    } catch {
+      /* user cancelled */
+    }
+  }, [folder, folderNeedsGrant]);
+
+  const generate = useCallback(async () => {
+    if (!folder || !selected || busy) return;
+    setBusy(true);
+    setError(null);
+    setRendered(null);
+    try {
+      const storage = new FileSystemStorage(folder);
+      const raw = await storage.readCourse(selected);
+      if (!raw) throw new Error(`courses/${selected}.json nav atrasts arhīvā.`);
+      const doc = JSON.parse(raw) as GetCourseDocument;
+      const { model, bytes } = renderStoryboardDocx(doc, {
+        generatedAt: new Date().toISOString(),
+        toolVersion: browser.runtime.getManifest().version,
+      });
+      const fileName = `${sanitizeFileName(model.title)} — storyboard.docx`;
+      downloadDocx(fileName, bytes);
+      setRendered({ model, fileName });
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [folder, selected, busy]);
+
+  const stats = useMemo(() => {
+    if (!rendered) return null;
+    const rows = rendered.model.lessons.flatMap((l) => l.rows);
+    return {
+      edit: rows.filter((r) => r.fidelity === 'edit').length,
+      ro: rows.filter((r) => r.fidelity === 'ro').length,
+    };
+  }, [rendered]);
+
+  return (
+    <>
+      <p className="hint">
+        Arhivēts Rise kurss → SBDOC storyboard (.docx) klienta pārskatīšanai un rediģēšanai
+        ārpus Rise (formāts: docs/rise-storyboard-format.md). Tikai lasa arhīvu — dokuments
+        lejupielādējas, arhīvā nekas netiek rakstīts. Kurss vispirms jāeksportē ar parasto
+        Export plūsmu.
+      </p>
+
+      <section className="card">
+        <h2>1 · Arhīva mape</h2>
+        {(!folder || folderNeedsGrant) && (
+          <>
+            {folder && folderNeedsGrant && (
+              <p className="hint">Mape “{folder.name}” atcerēta, bet vajag atļauju.</p>
+            )}
+            <button onClick={connectFolder}>
+              {folder ? `Atjaunot piekļuvi: ${folder.name}` : 'Pievienot arhīva mapi…'}
+            </button>
+          </>
+        )}
+        {folder && !folderNeedsGrant && <p className="hint">Arhīva mape: {folder.name}</p>}
+      </section>
+
+      {folder && !folderNeedsGrant && (
+        <section className="card">
+          <h2>2 · Kurss</h2>
+          {courses === null && <p className="hint">Lasa arhīvu…</p>}
+          {courses !== null && courses.length === 0 && (
+            <p className="hint">Arhīvā nav neviena kursa — vispirms eksportē (side panel → Export).</p>
+          )}
+          {courses !== null && courses.length > 0 && (
+            <>
+              <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+                <option value="">— izvēlies kursu —</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {typeof c.title === 'string' && c.title !== '' ? c.title : c.id}
+                  </option>
+                ))}
+              </select>{' '}
+              <button className="approve" onClick={generate} disabled={!selected || busy}>
+                {busy ? 'Ģenerē…' : 'Ģenerēt .docx'}
+              </button>
+            </>
+          )}
+          {error && <p className="error">⚠ {error}</p>}
+        </section>
+      )}
+
+      {rendered && stats && (
+        <section className="card">
+          <h2>3 · Rezultāts</h2>
+          <p>
+            ✔ Lejupielādēts: <b>{rendered.fileName}</b>
+          </p>
+          <p className="hint">
+            {rendered.model.lessons.length} nodarbības · {rendered.model.blockCount} bloki ·{' '}
+            {stats.edit} rediģējami · {stats.ro} tikai skatīšanai
+            {rendered.model.locale ? ` · valoda: ${rendered.model.locale}` : ''}
+          </p>
+          {rendered.model.flags.length > 0 && (
+            <ul className="notes">
+              {rendered.model.flags.map((f, i) => (
+                <li key={i} className="error">
+                  ⚠ {f}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </>
+  );
+}
+
+export function App() {
+  const [mode, setMode] = useState<'import' | 'export'>('import');
+  return (
+    <div className="app">
+      <h1>Storyboard ⇄ Rise</h1>
+      <nav className="mode-nav">
+        <button className={mode === 'import' ? 'mode-active' : ''} onClick={() => setMode('import')}>
+          SD → Rise (imports)
+        </button>
+        <button className={mode === 'export' ? 'mode-active' : ''} onClick={() => setMode('export')}>
+          Rise → docx (storyboard)
+        </button>
+      </nav>
+      {mode === 'import' ? <ImportView /> : <ExportDocxView />}
     </div>
   );
 }

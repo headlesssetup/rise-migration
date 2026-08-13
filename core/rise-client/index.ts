@@ -24,6 +24,7 @@ export interface SearchParams {
   pageSize?: number;
   sort?: string;
   types?: string[];
+  term?: string;
 }
 
 /**
@@ -37,6 +38,7 @@ export function buildSearchRequest(p: SearchParams): RequestSpec {
   qs.set('page', String(p.page));
   qs.set('pageSize', String(p.pageSize ?? 16));
   qs.set('sort', p.sort ?? 'RECENTLY_UPDATED');
+  if (p.term) qs.set('term', p.term);
   for (const t of p.types ?? []) qs.append('type', t);
   return {
     url: `/manage/api/content/search?${qs.toString()}`,

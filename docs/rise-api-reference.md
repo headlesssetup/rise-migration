@@ -154,6 +154,80 @@ body `{type, payload}`, bearer auth.
 
 ---
 
+## 4a. EDITING envelopes (capture-confirmed 2026-08-12)
+
+Source: `capture-editing-20260812.mitm` (operator session: create / edit /
+delete / move / duplicate blocks + lessons, undo/redo, quiz lesson, image
+upload). Extracted flows: `docs/captures/2026-08-12-editing-envelopes.jsonl`.
+These are the mutation envelopes the future **update-existing-course** path
+rides. All are plain ducks POSTs (§4 conventions); every one returned 200.
+
+- **Delete blocks** — `rise/lessons/DELETE_BLOCKS`
+  `{blockIds:["…"], courseId, lessonId}` →
+  `{success:true, blockIds, lessonId, updatedAt, contentUpdatedAt}`.
+  `blockIds` is an array (editor always sends one). Deleting a media-bearing
+  block triggers **no asset-side call** — uploads are left orphaned server-side.
+
+- **Reorder blocks (within a lesson)** — `rise/lessons/MOVE_BLOCKS`
+  `{lessonId, courseId, moves:[{blockId, previousBlockId, nextBlockId}]}` →
+  `{success:true, moves, lessonId, updatedAt, contentUpdatedAt}`.
+  **Linked-list anchors, not indexes** (first position: `previousBlockId:null`).
+  No cross-lesson move exists in the UI; none captured.
+
+- **Batch mutate (the editor's UNDO/REDO transport)** —
+  `rise/lessons/BULK_UPDATE_BLOCKS`
+  `{courseId, lessonId, updates:[…], creates:[{previousBlockId, blocks:[<full block>]}], deletes:[blockId…], moves:[…]}`
+  → `{success:true, lessonId, updatedAt, contentUpdatedAt, creates:[{blockMetadata:[{id, globalBlockId, createdAt, updatedAt}]}]}`.
+  Undo of a delete re-creates the **same client block id** (the server mints a
+  fresh `globalBlockId`); redo rides `deletes`. One envelope carries any mix —
+  the natural transport for an update-plan's per-lesson changeset. ⚠ `updates[]`
+  was empty in every sample — its element shape is UNCAPTURED (text edits ride
+  `UPDATE_BLOCK_DEBOUNCE` instead); capture before using.
+
+- **Edit a block** — `rise/lessons/UPDATE_BLOCK_DEBOUNCE`
+  `{id, courseId, lessonId, item:<the FULL block JSON>}` — whole-block
+  replacement; item add/remove/reorder inside a block are all just this
+  envelope with the new `items[]`. Edited rich text comes back wrapped in
+  `<div data-editor-id="…">` (known catalog noise). Response:
+  `{success:true, blockId, lessonId, lastUpdatedBy, updatedAt, contentUpdatedAt}`.
+
+- **Duplicate a block** — no dedicated envelope: plain `CREATE_BLOCKS` with the
+  copied payload under fresh client ids, anchored by `previousBlockId`
+  (confirms the insert-anywhere semantics of `CREATE_BLOCKS`).
+
+- **Insert a block template** — `rise/lessons/INSERT_BLOCK_TEMPLATE`
+  `{blockTemplateId, lessonId, courseId, itemIndex, updatedAt}` → the LESSON
+  row (not the created blocks; a follow-up GET_COURSE shows them). Index-based,
+  unlike MOVE/CREATE. (Previously marked out of scope in §11 — now captured.)
+
+- **Lesson ops** —
+  `rise/courses/UPDATE_LESSON_ORDER` `{course:{from, to, lessonId, courseId}}`
+  → authoritative `course.lessons` id array (one envelope per drag);
+  `rise/lessons/DUPLICATE_LESSON` `{lessonId, position, courseId}` → server-side
+  deep copy (new lesson id, `duplicatedFromId`, block ids re-minted server-side)
+  + `course.lessons`;
+  `rise/lessons/DELETE_LESSON` `{id, position, courseId}` → `course.lessons`
+  (response shape now captured);
+  `rise/lessons/UPDATE_LESSON_DEBOUNCE` `{id, description, updatedAt, courseId}`
+  — autosave variant for lesson fields (captured on a quiz lesson description).
+
+- **Locks — write transport now proven, granularity = LESSON.**
+  `rise/locks/PUT_LOCK` `{id:<lessonId>, courseId}` →
+  `{author, session, updatedAt, courseId, id, ttl:86400000}` (24 h TTL);
+  `rise/locks/DEL_LOCK` `{id:<lessonId>, courseId}` echoes the payload. The
+  editor PUTs when a lesson opens for editing and DELs on leave. **Operator
+  decision 2026-08-12: multi-editor contention is OUT OF SCOPE** (single-author
+  assumption) — a scripted writer should still mirror PUT/DEL around each
+  lesson's write burst for editor fidelity, but no contention handling is built.
+
+- **Concurrency signals.** Every mutation response carries `updatedAt` +
+  `contentUpdatedAt`; the requests that include `updatedAt`
+  (`INSERT_BLOCK_TEMPLATE`, `UPDATE_LESSON_DEBOUNCE`) echo the lesson's last
+  known value. Whether the server ENFORCES it as a precondition is unverified
+  (no stale write was attempted). No etag/version headers. ⇒ Until proven
+  otherwise, the update path must rely on its own fingerprint check (fresh
+  GET_COURSE diff immediately before applying), not on server-side rejection.
+
 ## 4b. Folders & content placement (REST, capture-confirmed 2026-06-23)
 
 Folder ids are **UUIDs**. Two roots exist per account (`folderType: shared` / `private`,

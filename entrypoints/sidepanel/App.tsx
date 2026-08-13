@@ -39,10 +39,12 @@ import {
 import { AssetsView } from './components/AssetsView';
 import { BanksView } from './components/BanksView';
 import { CensusView } from './components/CensusView';
+import { ExportDocxPanel } from './components/ExportDocxPanel';
 import { ImportView } from './components/ImportView';
 import { LogLines } from './components/LogLines';
 import { NoveltyView } from './components/NoveltyView';
 import { SessionView } from './components/SessionView';
+import { TaskHome, type View } from './components/TaskHome';
 import { appendLogLines } from './log-lines';
 import {
   clearDirHandle,
@@ -76,7 +78,6 @@ type DirPicker = (opts?: {
 }) => Promise<FileSystemDirectoryHandle>;
 
 type Phase = 'idle' | 'listing' | 'listed' | 'exporting' | 'done';
-type Mode = 'export' | 'import';
 
 const PAGE = 16;
 
@@ -103,7 +104,7 @@ function fmtRemaining(ms: number): string {
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>('export');
+  const [view, setView] = useState<View>('home');
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [countAttempt, setCountAttempt] = useState(0);
   const [storage, setStorage] = useState<Storage | null>(null);
@@ -111,6 +112,7 @@ export function App() {
   const [pendingHandle, setPendingHandle] =
     useState<FileSystemDirectoryHandle | null>(null);
   const [listLimit, setListLimit] = useState<number>(PAGE);
+  const [searchTerm, setSearchTerm] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [courses, setCourses] = useState<SearchResultItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -369,7 +371,13 @@ export function App() {
         logBreak('List courses');
         setPhase('listing');
         setCourses([]);
-        const result = await listAllCourses(onEvent, listLimit);
+        const result = await listAllCourses(
+          onEvent,
+          listLimit,
+          undefined,
+          undefined,
+          searchTerm.trim() || undefined,
+        );
         setCourses(result);
         setSelected(new Set(result.map((c) => c.id)));
         setPhase('listed');
@@ -426,7 +434,7 @@ export function App() {
           );
         }
       }),
-    [guarded, onEvent, addLog, logBreak, listLimit, storage],
+    [guarded, onEvent, addLog, logBreak, listLimit, searchTerm, storage],
   );
 
   const toggle = useCallback((id: string) => {
@@ -701,74 +709,98 @@ export function App() {
       'capturing the session token… (reload your Rise tab if it doesn’t appear)',
   ].filter(Boolean) as string[];
 
+  const VIEW_TITLE: Record<View, string> = {
+    home: 'Rise tools',
+    archive: 'Archive account',
+    import: 'Import to account',
+    'export-docx': 'Export to docx',
+  };
+
   return (
     <div className="app">
-      <h1>Rise Migration — {mode === 'export' ? 'Exporter' : 'Importer'}</h1>
-
-      <div className="row" role="tablist" style={{ marginBottom: 8 }}>
-        <button
-          onClick={() => setMode('export')}
-          disabled={busy}
-          aria-pressed={mode === 'export'}
-          style={mode === 'export' ? { fontWeight: 700 } : undefined}
-        >
-          Export (read-only)
-        </button>
-        <button
-          onClick={() => setMode('import')}
-          disabled={busy}
-          aria-pressed={mode === 'import'}
-          style={mode === 'import' ? { fontWeight: 700, color: '#b00' } : undefined}
-        >
-          Import (write)
-        </button>
-        <button
-          onClick={() =>
-            void browser.tabs.create({ url: browser.runtime.getURL('/storyboard.html') })
-          }
-          title="INTEA scenārija .docx → rediģējams Rise kurss (atver pārskata cilni; parsēšanai nav vajadzīgs ne konts, ne tokens)"
-        >
-          Storyboard ↗
-        </button>
-      </div>
-      {importRunning && (
-        <p className="hint">
-          An import is running — press <b>Stop</b> in the import panel before
-          switching modes (leaving now would detach the run).
-        </p>
+      {view === 'home' ? (
+        <>
+          <h1>Rise tools</h1>
+          {sessionError && (
+            <p className="hint" style={{ color: '#c00' }}>⚠ {sessionError}</p>
+          )}
+          {!storage && !pendingHandle && (
+            <section className="card">
+              <button onClick={pickFolder}>Pick archive folder…</button>
+            </section>
+          )}
+          {pendingHandle && !storage && (
+            <section className="card">
+              <p className="hint">
+                Folder remembered but needs access —{' '}
+                <button onClick={reconnectFolder}>Reconnect: {pendingHandle.name}</button>
+              </p>
+            </section>
+          )}
+          <TaskHome
+            session={session}
+            storage={storage}
+            folderName={folderName}
+            busy={busy}
+            onNavigate={setView}
+          />
+        </>
+      ) : (
+        <>
+          <div className="view-header">
+            <button
+              className="back-btn"
+              onClick={() => setView('home')}
+              disabled={busy}
+            >
+              ←
+            </button>
+            <h1>{VIEW_TITLE[view]}</h1>
+          </div>
+          {importRunning && view !== 'import' && (
+            <p className="hint" style={{ color: '#c00' }}>
+              An import is running — go back to <b>Import to account</b> to
+              monitor or stop it.
+            </p>
+          )}
+        </>
       )}
 
-      <section className="card">
-        <h2>Setup</h2>
-        <SessionView
-          session={session}
-          sessionError={sessionError}
-          totalCount={totalCount}
-          onRefreshCount={refreshCount}
-          refreshDisabled={busy}
-        />
-        <div className="row" style={{ marginTop: 6 }}>
-          <button onClick={pickFolder} disabled={busy}>
-            {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
-          </button>
-          {folderName && (
-            <button onClick={forgetFolder} disabled={busy}>
-              Forget
+      {/* Setup card — shown in archive/import views */}
+      {(view === 'archive' || view === 'import') && (
+        <section className="card">
+          <h2>Setup</h2>
+          <SessionView
+            session={session}
+            sessionError={sessionError}
+            totalCount={totalCount}
+            onRefreshCount={refreshCount}
+            refreshDisabled={busy}
+          />
+          <div className="row" style={{ marginTop: 6 }}>
+            <button onClick={pickFolder} disabled={busy}>
+              {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
             </button>
+            {folderName && (
+              <button onClick={forgetFolder} disabled={busy}>
+                Forget
+              </button>
+            )}
+          </div>
+          {pendingHandle && (
+            <p className="hint">
+              Folder remembered but needs access —{' '}
+              <button onClick={reconnectFolder}>Reconnect</button>
+            </p>
           )}
-        </div>
-        {pendingHandle && (
-          <p className="hint">
-            Folder remembered but needs access —{' '}
-            <button onClick={reconnectFolder}>Reconnect</button>
-          </p>
-        )}
-        {!ready && setupNeeds.length > 0 && (
-          <p className="hint">To continue: {setupNeeds.join(' · ')}.</p>
-        )}
-      </section>
+          {!ready && setupNeeds.length > 0 && (
+            <p className="hint">To continue: {setupNeeds.join(' · ')}.</p>
+          )}
+        </section>
+      )}
 
-      {ready && mode === 'import' && (
+      {/* Import view */}
+      {view === 'import' && ready && (
         <ImportView
           storage={storage}
           session={session}
@@ -780,9 +812,9 @@ export function App() {
         />
       )}
 
-      {ready && mode === 'export' && (
+      {/* Archive (export) view — steps A through D */}
+      {view === 'archive' && ready && (
       <>
-      {/* A · Account Data */}
       <section className="card">
         <h2>A · Account Data</h2>
         <button
@@ -797,7 +829,6 @@ export function App() {
         </p>
       </section>
 
-      {/* B · Question banks */}
       <section className="card">
         <h2>B · Question banks</h2>
         <button
@@ -813,9 +844,16 @@ export function App() {
         {banks && <BanksView banks={banks} />}
       </section>
 
-      {/* C · Courses */}
       <section className="card">
         <h2>C · Courses</h2>
+        <input
+          type="text"
+          placeholder="Search by name…"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          disabled={busy}
+          style={{ width: '100%', boxSizing: 'border-box', marginBottom: 6 }}
+        />
         <div className="row">
           <label>
             List{' '}
@@ -888,7 +926,6 @@ export function App() {
         )}
       </section>
 
-      {/* C2 · Assets */}
       <section className="card">
         <h2>C2 · Assets</h2>
         <button onClick={runAssets} disabled={busy || !storage}>
@@ -903,7 +940,6 @@ export function App() {
         {assets && <AssetsView summary={assets} />}
       </section>
 
-      {/* D · Embeds — Storyline packages */}
       <section className="card">
         <h2>D · Embeds (Storyline)</h2>
         <button onClick={runStoryline} disabled={busy || !storage || !session?.risePresent}>
@@ -930,7 +966,13 @@ export function App() {
       </>
       )}
 
-      {progress && (
+      {/* Export to docx view */}
+      {view === 'export-docx' && storage && (
+        <ExportDocxPanel storage={storage} addLog={addLog} />
+      )}
+
+      {/* Archive-view reports */}
+      {view === 'archive' && progress && (
         <section className="card">
           <h2>Progress</h2>
           <p>
@@ -939,14 +981,14 @@ export function App() {
         </section>
       )}
 
-      {novelty && (
+      {view === 'archive' && novelty && (
         <section className="card">
           <h2>Novelty</h2>
           <NoveltyView novelty={novelty} />
         </section>
       )}
 
-      {census && (
+      {view === 'archive' && census && (
         <details className="card">
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
             Census — {census.courseCount} course(s) · {census.variants.length}{' '}
@@ -956,6 +998,7 @@ export function App() {
         </details>
       )}
 
+      {/* Log — always visible */}
       <section className="card log-card">
         <div className="log-header">
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>

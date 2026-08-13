@@ -43,6 +43,7 @@ export async function listAllCourses(
   limit = Infinity,
   pacing: PacingConfig = DEFAULT_PACING,
   pageSize = 16,
+  term?: string,
 ): Promise<SearchResultItem[]> {
   const all: SearchResultItem[] = [];
   let total = Infinity;
@@ -53,7 +54,7 @@ export async function listAllCourses(
     if (page > 0) await pacedDelay(pacing); // pace between pages
     onEvent({ kind: 'log', message: `Fetching course list — page ${page}…` });
 
-    const resp = await rpc({ type: 'SEARCH_COURSES', page, pageSize });
+    const resp = await rpc({ type: 'SEARCH_COURSES', page, pageSize, term });
     if (resp.type !== 'SEARCH_RESULT') {
       exhausted = false;
       onEvent({

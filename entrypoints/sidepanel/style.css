@@ -51,6 +51,151 @@ h3 {
   margin: 10px 0 4px;
 }
 
+/* --- view header (back + title) ----------------------------------------- */
+
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.back-btn {
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+/* --- task-oriented home ------------------------------------------------- */
+
+.section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+  margin: 12px 0 4px;
+  font-weight: 600;
+}
+
+.task-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.task-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.task-card:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.task-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.task-card-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.task-card-sub {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.task-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.task-badge-ready {
+  background: rgba(30, 122, 52, 0.12);
+  color: #1e7a34;
+}
+
+.task-badge-pending {
+  background: rgba(154, 91, 0, 0.12);
+  color: #9a5b00;
+}
+
+.task-badge-count {
+  background: rgba(25, 100, 200, 0.12);
+  color: #1964c8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .task-badge-ready {
+    background: rgba(76, 175, 109, 0.18);
+    color: #6fcf8a;
+  }
+  .task-badge-pending {
+    background: rgba(224, 163, 58, 0.18);
+    color: #e0a33a;
+  }
+  .task-badge-count {
+    background: rgba(100, 160, 240, 0.18);
+    color: #7db8f0;
+  }
+}
+
+.context-bar {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.context-label {
+  opacity: 0.5;
+  min-width: 56px;
+}
+
+.context-value {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+select,
+input[type="text"] {
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
 .card {
   border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   border-radius: 8px;

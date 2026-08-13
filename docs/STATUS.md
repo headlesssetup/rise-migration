@@ -1,6 +1,37 @@
 # Project Status
 
-_Last updated: 2026-08-10 (Storyboard → Rise converter built; v0.6.7/0.6.8 migration status below unchanged). Keep this current at each phase boundary._
+_Last updated: 2026-08-12 (Rise → docx storyboard export built; editing-protocol capture plan written). Keep this current at each phase boundary._
+
+## Rise → docx storyboard export (SBDOC, 2026-08-12) — BUILT
+
+First slice of the "edit Rise via an alternate UI" direction (major-version
+plan discussed 2026-08-12): an ARCHIVED course renders as an **SBDOC** `.docx`
+— SD-familiar per-lesson tables, but strict: every row carries a stable
+identity token `⟦B:<blockId> R:<rev> edit|ro⟧` (blockKey addressing, FNV rev
+hint) and a fidelity class (`edit` = the families the storyboard mapper can
+rebuild; everything else `ro`, shaded, best-effort text extraction — honest,
+never silent). Format contract: `docs/rise-storyboard-format.md`. Code:
+`core/storyboard/render/` (pure; hand-built OOXML zipped with fflate, zero new
+deps, deterministic bytes) + a second mode in the storyboard tab
+("Rise → docx"): pick an archived course → the .docx downloads; read-only on
+the archive. Stacks are materialized in the DEFAULT locale + flagged. Round-trip
+guarantee: every SBDOC parses through our own `parseSdDocx` (tested); 24 new
+tests (721 total). Sample dump: `SBDOC_OUT=… pnpm vitest run core/storyboard/render`.
+
+**Editing protocol CAPTURED (2026-08-12).** Operator ran the
+`docs/rise-capture-plan-editing.md` script (`capture-editing-20260812.mitm`);
+everything extracted into `docs/rise-api-reference.md` §4a: `DELETE_BLOCKS`,
+`MOVE_BLOCKS` (linked-list anchors), `BULK_UPDATE_BLOCKS` (the editor's
+undo/redo — one envelope carries creates/deletes/moves per lesson; `updates[]`
+shape still uncaptured), `UPDATE_LESSON_ORDER`, `DUPLICATE_LESSON`,
+`DELETE_LESSON` (response), `UPDATE_LESSON_DEBOUNCE`, `INSERT_BLOCK_TEMPLATE`,
+and the lock WRITE transport (`PUT_LOCK`/`DEL_LOCK`, lesson granularity, 24 h
+TTL). Operator decisions: **multi-editor locking is descoped** (single-author
+assumption; PUT/DEL mirrored for fidelity only), and no `updatedAt`
+precondition is assumed (fresh GET_COURSE fingerprint before apply). The
+update-existing-course path is now protocol-unblocked; **deletion stays
+policy-forbidden until the CLAUDE.md invariant is explicitly revised when that
+path is built.**
 
 ## Storyboard → Rise converter (2026-08-10) — BUILT, pilot pending
 

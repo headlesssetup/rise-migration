@@ -1,5 +1,9 @@
-// Storyboard → Rise converter (docs/rise-storyboard-plan.md).
-// Pure, auth-free: docx bytes → PlannedCourse → synthetic archive course.
+// Storyboard ⇄ Rise (docs/rise-storyboard-plan.md, docs/rise-storyboard-format.md).
+// Pure, auth-free, both directions:
+//   SD docx bytes → PlannedCourse → synthetic archive course   (import)
+//   archived course → SBDOC model → storyboard docx bytes      (export, ./render)
+
+export * from './render';
 
 export { parseSdDocx, DocxError, cellText, paraText } from './docx';
 export type { SdDoc, SdPara, SdRun, SdCell, SdTable } from './docx';

@@ -760,7 +760,7 @@ export default defineBackground(() => {
 
       case 'SEARCH_COURSES': {
         const r = await rawFetch(
-          buildSearchRequest({ page: msg.page, pageSize: msg.pageSize }),
+          buildSearchRequest({ page: msg.page, pageSize: msg.pageSize, term: msg.term }),
           pin,
         );
         if (!r.ok) return { type: 'SEARCH_RESULT', result: r };

@@ -222,3 +222,25 @@ button.approve {
   border-top: 1px solid var(--line);
   padding-top: 8px;
 }
+
+.mode-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.mode-nav button.mode-active {
+  background: #fff;
+  border-color: var(--ink);
+  font-weight: 700;
+}
+
+select {
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  max-width: 100%;
+}

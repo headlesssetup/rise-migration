@@ -56,7 +56,7 @@ type BackgroundRequestBody =
   // Resolve the Rise tab a whole run should be pinned to (C4). Called ONCE at run
   // start; the returned TabPin is then attached to every request of that run.
   | { type: 'PIN_RISE_TAB' }
-  | { type: 'SEARCH_COURSES'; page: number; pageSize?: number }
+  | { type: 'SEARCH_COURSES'; page: number; pageSize?: number; term?: string }
   | { type: 'GET_COURSE'; courseId: string }
   | { type: 'LIST_FOLDERS' }
   | { type: 'LIST_QUESTION_BANKS' }
