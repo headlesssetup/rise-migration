@@ -13,7 +13,7 @@ import { collectAssetKeys } from '@/core/assets/keys';
 import { isLocalizedStack, materializeLocale, resolveStackTitle } from '@/core/l10n';
 import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 import { htmlToParas, htmlToText } from './html';
-import { fnv1a8, type SbCourse, type SbLesson, type SbPara, type SbRow, type SbRun } from './model';
+import { fnv1a8, type SbCourse, type SbImage, type SbLesson, type SbPara, type SbRow, type SbRun } from './model';
 
 export interface RenderModelOptions {
   /** ISO timestamp stamped into the meta table (injectable for tests). */
@@ -328,6 +328,54 @@ function escapeTokens(paras: SbPara[], flags: string[], where: string): void {
   }
 }
 
+// ---------------------------------------------------------- image + prose ---
+
+function extractPrimaryImage(b: Block): SbImage | undefined {
+  const items = arr(b.items);
+  for (const it of items) {
+    const media = it.media as Record<string, unknown> | undefined;
+    if (!media) continue;
+    const img = media.image as Record<string, unknown> | undefined;
+    if (!img) continue;
+    const key = str(img.key);
+    if (!key || key.startsWith('assets/rise/')) continue;
+    const dims = img.dimensions as Record<string, unknown> | undefined;
+    return {
+      key,
+      width: typeof dims?.originalWidth === 'number' ? dims.originalWidth : undefined,
+      height: typeof dims?.originalHeight === 'number' ? dims.originalHeight : undefined,
+    };
+  }
+  // Flashcard: check front/back
+  for (const it of items) {
+    for (const side of ['front', 'back'] as const) {
+      const s = it[side] as Record<string, unknown> | undefined;
+      if (!s) continue;
+      const media = s.media as Record<string, unknown> | undefined;
+      const img = media?.image as Record<string, unknown> | undefined;
+      if (!img) continue;
+      const key = str(img.key);
+      if (!key || key.startsWith('assets/rise/')) continue;
+      const dims = img.dimensions as Record<string, unknown> | undefined;
+      return {
+        key,
+        width: typeof dims?.originalWidth === 'number' ? dims.originalWidth : undefined,
+        height: typeof dims?.originalHeight === 'number' ? dims.originalHeight : undefined,
+      };
+    }
+  }
+  return undefined;
+}
+
+type ProseHint = 'impact' | 'continue' | 'divider';
+
+function proseHintFor(family: string, _variant: string): ProseHint | undefined {
+  if (family === 'impact') return 'impact';
+  if (family === 'continue') return 'continue';
+  if (family === 'divider') return 'divider';
+  return undefined;
+}
+
 // ------------------------------------------------------------------ render ---
 
 function renderBlock(b: Block, no: number, roOnly: boolean, flags: string[]): SbRow {
@@ -362,6 +410,9 @@ function renderBlock(b: Block, no: number, roOnly: boolean, flags: string[]): Sb
   // via content text — never via ids — but content can say anything.
   escapeTokens(content, flags, `block ${blockId}`);
 
+  const image = extractPrimaryImage(b);
+  const prose = proseHintFor(family, variant);
+
   return {
     no,
     blockId,
@@ -372,6 +423,8 @@ function renderBlock(b: Block, no: number, roOnly: boolean, flags: string[]): Sb
     content,
     notes,
     rev: fnv1a8(JSON.stringify(b)),
+    ...(image ? { image } : {}),
+    ...(prose ? { prose } : {}),
   };
 }
 
