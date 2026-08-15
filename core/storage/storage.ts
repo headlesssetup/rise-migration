@@ -103,6 +103,14 @@ export interface Storage {
   /** Read a prior import artifact (resume the job log), or null if absent. */
   readImportArtifact(name: string): Promise<string | null>;
 
+  // --- Creator build artifacts (local conversion only; never import state) ---
+  /** Write a Creator artifact under `_creator/<name>`. */
+  writeCreatorArtifact(name: string, contents: string): Promise<void>;
+  /** Read a Creator artifact, including an interrupted-build lock. */
+  readCreatorArtifact(name: string): Promise<string | null>;
+  /** Remove a Creator artifact. Used to clear build.lock only after success. */
+  removeCreatorArtifact(name: string): Promise<void>;
+
   // --- Phase 4: storyline packages (the export zip-pipeline output) ---
   /** Write a repackaged Review-360 upload zip for one storyline leaf →
    *  `storyline/<courseId>/<leaf>.zip`. */

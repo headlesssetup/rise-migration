@@ -45,6 +45,7 @@ import {
   parseTypefaces,
   moveCourseToFolder,
   findForeignMediaKeys,
+  findLocalAssetRefs,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
@@ -59,6 +60,7 @@ import {
   verifyTypefaceBindings,
 } from '@/core/import';
 import { collectAssetKeys, isOrphanStatus } from '@/core/assets';
+import { archiveErrorSummary, inspectLocalArchive } from '@/core/local-archive';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
@@ -417,6 +419,17 @@ export async function runImport(
   const outcomes: CourseImportOutcome[] = [];
   // Rows for the single run-level CSV (one file for the whole run), built per course.
   const csvCourses: RunCsvCourse[] = [];
+
+  // Archive integrity is the first gate, before target pinning, authentication,
+  // or any other network work. A v1 archive is usable only after its writer has
+  // marked it ready and every declared course/asset checksum verifies. Legacy
+  // archives remain supported by the inspector, with their explicit warning.
+  const archive = await inspectLocalArchive(storage);
+  if (!archive.ready) {
+    const reason = `Archive is not ready: ${archiveErrorSummary(archive) || 'validation failed'}`;
+    onEvent({ kind: 'log', message: `BLOCKED: ${reason}` });
+    return { blocked: reason, outcomes };
+  }
 
   // Safe-import gate: never write into the source account (unless overridden).
   const source = await readSourceIdentity(storage);
@@ -907,7 +920,12 @@ export async function runImport(
           const newBankId = res.idMap[sourceBankId] ?? boundBanks.get(sourceBankId)?.newBankId;
           if (newBankId) targetOwners.add(newBankId);
         }
-        readBackForeign = findForeignMediaKeys(targetDoc, targetOwners);
+        readBackForeign = [
+          ...findForeignMediaKeys(targetDoc, targetOwners),
+          ...findLocalAssetRefs(targetDoc).map(
+            (ref) => `local-asset:${ref.assetPath}@${ref.path}`,
+          ),
+        ];
 
         // Typeface IDENTITY: parity tokenizes ids, so it proves a font is bound
         // but not WHICH — resolve the three binding slots to names on both

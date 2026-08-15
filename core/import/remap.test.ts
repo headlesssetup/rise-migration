@@ -5,6 +5,7 @@ import {
   blankForeignMediaKeys,
   blankUploadedMediaKeys,
   findForeignMediaKeys,
+  findLocalAssetRefs,
   findSurvivingSourceKeys,
   freshClientIds,
   registerClientIds,
@@ -291,6 +292,16 @@ describe('findForeignMediaKeys', () => {
   it('keeps cdn/embeds out of scope', () => {
     const doc = { cover: 'https://cdn.articulate.com/x.jpg', e: 'https://youtu.be/1' };
     expect(findForeignMediaKeys(doc, ['TGT'])).toEqual([]);
+  });
+});
+
+describe('findLocalAssetRefs', () => {
+  it('recognizes typed package-local references and reports their exact paths', () => {
+    expect(
+      findLocalAssetRefs({
+        lesson: { image: { kind: 'local-asset', path: 'assets/hero.png' } },
+      }),
+    ).toEqual([{ path: 'lesson.image', assetPath: 'assets/hero.png' }]);
   });
 });
 

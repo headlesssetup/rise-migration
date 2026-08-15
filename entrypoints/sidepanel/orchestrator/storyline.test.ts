@@ -131,7 +131,7 @@ describe('exportStorylinePackages', () => {
 
     expect(summary).toMatchObject({ courses: 1, packaged: 1, skipped: 0, failed: 0 });
     expect(exportOne).toHaveBeenCalledWith('C1', 'Geo 101', PIN);
-    expect(refresh).toHaveBeenCalledWith(PIN);
+    expect(refresh).toHaveBeenCalledWith(PIN, 'C1');
 
     // the stored package zip is in Review-360 form
     const stored = zips.get(`C1/${LEAF}`)!;

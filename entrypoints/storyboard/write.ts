@@ -1,55 +1,83 @@
-// Storyboard review tab — the APPROVE write path.
-//
-// Writes the synthetic archive course into the operator's archive folder via
-// the same FileSystemStorage the panel uses. The manifest's `courses` list is
-// MERGED (never overwritten) so exported batches and earlier conversions stay
-// visible in the import picker (same rule as the exporter — archive-merge.ts).
-// Conversion artifacts (plan + production script) go under `_import/` — derived
-// artifacts live outside the raw content dirs.
+// Rise Creator package writer. The operator chooses the destination folder and
+// is responsible for choosing an empty one; this module does not scan or block
+// non-empty folders. It does, however, leave a build.lock across all writes so
+// an interrupted build is visible on the next attempt.
 
+import { buildCourseEntry, createManifestV1 } from '@/core/local-archive';
 import type { BuiltCourse } from '@/core/storyboard';
 import type { Storage } from '@/core/storage/storage';
-import {
-  mergeById,
-  parseManifestCourses,
-} from '../sidepanel/archive-merge';
+
+const BUILD_LOCK = 'build.lock';
 
 export interface WrittenFiles {
   courseFile: string;
+  manifestFile: string;
   planFile: string;
   productionFile: string;
+  /** Present when a lock from an earlier interrupted build was replaced. */
+  priorBuildWarning?: string;
+}
+
+export async function readCreatorBuildWarning(storage: Storage): Promise<string | null> {
+  const raw = await storage.readCreatorArtifact(BUILD_LOCK);
+  if (!raw) return null;
+  try {
+    const lock = JSON.parse(raw) as { startedAt?: unknown; sourceFile?: unknown };
+    const when = typeof lock.startedAt === 'string' ? ` started ${lock.startedAt}` : '';
+    const source = typeof lock.sourceFile === 'string' ? ` for ${lock.sourceFile}` : '';
+    return `A previous Creator build${source}${when} did not finish. Review or clear the folder before relying on its contents.`;
+  } catch {
+    return 'A previous Creator build did not finish. Review or clear the folder before relying on its contents.';
+  }
 }
 
 export async function writeBuiltCourse(
   storage: Storage,
   built: BuiltCourse,
   generatedAt: string,
+  toolVersion: string,
+  sourceFile?: string,
 ): Promise<WrittenFiles> {
+  const priorBuildWarning = await readCreatorBuildWarning(storage);
+  await storage.writeCreatorArtifact(
+    BUILD_LOCK,
+    JSON.stringify({ startedAt: generatedAt, courseId: built.courseId, sourceFile }, null, 2),
+  );
+
+  // One source file = one course = one complete manifest. No archive merge.
   await storage.writeCourse(built.courseId, built.raw);
+  const entry = await buildCourseEntry(storage, built.courseId, built.manifestEntry.title);
+  const manifestArgs = {
+    origin: 'creator' as const,
+    createdAt: generatedAt,
+    toolVersion,
+    courses: [entry],
+    compilerRegistryRevision: built.registryRevision,
+    creatorSummary: {
+      sourceFile: sourceFile ?? null,
+      lessonCount: built.lessonCount,
+      blockCount: built.blockCount,
+      registryWarnings: built.registryWarnings,
+    },
+  };
 
-  // Merge the manifest course list; preserve every other recorded field.
-  const raw = await storage.readManifest();
-  let manifest: Record<string, unknown> = {};
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object') manifest = parsed as Record<string, unknown>;
-    } catch {
-      /* corrupt manifest — rebuild the course list below, keep nothing else */
-    }
-  }
-  manifest.courses = mergeById(parseManifestCourses(raw), [built.manifestEntry]);
-  manifest.storyboardGeneratedAt = generatedAt;
-  await storage.writeManifest(manifest);
+  // A concurrent/early import sees `building` and is blocked. `ready` is the
+  // final write, after the course and review artifacts are safely on disk.
+  await storage.writeManifest(createManifestV1({ ...manifestArgs, state: 'building' }));
 
-  const planFile = `storyboard-${built.courseId}.plan.json`;
-  const productionFile = `storyboard-${built.courseId}.production.md`;
-  await storage.writeImportArtifact(planFile, built.planJson);
-  await storage.writeImportArtifact(productionFile, built.productionMd);
+  const planName = `${built.courseId}.blueprint.json`;
+  const productionName = `${built.courseId}.production.md`;
+  await storage.writeCreatorArtifact(planName, built.planJson);
+  await storage.writeCreatorArtifact(productionName, built.productionMd);
+
+  await storage.writeManifest(createManifestV1({ ...manifestArgs, state: 'ready' }));
+  await storage.removeCreatorArtifact(BUILD_LOCK);
 
   return {
     courseFile: `courses/${built.courseId}.json`,
-    planFile: `_import/${planFile}`,
-    productionFile: `_import/${productionFile}`,
+    manifestFile: 'manifest.json',
+    planFile: `_creator/${planName}`,
+    productionFile: `_creator/${productionName}`,
+    ...(priorBuildWarning ? { priorBuildWarning } : {}),
   };
 }

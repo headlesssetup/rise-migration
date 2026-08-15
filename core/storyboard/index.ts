@@ -8,6 +8,7 @@ export * from './render';
 export { parseSdDocx, DocxError, cellText, paraText } from './docx';
 export type { SdDoc, SdPara, SdRun, SdCell, SdTable } from './docx';
 export { parseStoryboard, GREEN_CORRECT } from './parse';
+export { plannedCourseToBlueprint } from './to-blueprint';
 export { mapIntent, mapLesson, defaultMints } from './map';
 export type { Mints, MappedLesson } from './map';
 export { buildArchiveCourse, assertCleanDocument } from './archive';

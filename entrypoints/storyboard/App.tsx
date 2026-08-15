@@ -1,46 +1,35 @@
-// Storyboard ⇄ Rise tab — two modes:
+// Rise Creator tab — local source review and package creation only:
 //   SD → Rise (docs/rise-storyboard-plan.md phase 3): full-page REVIEW is the
 //   only gate to import — pick the SD .docx → parse locally (no auth, no
 //   network) → review every planned block beside its source cell → approve →
 //   the synthetic archive course lands in the archive folder for the normal
 //   Import flow. Unparsed rows must be explicitly acknowledged.
-//   Rise → docx (docs/rise-storyboard-format.md): render an ARCHIVED course as
-//   an SBDOC storyboard docx for client review / out-of-Rise editing. Pure
-//   read of the archive; the .docx downloads, nothing else is written.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileSystemStorage } from '@/core/storage/fs';
+import { registryWarnings as templateRegistryWarnings } from '@/core/rise-format';
 import {
   buildArchiveCourse,
   parseSdDocx,
   parseStoryboard,
-  renderStoryboardDocx,
-  renderStoryboardDocxV2,
-  writeStoryboardDocxProse,
   type BlockIntent,
   type PlannedBlock,
   type PlannedCourse,
-  type ResolvedImage,
-  type SbCourse,
 } from '@/core/storyboard';
-import type { AssetManifest } from '@/core/assets/manifest';
-import type { GetCourseDocument } from '@/shared/types/rise';
 import {
   loadDirHandle,
   saveDirHandle,
   verifyPermission,
 } from '../sidepanel/folder-store';
 import {
-  parseManifestCourses,
-  type ManifestCourseEntry,
-} from '../sidepanel/archive-merge';
-import { writeBuiltCourse, type WrittenFiles } from './write';
+  readCreatorBuildWarning,
+  writeBuiltCourse,
+  type WrittenFiles,
+} from './write';
 
 type DirPicker = (opts?: {
   mode?: 'read' | 'readwrite';
 }) => Promise<FileSystemDirectoryHandle>;
-
-type DocxFormat = 'prose' | 'storyboard';
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -209,15 +198,23 @@ function ImportView() {
   const [error, setError] = useState<string | null>(null);
   const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null);
   const [folderNeedsGrant, setFolderNeedsGrant] = useState(false);
+  const [folderBuildWarning, setFolderBuildWarning] = useState<string | null>(null);
   const [ackUnparsed, setAckUnparsed] = useState(false);
   const [writing, setWriting] = useState(false);
-  const [written, setWritten] = useState<(WrittenFiles & { courseId: string; title: string }) | null>(null);
+  const [written, setWritten] = useState<
+    (WrittenFiles & { courseId: string; title: string; registryWarnings: string[] }) | null
+  >(null);
 
   useEffect(() => {
     void (async () => {
       const handle = await loadDirHandle();
       if (!handle) return;
-      if (await verifyPermission(handle, false)) setFolder(handle);
+      if (await verifyPermission(handle, false)) {
+        setFolder(handle);
+        setFolderBuildWarning(
+          await readCreatorBuildWarning(new FileSystemStorage(handle)),
+        );
+      }
       else {
         setFolder(handle);
         setFolderNeedsGrant(true);
@@ -246,6 +243,9 @@ function ImportView() {
       if (folder && folderNeedsGrant) {
         if (await verifyPermission(folder, true)) {
           setFolderNeedsGrant(false);
+          setFolderBuildWarning(
+            await readCreatorBuildWarning(new FileSystemStorage(folder)),
+          );
           return;
         }
       }
@@ -258,6 +258,9 @@ function ImportView() {
       await saveDirHandle(handle);
       setFolder(handle);
       setFolderNeedsGrant(false);
+      setFolderBuildWarning(
+        await readCreatorBuildWarning(new FileSystemStorage(handle)),
+      );
     } catch {
       /* user cancelled */
     }
@@ -272,16 +275,34 @@ function ImportView() {
         throw new Error('No write permission for the archive folder.');
       }
       const generatedAt = new Date().toISOString();
-      const built = buildArchiveCourse(planned, generatedAt);
+      const built = buildArchiveCourse(
+        planned,
+        generatedAt,
+        undefined,
+        undefined,
+        fileName ?? undefined,
+      );
       const storage = new FileSystemStorage(folder);
-      const files = await writeBuiltCourse(storage, built, generatedAt);
-      setWritten({ ...files, courseId: built.courseId, title: planned.title });
+      const files = await writeBuiltCourse(
+        storage,
+        built,
+        generatedAt,
+        browser.runtime.getManifest().version,
+        fileName ?? undefined,
+      );
+      setFolderBuildWarning(null);
+      setWritten({
+        ...files,
+        courseId: built.courseId,
+        title: planned.title,
+        registryWarnings: built.registryWarnings,
+      });
     } catch (e) {
       setError(errText(e));
     } finally {
       setWriting(false);
     }
-  }, [planned, folder, writing]);
+  }, [planned, folder, writing, fileName]);
 
   const stats = useMemo(() => {
     if (!planned) return null;
@@ -294,7 +315,12 @@ function ImportView() {
         ).length,
       0,
     );
-    return { rows, placeholders };
+    const registryWarnings = templateRegistryWarnings(
+      planned.lessons.flatMap((lesson) =>
+        lesson.blocks.map((block) => block.intent.kind),
+      ),
+    );
+    return { rows, placeholders, registryWarnings };
   }, [planned]);
 
   const canApprove =
@@ -339,6 +365,19 @@ function ImportView() {
               {stats.placeholders} placeholders (video / Storyline) · {planned.production.length}{' '}
               production scripts · <b className={planned.unparsed.length ? 'error' : ''}>{planned.unparsed.length} unrecognized rows</b>
             </p>
+            {stats.registryWarnings.length > 0 && (
+              <details>
+                <summary className="hint">
+                  {stats.registryWarnings.length} template(s) are compiler-tested but not yet
+                  marked live-verified
+                </summary>
+                <ul className="notes">
+                  {stats.registryWarnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </section>
 
           {planned.unparsed.length > 0 && (
@@ -410,6 +449,7 @@ function ImportView() {
               </button>
             )}
             {folder && !folderNeedsGrant && <p className="hint">Archive folder: {folder.name}</p>}
+            {folderBuildWarning && <p className="error">⚠ {folderBuildWarning}</p>}
             {planned.unparsed.length > 0 && (
               <label className="ack">
                 <input
@@ -431,9 +471,19 @@ function ImportView() {
                 </p>
                 <ul>
                   <li>{written.courseFile}</li>
+                  <li>{written.manifestFile}</li>
                   <li>{written.planFile}</li>
                   <li>{written.productionFile} — production scripts for experts</li>
                 </ul>
+                {written.priorBuildWarning && (
+                  <p className="error">⚠ {written.priorBuildWarning}</p>
+                )}
+                {written.registryWarnings.length > 0 && (
+                  <p className="hint">
+                    Registry status: {written.registryWarnings.length} used template(s) are
+                    compiler-tested but not yet marked live-verified. Details are in the blueprint artifact.
+                  </p>
+                )}
                 <p className="hint">
                   Next: open the side panel → Import (write) → C · Courses — the new course is
                   in the list. Placeholders (video, Storyline/Mighty) must be filled in manually after import.
@@ -447,261 +497,11 @@ function ImportView() {
   );
 }
 
-// ---------------------------------------------------------- Rise → docx ---
-
-const RASTER_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
-
-function sanitizeFileName(title: string): string {
-  const clean = title.replace(/[\\/:*?"<>|]/g, '·').replace(/\s+/g, ' ').trim();
-  return clean === '' ? 'course' : clean.slice(0, 120);
-}
-
-function downloadDocx(name: string, bytes: Uint8Array): void {
-  const blob = new Blob([bytes as BlobPart], {
-    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
-
-async function resolveImages(
-  model: SbCourse,
-  storage: FileSystemStorage,
-  courseId: string,
-): Promise<Map<string, ResolvedImage>> {
-  const images = new Map<string, ResolvedImage>();
-  const manifestJson = await storage.readAssetManifest('courses', courseId);
-  if (!manifestJson) return images;
-  const manifest: AssetManifest = JSON.parse(manifestJson);
-  const keyToEntry = new Map(manifest.assets.map((a) => [a.key, a]));
-  const needed = new Set<string>();
-  for (const lesson of model.lessons) {
-    for (const row of lesson.rows) {
-      if (row.image?.key) needed.add(row.image.key);
-    }
-  }
-  for (const key of needed) {
-    const entry = keyToEntry.get(key);
-    if (!entry || !RASTER_EXTS.has(entry.ext)) continue;
-    const bytes = await storage.readAsset(`${entry.hash}.${entry.ext}`);
-    if (!bytes) continue;
-    const row = model.lessons
-      .flatMap((l) => l.rows)
-      .find((r) => r.image?.key === key);
-    images.set(key, {
-      key,
-      bytes,
-      ext: entry.ext === 'jpeg' ? 'jpg' : entry.ext,
-      width: row?.image?.width ?? 800,
-      height: row?.image?.height ?? 600,
-    });
-  }
-  return images;
-}
-
-function ExportDocxView() {
-  const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null);
-  const [folderNeedsGrant, setFolderNeedsGrant] = useState(false);
-  const [courses, setCourses] = useState<ManifestCourseEntry[] | null>(null);
-  const [selected, setSelected] = useState('');
-  const [format, setFormat] = useState<DocxFormat>('prose');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [rendered, setRendered] = useState<{ model: SbCourse; fileName: string } | null>(null);
-
-  useEffect(() => {
-    void (async () => {
-      const handle = await loadDirHandle();
-      if (!handle) return;
-      setFolder(handle);
-      setFolderNeedsGrant(!(await verifyPermission(handle, false)));
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!folder || folderNeedsGrant) return;
-    void (async () => {
-      try {
-        const storage = new FileSystemStorage(folder);
-        const fromManifest = parseManifestCourses(await storage.readManifest());
-        if (fromManifest.length > 0) {
-          setCourses(fromManifest);
-          return;
-        }
-        setCourses((await storage.listSaved()).map((id) => ({ id })));
-      } catch (e) {
-        setError(errText(e));
-        setCourses([]);
-      }
-    })();
-  }, [folder, folderNeedsGrant]);
-
-  const connectFolder = useCallback(async () => {
-    try {
-      if (folder && folderNeedsGrant && (await verifyPermission(folder, false))) {
-        setFolderNeedsGrant(false);
-        return;
-      }
-      const picker = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker;
-      if (!picker) {
-        setError('File System Access API is not available in this browser.');
-        return;
-      }
-      const handle = await picker({ mode: 'read' });
-      await saveDirHandle(handle);
-      setFolder(handle);
-      setFolderNeedsGrant(false);
-    } catch {
-      /* user cancelled */
-    }
-  }, [folder, folderNeedsGrant]);
-
-  const generate = useCallback(async () => {
-    if (!folder || !selected || busy) return;
-    setBusy(true);
-    setError(null);
-    setRendered(null);
-    try {
-      const storage = new FileSystemStorage(folder);
-      const raw = await storage.readCourse(selected);
-      if (!raw) throw new Error(`courses/${selected}.json not found in archive.`);
-      const doc = JSON.parse(raw) as GetCourseDocument;
-      const opts = {
-        generatedAt: new Date().toISOString(),
-        toolVersion: browser.runtime.getManifest().version,
-      };
-
-      let model: SbCourse;
-      let bytes: Uint8Array;
-      if (format === 'prose') {
-        const result = renderStoryboardDocxV2(doc, opts);
-        model = result.model;
-        const images = await resolveImages(model, storage, selected);
-        bytes = writeStoryboardDocxProse(model, images);
-      } else {
-        const result = renderStoryboardDocx(doc, opts);
-        model = result.model;
-        bytes = result.bytes;
-      }
-
-      const suffix = format === 'prose' ? 'prose' : 'storyboard';
-      const fileName = `${sanitizeFileName(model.title)} — ${suffix}.docx`;
-      downloadDocx(fileName, bytes);
-      setRendered({ model, fileName });
-    } catch (e) {
-      setError(errText(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [folder, selected, format, busy]);
-
-  const stats = useMemo(() => {
-    if (!rendered) return null;
-    const rows = rendered.model.lessons.flatMap((l) => l.rows);
-    return {
-      edit: rows.filter((r) => r.fidelity === 'edit').length,
-      ro: rows.filter((r) => r.fidelity === 'ro').length,
-      images: rows.filter((r) => r.image).length,
-    };
-  }, [rendered]);
-
-  return (
-    <>
-      <p className="hint">
-        Archived Rise course → docx for client review and editing outside Rise.
-        Read-only — the document downloads, nothing is written to the archive.
-        The course must be exported first via the normal Export flow.
-      </p>
-
-      <section className="card">
-        <h2>1 · Archive folder</h2>
-        {(!folder || folderNeedsGrant) && (
-          <>
-            {folder && folderNeedsGrant && (
-              <p className="hint">Folder "{folder.name}" remembered, but permission needed.</p>
-            )}
-            <button onClick={connectFolder}>
-              {folder ? `Restore access: ${folder.name}` : 'Connect archive folder…'}
-            </button>
-          </>
-        )}
-        {folder && !folderNeedsGrant && <p className="hint">Archive folder: {folder.name}</p>}
-      </section>
-
-      {folder && !folderNeedsGrant && (
-        <section className="card">
-          <h2>2 · Course</h2>
-          {courses === null && <p className="hint">Reading archive…</p>}
-          {courses !== null && courses.length === 0 && (
-            <p className="hint">No courses in the archive — export courses first (side panel → Export).</p>
-          )}
-          {courses !== null && courses.length > 0 && (
-            <>
-              <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-                <option value="">— select a course —</option>
-                {courses.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {typeof c.title === 'string' && c.title !== '' ? c.title : c.id}
-                  </option>
-                ))}
-              </select>{' '}
-              <select value={format} onChange={(e) => setFormat(e.target.value as DocxFormat)}>
-                <option value="prose">Prose (flowing document)</option>
-                <option value="storyboard">Storyboard (table)</option>
-              </select>{' '}
-              <button className="approve" onClick={generate} disabled={!selected || busy}>
-                {busy ? 'Generating…' : 'Generate .docx'}
-              </button>
-            </>
-          )}
-          {error && <p className="error">⚠ {error}</p>}
-        </section>
-      )}
-
-      {rendered && stats && (
-        <section className="card">
-          <h2>3 · Result</h2>
-          <p>
-            ✔ Downloaded: <b>{rendered.fileName}</b>
-          </p>
-          <p className="hint">
-            {rendered.model.lessons.length} lessons · {rendered.model.blockCount} blocks ·{' '}
-            {stats.edit} editable · {stats.ro} read-only · {stats.images} with images
-            {rendered.model.locale ? ` · language: ${rendered.model.locale}` : ''}
-          </p>
-          {rendered.model.flags.length > 0 && (
-            <ul className="notes">
-              {rendered.model.flags.map((f, i) => (
-                <li key={i} className="error">
-                  ⚠ {f}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
-    </>
-  );
-}
-
 export function App() {
-  const [mode, setMode] = useState<'import' | 'export'>('import');
   return (
     <div className="app">
-      <h1>Storyboard ⇄ Rise</h1>
-      <nav className="mode-nav">
-        <button className={mode === 'import' ? 'mode-active' : ''} onClick={() => setMode('import')}>
-          SD → Rise (import)
-        </button>
-        <button className={mode === 'export' ? 'mode-active' : ''} onClick={() => setMode('export')}>
-          Rise → docx (export)
-        </button>
-      </nav>
-      {mode === 'import' ? <ImportView /> : <ExportDocxView />}
+      <h1>Rise Creator</h1>
+      <ImportView />
     </div>
   );
 }

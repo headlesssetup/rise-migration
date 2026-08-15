@@ -1,6 +1,44 @@
 # Project Status
 
-_Last updated: 2026-08-12 (Rise → docx storyboard export built; editing-protocol capture plan written). Keep this current at each phase boundary._
+_Last updated: 2026-08-15 (v0.8.0 format foundation built; automated certification green, live matrix pending). Keep this current at each phase boundary._
+
+## v0.8.0 format foundation — BUILT, certification pending
+
+The side panel now exposes exactly four primary actions: Export from Rise,
+Import into Rise, Save course to document (both existing DOCX formats), and
+Launch Rise Creator. The full-page extension page is Creator-only; its duplicate
+Rise-to-DOCX mode was removed.
+
+New Rise exports and Creator builds use versioned `rise-local-archive` v1
+manifests with building/ready state and course/asset checksums. Import displays
+strict preflight results and `runImport` blocks invalid/incomplete archives
+before target pinning or network work. Legacy folders remain readable with an
+explicit integrity warning. Creator writes one source file as one course, uses
+`_creator/build.lock` for interrupted-build visibility, writes a building
+manifest during the transaction, and marks ready/removes the lock only after
+all course and review artifacts exist.
+
+Synthesis now follows `PlannedCourse -> CourseBlueprint -> deterministic
+compiler`. The compiler consults a donor-provenance registry and surfaces every
+template not yet live-verified. Typed `local-asset` references are recognized by
+the compiler, executor final invariant, and live GET_COURSE read-back; v0.8.0
+refuses asset-bearing blueprints until the captured local-media adapter exists.
+
+The high-risk import plan/executor/background were not cosmetically split. A
+canonical image-course characterization test now freezes the exact ordered
+write envelopes and bodies before any later v0.9.0 refactor. General AI
+conversion is deferred and documented in `docs/creator-ai-design.md`.
+
+Long course exports now recover an expired bearer without supervision: when a
+GET_COURSE 401/403 occurs with only the dashboard open, the background boots
+that same course in an inactive temporary editor tab, captures a genuinely
+advanced same-plane cookie, closes the tab, and retries once. If SSO recovery
+still fails, export stops the queue with untouched/resumable counts instead of
+recording the same failure against every remaining course.
+
+Automated certification: 740 passed / 2 skipped; TypeScript and production
+build green. Release blocker still open: the operator-owned US/EU live matrix
+in `docs/v0.8.0-rebuild-plan.md`, including one >15-minute export expiry run.
 
 ## Rise → docx storyboard export (SBDOC, 2026-08-12) — BUILT
 
@@ -379,6 +417,14 @@ SW finishes update/upload/poll); `createdAt` must be threaded through, since
 (the whole course's media) to use one leaf subtree. fflate's `unzipSync` `filter`
 option would inflate only the wanted leaves + `runtime-data.js`; a side-effecting
 filter can still record the full inventory for the mismatch diagnostic.
+
+**Legacy Storyline capture TODO (2026-08-15):** the first 153-course account run
+completed 101 courses and failed 52: 51 packages contained a legacy Storyline
+3.9/3.26–3.34 router shell, while one unrelated `build/raw` call returned 404.
+The current web→Review transform was proven only against a modern 3.95 donor;
+3.42+ controls pass, but the legacy shell has no player-interface/`<!-- 360 -->`
+hook. Do not guess or weaken the assertion. Capture plan and implementation gate:
+`docs/rise-capture-plan-storyline-legacy.md`.
 
 ## Full-codebase audit (2026-07-31): findings fixed
 

@@ -177,8 +177,12 @@ export interface StorylineExportDeps {
     pin?: TabPin,
   ) => Promise<{ ok: true; location: string; jobId: string } | { ok: false; error: string }>;
   fetchZip?: (url: string) => Promise<Uint8Array>;
-  /** Refresh the bearer/cookie once before the run (default: background REAUTH). */
-  refresh?: (pin?: TabPin) => Promise<{ advanced: boolean; valid: boolean; via?: string } | void>;
+  /** Refresh the bearer/cookie once before the run. `courseId` lets the
+   *  background boot a temporary editor when only the dashboard is open. */
+  refresh?: (
+    pin?: TabPin,
+    courseId?: string,
+  ) => Promise<{ advanced: boolean; valid: boolean; via?: string } | void>;
   /** Resolve the ONE Rise tab this run may use (default: background PIN_RISE_TAB
    *  via pinTargetTab). Injectable for tests. */
   pinTab?: () => Promise<{ pin?: TabPin; blocked?: string }>;
@@ -200,8 +204,8 @@ const defaultExportOne: NonNullable<StorylineExportDeps['exportOne']> = async (
   return { ok: true, location: resp.result.data.location, jobId: resp.result.data.jobId };
 };
 
-const defaultRefresh: NonNullable<StorylineExportDeps['refresh']> = async (pin) => {
-  const r = await pinnedRpc(pin)({ type: 'REAUTH' });
+const defaultRefresh: NonNullable<StorylineExportDeps['refresh']> = async (pin, courseId) => {
+  const r = await pinnedRpc(pin)({ type: 'REAUTH', courseId });
   return r.type === 'REAUTH_RESULT' ? { advanced: r.advanced, valid: r.valid, via: r.via } : undefined;
 };
 
@@ -251,7 +255,10 @@ export async function exportStorylinePackages(
   // Proper auth BEFORE any action: refresh once up front and abort if the token
   // can't be made valid — a stale session fails every export, so don't attempt.
   try {
-    const r = await refresh(pin);
+    // The first source course is a safe, capture-confirmed editor route. Passing
+    // it removes the old requirement that the operator keep an editor open just
+    // to start a long Storyline export from the dashboard.
+    const r = await refresh(pin, targets[0]!.courseId);
     if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
     if (r && r.valid === false) {
       summary.aborted = 'stale session token';

@@ -27,7 +27,9 @@ const COURSE = JSON.stringify({ payload: { course: { id: 'C1', title: 'Geo 101' 
 
 const storage = {
   readManifest: async () => null,
+  listSaved: async () => ['C1'],
   readCourse: async () => COURSE,
+  readAsset: async () => null,
   readFolders: async () => null,
   readTypefaces: async () => null,
   readFontManifest: async () => null,

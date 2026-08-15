@@ -12,8 +12,9 @@
 // marked with a review note and the pilot verifies it (plan phase 5).
 
 import { newId } from '@/core/import/ids';
+import { riseTemplateFor } from '@/core/rise-format';
 import type { Block } from '@/shared/types/rise';
-import type { BlockIntent, PlannedBlock } from './types';
+import type { BlockIntent, BlueprintBlock } from '@/core/creator/blueprint';
 
 export interface Mints {
   /** cuid-style client id (blocks, items). */
@@ -160,6 +161,9 @@ export interface MappedRow {
 
 /** Map one planned block (intent) to its Rise block payload(s). */
 export function mapIntent(intent: BlockIntent, mint: Mints): MappedRow {
+  // Refuse any semantic block that is not explicitly enabled in the donor
+  // registry. The switch below emits the donor shape; it never improvises one.
+  riseTemplateFor(intent.kind);
   const notes: string[] = [];
   switch (intent.kind) {
     case 'text':
@@ -431,7 +435,7 @@ export interface MappedLesson {
 /** Map a whole planned lesson. */
 export function mapLesson(
   title: string,
-  planned: PlannedBlock[],
+  planned: BlueprintBlock[],
   mint: Mints,
 ): MappedLesson {
   const blocks: Block[] = [];
@@ -443,12 +447,16 @@ export function mapLesson(
       blocks.push(b);
       records.push({
         blockId: String(b.id),
-        slideNo: pb.provenance.slideNo,
+        slideNo: pb.sourceRef.slideNo ?? null,
         kind: pb.intent.kind,
       });
     }
     for (const n of [...pb.notes, ...mapped.notes]) {
-      const slide = pb.provenance.slideNo != null ? `slaids ${pb.provenance.slideNo}` : `rinda ${pb.provenance.tableRow}`;
+      const slide = pb.sourceRef.slideNo != null
+        ? `slaids ${pb.sourceRef.slideNo}`
+        : pb.sourceRef.row != null
+          ? `rinda ${pb.sourceRef.row}`
+          : pb.sourceRef.label;
       notes.push(`[${slide}] ${n}`);
     }
   }

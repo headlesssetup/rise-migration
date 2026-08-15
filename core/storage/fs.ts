@@ -27,16 +27,16 @@ const ACCOUNT_DIR = 'account';
 export class FileSystemStorage implements Storage {
   constructor(private readonly root: FileSystemDirectoryHandle) {}
 
-  private async coursesDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle(COURSES_DIR, { create: true });
+  private async coursesDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(COURSES_DIR, { create });
   }
 
-  private metaDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle(META_DIR, { create: true });
+  private metaDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(META_DIR, { create });
   }
 
-  private accountDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle(ACCOUNT_DIR, { create: true });
+  private accountDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(ACCOUNT_DIR, { create });
   }
 
   /** Write a json+csv report pair into _metadata/. */
@@ -45,7 +45,7 @@ export class FileSystemStorage implements Storage {
     json: string,
     csv: string,
   ): Promise<void> {
-    const dir = await this.metaDir();
+    const dir = await this.metaDir(true);
     await this.writeFile(dir, `${base}.json`, json);
     await this.writeFile(dir, `${base}.csv`, csv);
   }
@@ -62,7 +62,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeCourse(courseId: string, raw: string): Promise<void> {
-    const dir = await this.coursesDir();
+    const dir = await this.coursesDir(true);
     await this.writeFile(dir, `${courseId}.json`, raw);
   }
 
@@ -88,23 +88,27 @@ export class FileSystemStorage implements Storage {
   }
 
   async listSaved(): Promise<string[]> {
-    const dir = await this.coursesDir();
-    const ids: string[] = [];
-    const entries = (
-      dir as FileSystemDirectoryHandle & {
-        entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+    try {
+      const dir = await this.coursesDir();
+      const ids: string[] = [];
+      const entries = (
+        dir as FileSystemDirectoryHandle & {
+          entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+        }
+      ).entries();
+      for await (const [name, handle] of entries) {
+        if (
+          handle.kind === 'file' &&
+          name.endsWith('.json') &&
+          !name.endsWith('.assets.json')
+        ) {
+          ids.push(name.replace(/\.json$/, ''));
+        }
       }
-    ).entries();
-    for await (const [name, handle] of entries) {
-      if (
-        handle.kind === 'file' &&
-        name.endsWith('.json') &&
-        !name.endsWith('.assets.json')
-      ) {
-        ids.push(name.replace(/\.json$/, ''));
-      }
+      return ids;
+    } catch {
+      return [];
     }
-    return ids;
   }
 
   async writeManifest(manifest: unknown): Promise<void> {
@@ -150,17 +154,17 @@ export class FileSystemStorage implements Storage {
     await this.writeMetaPair('novelty', json, csv);
   }
 
-  private async banksDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle(BANKS_DIR, { create: true });
+  private async banksDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(BANKS_DIR, { create });
   }
 
   async writeBankIndex(raw: string): Promise<void> {
-    const dir = await this.banksDir();
+    const dir = await this.banksDir(true);
     await this.writeFile(dir, '_index.json', raw);
   }
 
   async writeQuestionBank(bankId: string, raw: string): Promise<void> {
-    const dir = await this.banksDir();
+    const dir = await this.banksDir(true);
     await this.writeFile(dir, `${bankId}.json`, raw);
   }
 
@@ -185,24 +189,28 @@ export class FileSystemStorage implements Storage {
   }
 
   async listSavedBanks(): Promise<string[]> {
-    const dir = await this.banksDir();
-    const ids: string[] = [];
-    const entries = (
-      dir as FileSystemDirectoryHandle & {
-        entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+    try {
+      const dir = await this.banksDir();
+      const ids: string[] = [];
+      const entries = (
+        dir as FileSystemDirectoryHandle & {
+          entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+        }
+      ).entries();
+      for await (const [name, handle] of entries) {
+        if (
+          handle.kind === 'file' &&
+          name.endsWith('.json') &&
+          !name.endsWith('.assets.json') &&
+          name !== '_index.json'
+        ) {
+          ids.push(name.replace(/\.json$/, ''));
+        }
       }
-    ).entries();
-    for await (const [name, handle] of entries) {
-      if (
-        handle.kind === 'file' &&
-        name.endsWith('.json') &&
-        !name.endsWith('.assets.json') &&
-        name !== '_index.json'
-      ) {
-        ids.push(name.replace(/\.json$/, ''));
-      }
+      return ids;
+    } catch {
+      return [];
     }
-    return ids;
   }
 
   async readBankIndex(): Promise<string | null> {
@@ -224,7 +232,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeFolders(raw: string): Promise<void> {
-    const dir = await this.accountDir();
+    const dir = await this.accountDir(true);
     await this.writeFile(dir, 'folders.json', raw);
   }
 
@@ -243,7 +251,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeBlockTemplates(raw: string): Promise<void> {
-    const dir = await this.accountDir();
+    const dir = await this.accountDir(true);
     await this.writeFile(dir, 'block-templates.json', raw);
   }
 
@@ -252,7 +260,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeTypefaces(raw: string): Promise<void> {
-    const dir = await this.accountDir();
+    const dir = await this.accountDir(true);
     await this.writeFile(dir, 'typefaces.json', raw);
   }
 
@@ -266,7 +274,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeFontManifest(json: string): Promise<void> {
-    const dir = await this.accountDir();
+    const dir = await this.accountDir(true);
     await this.writeFile(dir, 'typefaces.assets.json', json);
   }
 
@@ -281,13 +289,13 @@ export class FileSystemStorage implements Storage {
 
   // Account-level binaries (fonts) → account/assets/<name> (separate from the
   // content-addressed course assets/ store).
-  private async accountAssetsDir(): Promise<FileSystemDirectoryHandle> {
-    const account = await this.accountDir();
-    return account.getDirectoryHandle('assets', { create: true });
+  private async accountAssetsDir(create = false): Promise<FileSystemDirectoryHandle> {
+    const account = await this.accountDir(create);
+    return account.getDirectoryHandle('assets', { create });
   }
 
   async writeAccountAsset(name: string, bytes: Uint8Array): Promise<void> {
-    const dir = await this.accountAssetsDir();
+    const dir = await this.accountAssetsDir(true);
     await this.writeFile(dir, name, bytes as BufferSource);
   }
 
@@ -315,18 +323,19 @@ export class FileSystemStorage implements Storage {
 
   // --- Phase 2: assets --------------------------------------------------------
 
-  private async assetsDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle(ASSETS_DIR, { create: true });
+  private async assetsDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle(ASSETS_DIR, { create });
   }
 
   private scopeDir(
     scope: 'courses' | 'question-banks',
+    create = false,
   ): Promise<FileSystemDirectoryHandle> {
-    return scope === 'courses' ? this.coursesDir() : this.banksDir();
+    return scope === 'courses' ? this.coursesDir(create) : this.banksDir(create);
   }
 
   async writeAsset(name: string, bytes: Uint8Array): Promise<void> {
-    const dir = await this.assetsDir();
+    const dir = await this.assetsDir(true);
     // Cast: BufferSource is pinned to ArrayBuffer in the DOM lib, but a
     // Uint8Array view is an accepted write chunk at runtime.
     await this.writeFile(dir, name, bytes as BufferSource);
@@ -358,7 +367,7 @@ export class FileSystemStorage implements Storage {
     id: string,
     json: string,
   ): Promise<void> {
-    const dir = await this.scopeDir(scope);
+    const dir = await this.scopeDir(scope, true);
     await this.writeFile(dir, `${id}.assets.json`, json);
   }
 
@@ -389,18 +398,18 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeAssetsSummary(json: string): Promise<void> {
-    const dir = await this.metaDir();
+    const dir = await this.metaDir(true);
     await this.writeFile(dir, 'assets-summary.json', json);
   }
 
   // --- Phase 3: import artifacts (under _import/, separate from the archive) ---
 
-  private importDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle('_import', { create: true });
+  private importDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('_import', { create });
   }
 
   async writeImportArtifact(name: string, contents: string): Promise<void> {
-    const dir = await this.importDir();
+    const dir = await this.importDir(true);
     await this.writeFile(dir, name, contents);
   }
 
@@ -414,18 +423,51 @@ export class FileSystemStorage implements Storage {
     }
   }
 
-  // --- Phase 4: storyline packages (storyline/<courseId>/<leaf>.zip) ---
+  // --- Creator artifacts (under _creator/, separate from import reports) -----
 
-  private storylineDir(): Promise<FileSystemDirectoryHandle> {
-    return this.root.getDirectoryHandle('storyline', { create: true });
+  private creatorDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('_creator', { create });
   }
 
-  private async storylineCourseDir(courseId: string): Promise<FileSystemDirectoryHandle> {
-    return (await this.storylineDir()).getDirectoryHandle(courseId, { create: true });
+  async writeCreatorArtifact(name: string, contents: string): Promise<void> {
+    const dir = await this.creatorDir(true);
+    await this.writeFile(dir, name, contents);
+  }
+
+  async readCreatorArtifact(name: string): Promise<string | null> {
+    try {
+      const dir = await this.creatorDir();
+      const handle = await dir.getFileHandle(name);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+
+  async removeCreatorArtifact(name: string): Promise<void> {
+    try {
+      const dir = await this.creatorDir();
+      await dir.removeEntry(name);
+    } catch {
+      // Missing lock is already the desired state.
+    }
+  }
+
+  // --- Phase 4: storyline packages (storyline/<courseId>/<leaf>.zip) ---
+
+  private storylineDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('storyline', { create });
+  }
+
+  private async storylineCourseDir(
+    courseId: string,
+    create = false,
+  ): Promise<FileSystemDirectoryHandle> {
+    return (await this.storylineDir(create)).getDirectoryHandle(courseId, { create });
   }
 
   async writeStorylineZip(courseId: string, leaf: string, bytes: Uint8Array): Promise<void> {
-    const dir = await this.storylineCourseDir(courseId);
+    const dir = await this.storylineCourseDir(courseId, true);
     await this.writeFile(dir, `${leaf}.zip`, bytes as BufferSource);
   }
 
@@ -450,7 +492,7 @@ export class FileSystemStorage implements Storage {
   }
 
   async writeStorylineManifest(courseId: string, json: string): Promise<void> {
-    const dir = await this.storylineDir();
+    const dir = await this.storylineDir(true);
     await this.writeFile(dir, `${courseId}.manifest.json`, json);
   }
 

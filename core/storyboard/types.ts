@@ -7,6 +7,15 @@
 // Anything the conventions engine cannot classify lands in `unparsed[]`,
 // loudly — same posture as novelty review: nothing passes silently.
 
+import type {
+  BlockIntent,
+  IntentItem,
+  KcOption,
+  KcQuestion,
+} from '@/core/creator/blueprint';
+
+export type { BlockIntent, IntentItem, KcOption, KcQuestion } from '@/core/creator/blueprint';
+
 /** Where a block came from in the SD. `slideNo` is the RENDERED auto-number
  *  (computed from Word's numbering, never the table row index — the two
  *  diverge when a row holds several numbered paragraphs). */
@@ -21,110 +30,6 @@ export interface Provenance {
   /** `Teksts uz ekrāna` cell as plain text (for the review UI side-by-side). */
   rawScreenText: string;
 }
-
-/** One item of an item-based interactive (accordion panel, tab, card, step). */
-export interface IntentItem {
-  title: string;
-  /** Item body as sanitized HTML (`<p>…</p>` paragraphs). */
-  body: string;
-}
-
-export interface KcOption {
-  /** Option text (plain). */
-  text: string;
-  /** Green (`00B050`) in the SD = correct — official convention. */
-  correct: boolean;
-  /** Per-answer feedback (HTML) — scenario-style choices carry their own. */
-  feedback?: string;
-}
-
-export interface KcQuestion {
-  /** Question stem as HTML. */
-  stem: string;
-  options: KcOption[];
-  /** Post-answer feedback as HTML (from the italic `Atgriezeniskā saite:`). */
-  feedback?: string;
-}
-
-export type BlockIntent =
-  | {
-      kind: 'text';
-      heading?: string;
-      /** HTML paragraphs (links preserved as `<a href>`). */
-      paragraphs: string[];
-    }
-  | {
-      kind: 'list';
-      ordered: boolean;
-      heading?: string;
-      intro: string[];
-      /** List entries as HTML paragraphs. */
-      items: string[];
-      /** Prose after the list (rendered as a follow-up text block). */
-      outro?: string[];
-    }
-  | {
-      kind: 'accordion' | 'tabs' | 'flashcards' | 'process';
-      heading?: string;
-      intro: string[];
-      items: IntentItem[];
-    }
-  | {
-      kind: 'timeline';
-      heading?: string;
-      intro: string[];
-      events: { date: string; title: string; body: string }[];
-    }
-  | {
-      kind: 'sorting';
-      heading?: string;
-      intro: string[];
-      piles: string[];
-      cards: { title: string; pile: number }[];
-    }
-  | {
-      kind: 'knowledge-check';
-      heading?: string;
-      intro: string[];
-      questions: KcQuestion[];
-    }
-  | {
-      kind: 'note';
-      /** HTML paragraphs. */
-      paragraphs: string[];
-    }
-  | {
-      /** Resource links row → a Rise button stack (one button per hyperlink). */
-      kind: 'links';
-      heading?: string;
-      intro: string[];
-      buttons: { label: string; destination: string; description: string }[];
-      /** Prose after the last link (rendered as a follow-up text block). */
-      trailing?: string[];
-    }
-  | {
-      /** Rise's native empty video block — awaiting the expert recording. */
-      kind: 'video-placeholder';
-      /** e.g. "Eksperta video lekcija (~5 min) — Žaneta". */
-      label: string;
-    }
-  | {
-      /** Flagged text block: "replace with Storyline/Mighty, see slide N". */
-      kind: 'storyline-placeholder';
-      label: string;
-    }
-  | {
-      /** A `[SĀKT]`/`[TĀLĀK]`-style gate → Rise's continue divider. */
-      kind: 'continue';
-      /** Button label verbatim from the SD (e.g. `SĀKT`). */
-      label: string;
-    }
-  | {
-      /** `[Instrukcija]`/`[Lejupielādēt …]` — a PDF/attachment that does not
-       *  exist in the SD; flagged text placeholder (text-only course). */
-      kind: 'attachment-placeholder';
-      label: string;
-    };
 
 export interface PlannedBlock {
   intent: BlockIntent;

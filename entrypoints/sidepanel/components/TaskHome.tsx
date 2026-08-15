@@ -55,52 +55,38 @@ export function TaskHome({
   busy,
   onNavigate,
 }: Props) {
-  const hasRise = !!session?.risePresent && !!session?.hasToken;
-
   return (
     <>
-      <h3 className="section-title">Storyboard</h3>
+      <TaskCard
+        title="Export from Rise"
+        subtitle="Save courses, banks, assets, and account data to a folder"
+        onClick={() => onNavigate('archive')}
+        disabled={busy}
+      />
 
       <TaskCard
-        title="Export course to docx"
-        subtitle="Rise course → storyboard for review"
+        title="Import into Rise"
+        subtitle="Create courses from a validated local package"
+        onClick={() => onNavigate('import')}
+        disabled={busy || !storage}
+      />
+
+      <TaskCard
+        title="Save course to document"
+        subtitle="Create either prose or storyboard .docx from an exported course"
         onClick={() => onNavigate('export-docx')}
         disabled={busy || !storage}
       />
 
       <TaskCard
-        title="Create course from docx"
-        subtitle="Storyboard or SD document → new Rise course"
+        title="Launch Rise Creator"
+        subtitle="Review a source document and build a ready-to-import package"
         onClick={() =>
           void browser.tabs.create({
             url: browser.runtime.getURL('/storyboard.html'),
           })
         }
         external
-      />
-
-      <TaskCard
-        title="Update course from docx"
-        subtitle="Diff, review, and apply text changes"
-        disabled
-        badge="Stage 3"
-        badgeKind="pending"
-      />
-
-      <h3 className="section-title">Migration</h3>
-
-      <TaskCard
-        title="Archive account"
-        subtitle="Export courses, banks, assets to disk"
-        onClick={() => onNavigate('archive')}
-        disabled={busy}
-      />
-
-      <TaskCard
-        title="Import to account"
-        subtitle="Rebuild archived courses in target"
-        onClick={() => onNavigate('import')}
-        disabled={busy || !hasRise || !storage}
       />
 
       <div className="context-bar">

@@ -38,6 +38,7 @@ import {
 } from '@/core/storyline/review-socket-client';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import { risePlaneFromUrl } from '@/shared/messaging';
+import { courseEditorUrl } from '@/shared/rise-editor';
 import type {
   BackgroundRequest,
   BackgroundResponse,
@@ -57,6 +58,7 @@ interface InPageResult {
   status: number;
   text?: string;
   error?: string;
+  code?: 'AUTH_REQUIRED';
 }
 
 /** What relayFetch needs from a spec — RequestSpec (reads) or WriteSpec (writes).
@@ -387,7 +389,12 @@ export default defineBackground(() => {
     // they don't use the bearer at all.
     const token = tokenFor(plane);
     if (!token && !spec.noAuth && !spec.omitBearer) {
-      return { ok: false, status: 0, error: noTokenForPlaneMessage(plane) };
+      return {
+        ok: false,
+        status: 0,
+        error: noTokenForPlaneMessage(plane),
+        code: 'AUTH_REQUIRED',
+      };
     }
     try {
       const [injection] = await chrome.scripting.executeScript({
@@ -429,31 +436,35 @@ export default defineBackground(() => {
     spec: RequestSpec,
     pin?: TabPin,
     attempt = 0,
+    refreshCourseId?: string,
   ): Promise<FetchResult<string>> {
     const r = await relayFetch(spec, pin);
+    const authFailure = r.code === 'AUTH_REQUIRED' || r.status === 401 || r.status === 403;
 
     // An expired bearer reads back as 401 OR 403 (the authoring endpoints answer
-    // 403 "Forbidden") — re-auth and retry once, but ONLY if the token actually
-    // advanced; retrying with the same stale token just 403s again. Throttled:
-    // a dead SSO session would otherwise reload the tab on EVERY paced request.
+    // 403 "Forbidden"); a cold/restarted worker can also have no bearer yet.
+    // Re-auth and retry once, but ONLY if the token actually advanced; retrying
+    // with the same stale token just fails again. Throttled except when a
+    // GET_COURSE supplies its own bounded editor-bootstrap recovery route.
     if (
-      (r.status === 401 || r.status === 403) &&
+      authFailure &&
       attempt === 0 &&
-      reauthAllowed() &&
-      (await reauth(pin)).advanced
+      (refreshCourseId !== undefined || reauthAllowed()) &&
+      (await reauth(pin, refreshCourseId)).advanced
     ) {
-      return rawFetch(spec, pin, 1);
+      return rawFetch(spec, pin, 1, refreshCourseId);
     }
-    if (r.status === 401 || r.status === 403) {
+    if (authFailure) {
       // F6: the bearer did not advance (or reauth is throttled) — the fix is a
       // course-editor boot on THIS plane's account, not a plain re-login.
       return {
         ok: false,
-        status: r.status,
+        status: r.status || undefined,
+        code: 'AUTH_REQUIRED',
         error:
-          `Unauthorized (${r.status}) from Rise and the bearer did not refresh. ` +
-          `Open a course EDITOR tab on the account this run targets (the dashboard does not ` +
-          `rotate the token), make sure you are logged in there, then retry.`,
+          `${r.status ? `Unauthorized (${r.status}) from Rise` : 'No usable Rise bearer was available'} and the bearer did not refresh. ` +
+          `Automatic course-editor recovery did not produce a new token. ` +
+          `Make sure the Rise session is still logged in, then retry.`,
       };
     }
     if (!r.ok) {
@@ -461,6 +472,7 @@ export default defineBackground(() => {
         ok: false,
         status: r.status || undefined,
         error: r.error ?? `HTTP ${r.status}`,
+        code: r.code,
       };
     }
     return { ok: true, status: r.status, data: r.text ?? '' };
@@ -549,6 +561,49 @@ export default defineBackground(() => {
     });
   }
 
+  /** A newly-created tab may already be in `loading` before its id is returned,
+   *  so unlike the reload waiter, any later `complete` is sufficient. */
+  function waitForCreatedTabComplete(tabId: number, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        try {
+          chrome.tabs.onUpdated.removeListener(listener);
+        } catch {
+          /* ignore */
+        }
+        resolve();
+      };
+      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo): void => {
+        if (id === tabId && info.status === 'complete') finish();
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+      chrome.tabs
+        .get(tabId)
+        .then((tab) => void (tab.status === 'complete' && finish()))
+        .catch(() => finish());
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
+  async function waitForTokenAdvance(
+    tabId: number,
+    fallbackUrl: string | undefined,
+    plane: Plane,
+    before: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const live = await chrome.tabs.get(tabId).catch(() => undefined);
+      await grabTokenForUrl(live?.url ?? fallbackUrl);
+      if ((auth[plane].identity?.expiresAt ?? 0) > before) return true;
+      await new Promise((r) => setTimeout(r, 750));
+    }
+    return false;
+  }
+
   // Fallback refresh: reload a Rise COURSE EDITOR tab so the SPA runs its OWN
   // (native) Okta silent re-auth on boot and writes a rotated `_articulate_rise_`
   // cookie, then poll THAT TAB's cookie until its `exp` advances. This piggybacks
@@ -557,37 +612,57 @@ export default defineBackground(() => {
   // reload. Safe mid-import: reauth only runs BETWEEN paced writes (proactive
   // heartbeat) or AFTER a write already returned 403, so no write is in flight.
   // IMPORTANT: only a COURSE EDITOR boot rotates the bearer — reloading the
-  // dashboard does NOT (operator-confirmed 2026-06-23). If no editor tab is open
-  // the poll times out and we report no-advance honestly (the panel then tells the
-  // operator to open a course).
-  async function reloadRiseTabForToken(plane: Plane | null): Promise<boolean> {
+  // dashboard does NOT (operator-confirmed 2026-06-23). For a GET_COURSE export,
+  // we already have a capture-confirmed course id: if no editor is open, boot that
+  // course in a temporary inactive tab, capture the rotated cookie, then close it.
+  // This is the automated equivalent of the manual dashboard click that used to
+  // be required every ~15 minutes during a long export.
+  async function refreshRiseEditorToken(
+    plane: Plane | null,
+    bootstrap?: { courseId: string; targetUrl: string },
+  ): Promise<'tab-reload' | 'editor-bootstrap' | 'none'> {
     // ONLY reload a course-editor tab — reloading the dashboard/project list is
     // useless (it never rotates the bearer) and disruptive, so we never do it.
     const tab = await findCourseEditorTab(plane);
-    if (!tab || typeof tab.id !== 'number') return false;
-    const tabId = tab.id;
-    // Poll the RELOADED TAB's own plane/cookie — never the active tab's, which may
-    // belong to a different account entirely.
-    const tabPlane = risePlaneFromUrl(tab.url);
-    if (!tabPlane) return false;
-    const before = auth[tabPlane].identity?.expiresAt ?? 0;
-    // Listen BEFORE reloading so the reload's own 'loading' can't be missed.
-    const loaded = waitForTabComplete(tabId, 20_000);
+    if (tab && typeof tab.id === 'number') {
+      const tabId = tab.id;
+      // Poll the RELOADED TAB's own plane/cookie — never the active tab's, which
+      // may belong to a different account entirely.
+      const tabPlane = risePlaneFromUrl(tab.url);
+      if (!tabPlane) return 'none';
+      const before = auth[tabPlane].identity?.expiresAt ?? 0;
+      // Listen BEFORE reloading so the reload's own 'loading' can't be missed.
+      const loaded = waitForTabComplete(tabId, 20_000);
+      try {
+        await chrome.tabs.reload(tabId);
+      } catch {
+        return 'none';
+      }
+      await loaded;
+      return (await waitForTokenAdvance(tabId, tab.url, tabPlane, before))
+        ? 'tab-reload'
+        : 'none';
+    }
+
+    if (!plane || !bootstrap) return 'none';
+    const url = courseEditorUrl(bootstrap.targetUrl, bootstrap.courseId);
+    if (!url || risePlaneFromUrl(url) !== plane) return 'none';
+    const before = auth[plane].identity?.expiresAt ?? 0;
+    let created: chrome.tabs.Tab | undefined;
     try {
-      await chrome.tabs.reload(tabId);
+      created = await chrome.tabs.create({ url, active: false });
+      if (typeof created.id !== 'number') return 'none';
+      await waitForCreatedTabComplete(created.id, 20_000);
+      return (await waitForTokenAdvance(created.id, url, plane, before))
+        ? 'editor-bootstrap'
+        : 'none';
     } catch {
-      return false;
+      return 'none';
+    } finally {
+      if (typeof created?.id === 'number') {
+        await chrome.tabs.remove(created.id).catch(() => {});
+      }
     }
-    await loaded;
-    // The SPA's auth bootstrap is async after load — poll the cookie for advance.
-    const deadline = Date.now() + 12_000;
-    while (Date.now() < deadline) {
-      const live = await chrome.tabs.get(tabId).catch(() => undefined);
-      await grabTokenForUrl(live?.url ?? tab.url);
-      if ((auth[tabPlane].identity?.expiresAt ?? 0) > before) return true;
-      await new Promise((r) => setTimeout(r, 750));
-    }
-    return false;
   }
 
   // Re-establish a fresh bearer mid-import.
@@ -612,10 +687,10 @@ export default defineBackground(() => {
     return Date.now() - lastReauthMs > REAUTH_THROTTLE_MS;
   }
 
-  async function reauth(pin?: TabPin): Promise<{
+  async function reauth(pin?: TabPin, refreshCourseId?: string): Promise<{
     advanced: boolean;
     valid: boolean;
-    via: 'tab-reload' | 'cookie' | 'none';
+    via: 'tab-reload' | 'editor-bootstrap' | 'cookie' | 'none';
   }> {
     lastReauthMs = Date.now();
     const resolved = await resolveTarget(pin);
@@ -624,14 +699,21 @@ export default defineBackground(() => {
     const expiryNow = (): number => slotFor(plane)?.identity?.expiresAt ?? 0;
 
     const rotatedByCookie = resolved.ok ? await grabTokenForUrl(resolved.target.url) : false;
-    let via: 'tab-reload' | 'cookie' | 'none' =
+    let via: 'tab-reload' | 'editor-bootstrap' | 'cookie' | 'none' =
       expiryNow() > before && rotatedByCookie ? 'cookie' : 'none';
 
     // Cookie re-read didn't rotate. If the token genuinely needs refreshing, let
     // the Rise SPA do it via a tab reload. When the token is still healthy we
     // skip the reload — no point disrupting the tab.
-    if (expiryNow() <= before && tokenExpiringSoon(plane)) {
-      if (await reloadRiseTabForToken(plane)) via = 'tab-reload';
+    // A reactive GET_COURSE authorization failure is itself authoritative even
+    // if the JWT's local `exp` still looks healthy (server revocation/clock skew).
+    if (expiryNow() <= before && (tokenExpiringSoon(plane) || !!refreshCourseId)) {
+      via = await refreshRiseEditorToken(
+        plane,
+        resolved.ok && refreshCourseId
+          ? { courseId: refreshCourseId, targetUrl: resolved.target.url }
+          : undefined,
+      );
     }
 
     const after = expiryNow();
@@ -782,7 +864,11 @@ export default defineBackground(() => {
       }
 
       case 'GET_COURSE': {
-        const r = await rawFetch(buildGetCourseRequest(msg.courseId), pin);
+        // The course id also gives auth recovery a safe, capture-confirmed
+        // editor route. If the short-lived bearer expires and only the dashboard
+        // is open, the background can boot this course in an inactive temporary
+        // tab, capture the new cookie, close the tab, and retry this same read.
+        const r = await rawFetch(buildGetCourseRequest(msg.courseId), pin, 0, msg.courseId);
         if (!r.ok) return { type: 'COURSE_RESULT', result: r };
         try {
           // Parse to VALIDATE only. A full course document can approach the 64MB
@@ -916,7 +1002,7 @@ export default defineBackground(() => {
         // fails silently (socket opens, no identify result) on a stale token —
         // the dominant failure on a long run. Re-read the rotated cookie cheaply;
         // reauth (tab reload) only when actually near expiry.
-        if (tokenExpiringSoon(plane) && reauthAllowed()) await reauth(pin);
+        if (tokenExpiringSoon(plane) && reauthAllowed()) await reauth(pin, msg.courseId);
         else await grabTokenForUrl(tabUrl);
         const token = tokenFor(plane);
         if (!token) {
@@ -1050,7 +1136,7 @@ export default defineBackground(() => {
         // Force a fresh bearer on demand (panel calls this before each course).
         // Report whether the token actually advanced vs is merely still valid so
         // the panel can log honestly instead of claiming a refresh that no-op'd.
-        const { advanced, valid, via } = await reauth(pin);
+        const { advanced, valid, via } = await reauth(pin, msg.courseId);
         const resolved = await resolveTarget(pin);
         const identity = slotFor(resolved.ok ? resolved.target.plane : null)?.identity ?? null;
         return { type: 'REAUTH_RESULT', advanced, valid, via, identity };

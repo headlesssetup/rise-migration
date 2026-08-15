@@ -25,6 +25,7 @@ import {
   blankForeignMediaKeys,
   remapMediaKeys,
   findForeignMediaKeys,
+  findLocalAssetRefs,
 } from './remap';
 import { collectBuiltinRefs, hasBuiltinRef, probeBuiltinRefs } from './builtin-assets';
 import * as env from './envelopes';
@@ -1232,11 +1233,14 @@ export async function executePlan(
       if (nb) targetOwners.add(nb);
     }
     const rebuilt = remapMediaKeys(deps.input.course, keyMap);
-    result.survivingKeys = findForeignMediaKeys(rebuilt, targetOwners);
+    result.survivingKeys = [
+      ...findForeignMediaKeys(rebuilt, targetOwners),
+      ...findLocalAssetRefs(rebuilt).map((ref) => `local-asset:${ref.assetPath}@${ref.path}`),
+    ];
 
     result.ok = result.survivingKeys.length === 0;
     if (!result.ok) {
-      result.error = `Source media keys ${dryRun ? 'would survive (dry-run prediction)' : 'survived'}: ${result.survivingKeys.slice(0, 5).join(', ')}`;
+      result.error = `Foreign or unresolved media references ${dryRun ? 'would survive (dry-run prediction)' : 'survived'}: ${result.survivingKeys.slice(0, 5).join(', ')}`;
     }
     result.idMap = ids.toJSON();
     return result;

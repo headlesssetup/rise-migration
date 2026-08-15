@@ -112,6 +112,29 @@ describe('buildArchiveCourse', () => {
 });
 
 describe('assertCleanDocument', () => {
+  it('aborts when a typed package-local asset reaches Rise JSON', () => {
+    expect(() =>
+      assertCleanDocument({
+        course: { id: 'c', title: 't' },
+        lessons: [
+          {
+            id: 'l',
+            type: 'blocks',
+            items: [
+              {
+                id: 'b',
+                type: 'image',
+                family: 'image',
+                variant: 'hero',
+                items: [{ id: 'i', media: { image: { kind: 'local-asset', path: 'assets/x.png' } } }],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/unresolved local asset ref/);
+  });
+
   it('aborts loudly when a media key sneaks into the built course', () => {
     expect(() =>
       assertCleanDocument({

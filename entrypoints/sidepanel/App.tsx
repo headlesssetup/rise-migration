@@ -29,6 +29,12 @@ import {
 } from '@/core/census/inventory';
 import { FileSystemStorage } from '@/core/storage/fs';
 import type { Storage } from '@/core/storage/storage';
+import {
+  LOCAL_ARCHIVE_FORMAT,
+  buildCourseEntries,
+  createManifestV1,
+  type LocalArchiveManifestV1,
+} from '@/core/local-archive';
 import type { SessionState } from '@/shared/messaging';
 import type { SearchResultItem } from '@/shared/types/rise';
 import {
@@ -471,7 +477,7 @@ export function App() {
         // Read the archive's current course list BEFORE overwriting the manifest.
         const priorCourses = parseManifestCourses(await storage.readManifest());
 
-        const { saved, skipped, failed } = await exportCourses(
+        const { saved, skipped, failed, stopped } = await exportCourses(
           selectedCourses,
           storage,
           onEvent,
@@ -492,37 +498,52 @@ export function App() {
         // The course list ACCUMULATES across export batches — the import picker
         // reads it as the archive's contents, so it must not shrink to just this
         // run's selection while the earlier batches' JSON sits on disk.
-        const courseList = mergeById(
+        const knownCourses = mergeById(
           priorCourses,
           selectedCourses.map((c) => ({ id: c.id, title: c.title })),
         );
-        await storage.writeManifest({
-          generatedAt: new Date().toISOString(),
-          // Tool version that produced this archive (multilang capture needs
-          // ≥0.6.0 — earlier exporters froze pre-conversion snapshots).
-          toolVersion: browser.runtime.getManifest().version,
-          // Source account identity — the import side's Source ≠ Target guard reads
-          // this to refuse writing back into the account the archive came from.
-          sourceAccount: {
+        const knownTitleById = new Map(knownCourses.map((course) => [course.id, course.title]));
+        // The manifest describes what is actually on disk, not merely what this
+        // batch selected or what an older manifest happened to list.
+        const courseList = (await storage.listSaved()).map((id) => ({
+          id,
+          title: knownTitleById.get(id),
+        }));
+        const createdAt = new Date().toISOString();
+        const sourceAccount = {
             name: session?.accountName ?? session?.identity?.name ?? null,
             sub: session?.identity?.sub ?? null,
             email: session?.identity?.email ?? null,
             plane: session?.plane ?? null,
-          },
-          courseCount: scans.length,
-          saved,
-          skipped,
-          failed,
-          variantCount: nov.variantCount,
-          newVariants: nov.newVariants.map((v) => v.key),
-          newFields: nov.newFields.length,
-          courses: courseList,
-        });
+          };
+        await storage.writeManifest(
+          createManifestV1({
+            origin: 'rise-export',
+            // Export has more stages (assets/banks/Storyline). Download assets
+            // validates the self-contained byte set and promotes this to ready.
+            state: 'building',
+            createdAt,
+            toolVersion: browser.runtime.getManifest().version,
+            sourceAccount,
+            courses: await buildCourseEntries(storage, courseList),
+            exportSummary: {
+              courseCount: scans.length,
+              saved,
+              skipped,
+              failed,
+              variantCount: nov.variantCount,
+              newVariants: nov.newVariants.map((v) => v.key),
+              newFields: nov.newFields.length,
+            },
+          }),
+        );
         setCensus(built);
         setNovelty(nov);
         setPhase('done');
         addLog(
-          `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
+          stopped
+            ? `Stopped safely — saved ${saved}, skipped ${skipped}, failed ${failed.length}; ${stopped.remaining} course(s) not attempted. Partial census + catalog + novelty written.`
+            : `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
         );
         addLog(
           `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s). Manifest lists ${courseList.length} course(s).`,
@@ -628,6 +649,39 @@ export function App() {
             `⚠ ${n} key(s) failed (non-403/404) — click Download assets again to retry.`,
           );
         }
+        // Promote a versioned export archive only after the byte manifests have
+        // been written and checksummed. Legacy manifests stay untouched.
+        try {
+          const raw = await storage.readManifest();
+          const manifest = raw ? (JSON.parse(raw) as LocalArchiveManifestV1) : null;
+          if (manifest?.format === LOCAL_ARCHIVE_FORMAT && manifest.formatVersion === 1) {
+            const courses = await buildCourseEntries(
+              storage,
+              manifest.courses.map((c) => ({ id: c.id, title: c.title })),
+            );
+            await storage.writeManifest({
+              ...manifest,
+              state: summary.complete ? 'ready' : 'building',
+              courses,
+              exportSummary: {
+                ...(manifest.exportSummary ?? {}),
+                assets: {
+                  complete: summary.complete,
+                  owners: summary.owners,
+                  failed: summary.failed,
+                  failedOwners: summary.failedOwners.length,
+                },
+              },
+            });
+            addLog(
+              summary.complete
+                ? 'Archive preflight state: READY.'
+                : 'Archive preflight state: INCOMPLETE — asset retries are required before import.',
+            );
+          }
+        } catch (e) {
+          addLog(`⚠ Could not update archive readiness: ${errText(e)}`);
+        }
       }),
     [guarded, storage, onEvent, addLog, logBreak, session],
   );
@@ -711,9 +765,9 @@ export function App() {
 
   const VIEW_TITLE: Record<View, string> = {
     home: 'Rise tools',
-    archive: 'Archive account',
-    import: 'Import to account',
-    'export-docx': 'Export to docx',
+    archive: 'Export from Rise',
+    import: 'Import into Rise',
+    'export-docx': 'Save course to document',
   };
 
   return (
@@ -800,7 +854,7 @@ export function App() {
       )}
 
       {/* Import view */}
-      {view === 'import' && ready && (
+      {view === 'import' && storage && (
         <ImportView
           storage={storage}
           session={session}

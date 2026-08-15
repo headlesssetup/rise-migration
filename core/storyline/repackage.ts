@@ -13,6 +13,12 @@
 // to the web-export folder, then zip the folder's contents at the zip root.
 // `repackage.test.ts` asserts the transform reproduces the Review-360 package's
 // `story.html` byte-for-byte.
+//
+// TODO(legacy-storyline): the first account-wide run found legacy Storyline
+// 3.9/3.26–3.34 router shells that do not carry either modern marker. Capture a
+// byte-proven legacy web↔Review donor pair before adding another transform; see
+// docs/rise-capture-plan-storyline-legacy.md. Never "fix" this by inserting the
+// marker blindly or removing the loud assertion below.
 
 /** Web export adds a robots meta before `</head>`; the Review-360 package omits it. */
 const ROBOTS_META = '<meta name="robots" content="noindex, nofollow">';

@@ -8,7 +8,14 @@ import type { SearchResponse } from '@/shared/types/rise';
 
 export type FetchResult<T> =
   | { ok: true; status: number; data: T }
-  | { ok: false; status?: number; error: string };
+  | {
+      ok: false;
+      status?: number;
+      error: string;
+      /** Machine-readable so a paced run can stop instead of failing every
+       *  remaining item after one unrecoverable token expiry. */
+      code?: 'AUTH_REQUIRED';
+    };
 
 /** Rise plane of a tab URL — null for anything that is not a Rise tab (so a tab
  *  navigated away from Rise never silently reads as 'us'). */
@@ -71,7 +78,12 @@ type BackgroundRequestBody =
   // re-read the rotated `_articulate_rise_` cookie). The panel calls this before
   // each course so a long, write-quiet import never starts on a stale token (the
   // webRequest observer can't catch a fresh bearer when there's no page traffic).
-  | { type: 'REAUTH' }
+  | {
+      type: 'REAUTH';
+      /** A read-only course editor the background may boot temporarily when
+       *  only the dashboard is open. Used by long GET_COURSE/Storyline exports. */
+      courseId?: string;
+    }
   // Phase 4 — trigger a Storyline web/raw export for one course and await its
   // finished zip URL over the ws.eu JSON-RPC socket. Runs in the background
   // because it owns the bearer (the socket `identify` needs it). The panel then
@@ -145,7 +157,7 @@ export type BackgroundResponse =
       // How the bearer was (re)obtained this call — for honest panel logging and
       // runtime diagnosis: 'tab-reload' (Rise SPA native refresh on reload),
       // 'cookie' (already-rotated cookie re-read), or 'none'.
-      via?: 'tab-reload' | 'cookie' | 'none';
+      via?: 'tab-reload' | 'editor-bootstrap' | 'cookie' | 'none';
     }
   // Last-resort answer when a handler throws outside its own try — the panel must
   // always get A response, or it awaits a dead port forever.

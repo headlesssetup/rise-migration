@@ -16,6 +16,7 @@ import {
 } from '@/core/import';
 import type { Storage } from '@/core/storage/storage';
 import type { SessionState } from '@/shared/messaging';
+import { inspectLocalArchive, type LocalArchiveInspection } from '@/core/local-archive';
 import {
   importAccountSettings,
   importBanks,
@@ -62,6 +63,8 @@ export function ImportView({
   setRunning: (b: boolean) => void;
 }) {
   const [source, setSource] = useState<AccountIdentity | undefined>(undefined);
+  const [archiveInspection, setArchiveInspection] =
+    useState<LocalArchiveInspection | null>(null);
   const [confirmTarget, setConfirmTarget] = useState(false);
   const [override, setOverride] = useState(false);
   // Course selection lives here, not in CoursesSection: step D scopes the
@@ -121,6 +124,19 @@ export function ImportView({
     };
   }, [storage]);
 
+  useEffect(() => {
+    let alive = true;
+    setArchiveInspection(null);
+    void (async () => {
+      if (!storage) return;
+      const inspected = await inspectLocalArchive(storage);
+      if (alive) setArchiveInspection(inspected);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [storage]);
+
   const onEvent = useCallback(
     (e: ProgressEvent) => {
       if (e.kind === 'log') addLog(e.message);
@@ -135,7 +151,13 @@ export function ImportView({
   );
 
   // Live runs need an explicit target confirmation + the guard + a Rise tab.
-  const liveOk = !!storage && !!session?.risePresent && confirmTarget && verdict.ok && !running;
+  const liveOk =
+    !!storage &&
+    archiveInspection?.ready === true &&
+    !!session?.risePresent &&
+    confirmTarget &&
+    verdict.ok &&
+    !running;
 
   return (
     <section className="card" style={{ borderColor: '#b00', borderWidth: 2 }}>
@@ -144,6 +166,40 @@ export function ImportView({
         This mode <b>writes into a live Rise account</b>. Run the three steps in
         order: account settings → question banks → courses. Dry-run each first.
       </p>
+
+      {storage && !archiveInspection && <p className="hint">Validating archive…</p>}
+      {archiveInspection && (
+        <div
+          style={{
+            border: `1px solid ${archiveInspection.ready ? '#39844a' : '#b00'}`,
+            borderRadius: 6,
+            padding: 8,
+            marginBottom: 10,
+          }}
+        >
+          <b>
+            Archive: {archiveInspection.ready ? 'READY' : 'NOT READY'} ·{' '}
+            {archiveInspection.kind === 'v1'
+              ? `${archiveInspection.origin ?? 'unknown'} v1`
+              : archiveInspection.kind}
+          </b>
+          <div className="hint">
+            {archiveInspection.courses.length} course(s)
+            {archiveInspection.toolVersion
+              ? ` · created by ${archiveInspection.toolVersion}`
+              : ''}
+          </div>
+          {archiveInspection.issues.map((i, index) => (
+            <div
+              className="hint"
+              style={{ color: i.severity === 'error' ? '#b00' : '#8a5a00' }}
+              key={`${i.code}-${i.path}-${index}`}
+            >
+              {i.severity === 'error' ? '✖' : '⚠'} {i.path}: {i.message}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Target-account confirmation gate */}
       <div className="row">
@@ -218,6 +274,7 @@ export function ImportView({
         stop={stop}
         selected={courseSelection}
         setSelected={setCourseSelection}
+        archiveInspection={archiveInspection}
       />
       <StorylineUploadSection
         storage={storage}
@@ -513,9 +570,11 @@ function CoursesSection({
   logBreak,
   selected,
   setSelected,
+  archiveInspection,
 }: SectionProps & {
   selected: Set<string>;
   setSelected: React.Dispatch<React.SetStateAction<Set<string>>>;
+  archiveInspection: LocalArchiveInspection | null;
 }) {
   const [courses, setCourses] = useState<ArchiveCourse[]>([]);
   const [filter, setFilter] = useState('');
@@ -562,26 +621,14 @@ function CoursesSection({
         setCourses([]);
         return;
       }
-      const raw = await storage.readManifest();
-      let list: ArchiveCourse[] = [];
-      if (raw) {
-        try {
-          const m = JSON.parse(raw) as { courses?: ArchiveCourse[] };
-          if (Array.isArray(m.courses)) list = m.courses;
-        } catch {
-          /* fall through */
-        }
-      }
-      if (list.length === 0) {
-        const ids = await storage.listSaved();
-        list = ids.map((id) => ({ id }));
-      }
+      const inspected = await inspectLocalArchive(storage);
+      const list: ArchiveCourse[] = inspected.ready ? inspected.courses : [];
       if (alive) setCourses(list);
     })();
     return () => {
       alive = false;
     };
-  }, [storage]);
+  }, [storage, archiveInspection]);
 
   const shown = useMemo(
     () => filterByName(courses, (c) => c.title ?? c.id, filter),

@@ -1,117 +1,113 @@
-# Rise Migration — Explorer (Phase 0)
+# Rise Migration
 
-Read-only Chrome MV3 (WXT + React) extension that rides a logged-in
-**rise.articulate.com** session to explore a course library. Phase 0 of the Rise
-Export/Import tool — see `docs/` for the PRD, build plan, API reference, and block
-catalog, and `CLAUDE.md` for the invariants.
+Internal Chrome MV3 extension for loss-conscious Articulate Rise migration,
+document export, and local course-package creation.
 
-**Phase 0 is read-only.** It does not export media, import, or recreate anything.
+## Main actions
 
-## What it does
+- **Export from Rise** — save courses, question banks, folders, account data,
+  fonts, assets, and Storyline packages to a local folder.
+- **Import into Rise** — validate a local archive, dry-run, then recreate it in a
+  confirmed target account with sequential paced writes and live read-back.
+- **Save course to document** — generate either a flowing prose DOCX or a
+  structured storyboard DOCX from an exported course.
+- **Launch Rise Creator** — open a local-only page that reviews a source document
+  and writes a ready-to-import package. v0.8.0 exposes the deterministic INTEA
+  storyboard converter; the generic AI pipeline is deferred.
 
-1. **Captures the bearer JWT** by observing real Rise requests (`webRequest`) — no
-   credentials are stored (token lives in `storage.session` only). Catalog calls
-   also ride the tab's first-party session cookie.
-2. **Shows identity** — the logged-in account name read from the Rise page header
-   (avatar `aria-label`, e.g. "INTEA Team"), whether a Rise tab is present, and the
-   library's **total course count** (one cheap page-0 search, auto on detect).
-3. **Enumerates courses** via `GET /manage/api/content/search`, paginated 16/page
-   like the Rise UI; a **list limit** (16-step, or "All") caps how many to list.
-4. **Inventory** — as soon as courses are listed, writes a customer-ready catalog
-   `inventory.csv`/`inventory.json` (id, title, owner, lessonCount, type, dates,
-   folder, shareId) straight from the listing — no per-course fetch needed.
-5. **Fetches selected courses** via the `GET_COURSE` ducks RPC — strictly
-   sequential, ~2s + jitter between requests, resumable (skips already-saved).
-6. **Saves each raw `GET_COURSE` body** verbatim to a remembered folder (File
-   System Access, persisted via IndexedDB; one-click reconnect after a restart).
-7. **Census** — every distinct `family/variant`, media keys split by type
-   (**image / video / audio / storyline** + other), CDN/embeds, cross-refs, and a
-   version signal — exported as `census.json` + `census.csv`.
+Creator never contacts Rise. It writes files to the operator-selected folder;
+the side-panel importer is the only path that creates courses in Rise.
 
-Output folder layout:
+## Local archive
 
-```
+New exports and Creator builds use `rise-local-archive` format version 1:
+
+```text
 <folder>/
-  courses/<courseId>.json        raw GET_COURSE bodies (immutable)
-  inventory.json|csv             list-level catalog (written at listing time)
-  folders.json                   raw folder tree (GET /manage/api/folders)
-  folders-inventory.json|csv     course + bank folders, name-paths, counts
-  census.json|csv                content-level census (written after fetch)
-  catalog.json|csv               per-variant field profiles (block knowledge base)
-  novelty.json|csv               Tier-2 novelty: new variants + new fields vs catalog
-  question-banks/<id>.json       raw question banks (+ _index.json)
-  question-banks-catalog.json|csv per-question-type field profiles
-  manifest.json                  run index
+  manifest.json
+  courses/<courseId>.json
+  courses/<courseId>.assets.json     # when assets were exported
+  assets/<sha256>.<extension>
+  question-banks/                    # Rise exports when present
+  account/                           # Rise exports when present
+  storyline/                         # Rise exports when present
+  _metadata/                         # export reports
+  _creator/                          # blueprint/build artifacts
+  _import/                           # import reports and resume state
 ```
 
-**Question banks.** Reusable banks referenced by `draw from question bank` blocks
-live outside `GET_COURSE`, so "Fetch question banks" enumerates them
-(`/api/rise-authoring/question_banks`), paced-fetches + saves each raw, and
-profiles their questions by `type`. See `docs/rise-question-banks.md`.
+The manifest records building/ready state and SHA-256 checksums. Import validates
+course JSON, ids, checksums, asset manifests, and asset bytes before target
+pinning or network work. Existing legacy archives remain readable with a visible
+integrity warning and are never upgraded merely by reading them.
 
-**Catalog + novelty (Tier-2, PRD §8).** For each block, a structural signature
-(`family/variant` + recursive key-paths; array indices → `[]`, id-shaped map keys
-→ `*`) feeds two outputs:
+For Rise exports, fetching courses leaves the archive in `building` state;
+**Download assets** promotes it to `ready` after the byte set is complete.
 
-- **`catalog.json/csv`** — per-variant **field profiles**: the union of field-paths
-  for each `family/variant`, each tagged **core** (present in every instance) vs
-  **optional** (sometimes), with presence %. This is the scalable knowledge base
-  (one row per variant×field, not per optional-field permutation) that seeds
-  `docs/rise-block-catalog.md`.
-- **`novelty.json/csv`** — only what's genuinely new: **new variants** (absent from
-  the catalog seed in `core/census/catalog.ts`) and, once a variant has a recorded
-  field baseline, **new fields**. Copy-faithful migration still round-trips unknown
-  blocks — this just ensures nothing migrates unseen/undocumented.
+## Rise-format rules
 
-Reports cover the **whole folder**: after fetching, the census/catalog/novelty are
-rebuilt from **every saved course** (`scanSavedCourses` over `listSaved()`), not
-just the current selection — so partial or multi-attempt scrapes stay complete.
+- Exported Rise JSON remains copy-faithful and raw course files are immutable.
+- Rise API envelopes and synthesized block shapes come from captures/donors,
+  never memory or guesses.
+- Creator/source parsers produce a neutral Course Blueprint. A deterministic,
+  registry-backed compiler is the only code that emits synthesized Rise JSON.
+- Typed local asset references must be eliminated before import and are checked
+  again after live GET_COURSE read-back.
+- Live writes are sequential, human-paced, pinned to one target tab/account/
+  plane, and never auto-delete a failed target course.
 
-The accept→remember loop: review a scrape's `catalog.json`, fold the accepted
-per-variant fields into `core/census/catalog.fields.json` (the field baseline) and
-new variant names into `core/census/catalog.ts` (+ the doc). Subsequent runs then
-go quiet for them and surface only the next genuinely-new variants/fields. The
-579-course scrape's 32 variants are already seeded in `catalog.fields.json`.
+See [v0.8.0 rebuild plan](docs/v0.8.0-rebuild-plan.md),
+[AI Creator design](docs/creator-ai-design.md), and
+[Rise import protocol](docs/rise-import-protocol.md).
 
-## Architecture
+## Operator workflow
 
-| Context | Role |
-| --- | --- |
-| `entrypoints/background.ts` | Token capture (`webRequest`), cross-origin fetch RPCs, 401 refresh. Does **not** pace. |
-| `entrypoints/rise.content.ts` | Minimal session-presence ping. |
-| `entrypoints/sidepanel/` | React UI + orchestrator: paced loops, folder writes, census. |
-| `core/` | Pure, unit-tested logic: `census/` (recursive scan + aggregate + export), `rise-client/`, `auth/jwt`, `pacing/delay`, `storage/`. |
-| `shared/` | Schema types + typed messaging protocol. |
+### Export and migrate
 
-The census scan is a **generic recursive walk** of the whole document (never a
-per-block-type walk), per the CLAUDE.md convention.
+1. Open and log into the source Rise account.
+2. Open the extension side panel and choose a local folder.
+3. Export account data, banks, courses, assets, and required Storyline packages.
+4. Open/log into the target account.
+5. Choose **Import into Rise**, inspect archive status, confirm the target, and
+   dry-run the required steps.
+6. Run account settings, question banks, and courses in order.
+7. Review the saved fidelity/read-back reports under `_import/`.
 
-## Develop
+### Create locally and import
+
+1. Prepare an empty output folder (operator responsibility).
+2. Launch Rise Creator and choose one supported source file.
+3. Review the course proposal, source references, unresolved rows, placeholders,
+   and registry warnings.
+4. Approve the build. Creator writes one course plus `manifest.json` and
+   `_creator/` artifacts.
+5. Point the side panel at that folder and import via the normal course workflow.
+
+An interrupted Creator write leaves `_creator/build.lock`; the next build warns
+but does not block.
+
+## Development
 
 ```bash
-pnpm install        # also runs `wxt prepare`
-pnpm dev            # launch in dev (Chrome) with HMR
-pnpm build          # production MV3 build → .output/chrome-mv3
-pnpm test           # vitest (pure core/ + shared/)
-pnpm compile        # tsc --noEmit type-check
+pnpm install
+pnpm compile
+pnpm test
+pnpm build
 ```
 
-Load the unpacked build from `.output/chrome-mv3` via `chrome://extensions`
-(Developer mode → Load unpacked). Open a logged-in Rise tab, click the toolbar
-icon to open the side panel, interact with Rise once so the token is captured,
-then pick a folder and list/fetch courses.
+Load `.output/chrome-mv3` as an unpacked extension in Chrome. The test suite is
+local, but full release certification also requires the named US/EU live matrix
+in `docs/v0.8.0-rebuild-plan.md`.
 
-## Notes / open items
+## Project map
 
-- **API calls run inside the Rise tab.** Rise's catalog/`manage/api` is
-  cookie-authenticated; a `SameSite` session cookie is withheld from an
-  extension-origin (cross-site) fetch, so the background runs the fetch in the
-  live Rise tab via `chrome.scripting.executeScript` (first-party cookies +
-  bearer). **Keep a logged-in rise.articulate.com tab open** while using the
-  panel.
-- **Token refresh on 401** is best-effort; the reliable fallback is re-interacting
-  with the Rise tab so the observer captures a fresh token. Confirm the refresh
-  mechanics against live Rise.
-- **Search response shape** is treated permissively (`items[]`, stop on a short
-  page). Tighten once real responses are captured.
-- Endpoints/payloads come only from `docs/rise-api-reference.md` — never inferred.
+| Area | Role |
+| --- | --- |
+| `entrypoints/sidepanel/` | Four-mode UI, export/import orchestration, local folder handling |
+| `entrypoints/storyboard/` | Rise Creator extension page (legacy internal entrypoint name) |
+| `core/local-archive/` | Versioned manifest builders and strict/legacy inspection |
+| `core/creator/` | Course Blueprint and deterministic compiler |
+| `core/rise-format/` | Donor provenance and template verification registry |
+| `core/import/` | Proven plan/executor, remapping, pacing inputs, fidelity/read-back logic |
+| `core/storyboard/` | INTEA DOCX parser/profile and DOCX rendering code |
+| `docs/` | Capture-backed protocol, findings, status, and release plans |

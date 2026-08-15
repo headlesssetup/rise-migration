@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { BlueprintBlock } from '@/core/creator/blueprint';
 import { mapIntent, mapLesson, type Mints } from './map';
-import type { PlannedBlock } from './types';
 
 /** Deterministic mints for stable assertions. */
 function mints(): Mints {
@@ -245,10 +245,10 @@ describe('mapIntent — block shapes', () => {
 
 describe('mapLesson', () => {
   it('threads provenance into per-block records and prefixes notes with the slide', () => {
-    const planned: PlannedBlock[] = [
+    const planned: BlueprintBlock[] = [
       {
         intent: { kind: 'text', paragraphs: ['<p>a</p>'] },
-        provenance: { slideNo: 7, tableRow: 9, experience: 'Teksts', comments: '', rawScreenText: 'a' },
+        sourceRef: { label: 'Storyboard slide 7', slideNo: 7, row: 9, excerpt: 'a' },
         notes: ['kaut kas'],
       },
     ];

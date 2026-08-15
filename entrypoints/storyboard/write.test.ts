@@ -1,75 +1,85 @@
 import { describe, expect, it } from 'vitest';
 import type { BuiltCourse } from '@/core/storyboard';
 import type { Storage } from '@/core/storage/storage';
-import { writeBuiltCourse } from './write';
+import { inspectLocalArchive } from '@/core/local-archive';
+import { readCreatorBuildWarning, writeBuiltCourse } from './write';
 
-/** Minimal fake Storage: only the members the write path touches. */
-function fakeStorage(initialManifest?: string) {
+function fakeStorage(initialLock?: string) {
   const courses = new Map<string, string>();
   const artifacts = new Map<string, string>();
-  let manifest = initialManifest ?? null;
+  if (initialLock) artifacts.set('build.lock', initialLock);
+  const manifestStates: string[] = [];
+  let manifest: string | null = null;
   const storage = {
     writeCourse: async (id: string, raw: string) => void courses.set(id, raw),
+    readCourse: async (id: string) => courses.get(id) ?? null,
+    listSaved: async () => [...courses.keys()],
     readManifest: async () => manifest,
-    writeManifest: async (m: unknown) => void (manifest = JSON.stringify(m)),
-    writeImportArtifact: async (name: string, contents: string) =>
+    writeManifest: async (value: unknown) => {
+      manifest = JSON.stringify(value);
+      manifestStates.push((value as { state: string }).state);
+    },
+    readAssetManifest: async () => null,
+    readAsset: async () => null,
+    writeCreatorArtifact: async (name: string, contents: string) =>
       void artifacts.set(name, contents),
+    readCreatorArtifact: async (name: string) => artifacts.get(name) ?? null,
+    removeCreatorArtifact: async (name: string) => void artifacts.delete(name),
   } as unknown as Storage;
-  return {
-    storage,
-    courses,
-    artifacts,
-    manifest: () => (manifest ? (JSON.parse(manifest) as Record<string, unknown>) : null),
-  };
+  return { storage, courses, artifacts, manifestStates };
 }
 
 const BUILT: BuiltCourse = {
   courseId: 'sb-c1',
-  raw: '{"course":{"id":"sb-c1"},"lessons":[]}',
+  raw: '{"course":{"id":"sb-c1","title":"Testa kurss","type":null},"lessons":[]}',
   manifestEntry: { id: 'sb-c1', title: 'Testa kurss' },
-  planJson: '{"plan":true}',
+  planJson: '{"blueprint":true}',
   productionMd: '# skripti',
   lessonCount: 1,
   blockCount: 2,
   notes: [],
+  registryRevision: '2026-08-14.1',
+  registryWarnings: ['text: compiler-tested'],
 };
 
 describe('writeBuiltCourse', () => {
-  it('writes the course, MERGES the manifest course list, and stores artifacts', async () => {
-    const prior = JSON.stringify({
-      sourceAccount: { name: 'ACME US', plane: 'us' },
-      courses: [{ id: 'old1', title: 'Vecais kurss' }],
-    });
-    const fs = fakeStorage(prior);
-    const files = await writeBuiltCourse(fs.storage, BUILT, '2026-08-10T00:00:00Z');
+  it('writes one complete v1 Creator package and clears the build lock last', async () => {
+    const fs = fakeStorage();
+    const files = await writeBuiltCourse(
+      fs.storage,
+      BUILT,
+      '2026-08-10T00:00:00Z',
+      '0.8.0',
+      'source.docx',
+    );
 
     expect(fs.courses.get('sb-c1')).toBe(BUILT.raw);
-    const m = fs.manifest()!;
-    // Merged, never overwritten — and unrelated manifest fields preserved.
-    expect(m.courses).toEqual([
-      { id: 'old1', title: 'Vecais kurss' },
-      { id: 'sb-c1', title: 'Testa kurss' },
+    expect(fs.manifestStates).toEqual(['building', 'ready']);
+    expect(fs.artifacts.has('build.lock')).toBe(false);
+    expect(fs.artifacts.get('sb-c1.blueprint.json')).toBe('{"blueprint":true}');
+    expect(fs.artifacts.get('sb-c1.production.md')).toBe('# skripti');
+    expect(files).toMatchObject({
+      courseFile: 'courses/sb-c1.json',
+      manifestFile: 'manifest.json',
+      planFile: '_creator/sb-c1.blueprint.json',
+      productionFile: '_creator/sb-c1.production.md',
+    });
+
+    const inspected = await inspectLocalArchive(fs.storage);
+    expect(inspected).toMatchObject({ kind: 'v1', ready: true, origin: 'creator' });
+    expect(inspected.courses).toEqual([
+      { id: 'sb-c1', title: 'Testa kurss', type: null },
     ]);
-    expect((m.sourceAccount as { name: string }).name).toBe('ACME US');
-    expect(fs.artifacts.get('storyboard-sb-c1.plan.json')).toBe('{"plan":true}');
-    expect(fs.artifacts.get('storyboard-sb-c1.production.md')).toBe('# skripti');
-    expect(files.courseFile).toBe('courses/sb-c1.json');
   });
 
-  it('creates a manifest when the archive has none', async () => {
-    const fs = fakeStorage();
-    await writeBuiltCourse(fs.storage, BUILT, '2026-08-10T00:00:00Z');
-    expect(fs.manifest()!.courses).toEqual([{ id: 'sb-c1', title: 'Testa kurss' }]);
-  });
-
-  it('re-approving the same course updates its row instead of duplicating it', async () => {
-    const fs = fakeStorage();
-    await writeBuiltCourse(fs.storage, BUILT, 't1');
-    await writeBuiltCourse(
-      fs.storage,
-      { ...BUILT, manifestEntry: { id: 'sb-c1', title: 'Jauns nosaukums' } },
-      't2',
+  it('warns but does not block when a previous interrupted-build lock exists', async () => {
+    const fs = fakeStorage(
+      JSON.stringify({ startedAt: '2026-08-09T01:02:03Z', sourceFile: 'old.pptx' }),
     );
-    expect(fs.manifest()!.courses).toEqual([{ id: 'sb-c1', title: 'Jauns nosaukums' }]);
+    expect(await readCreatorBuildWarning(fs.storage)).toMatch(/old\.pptx.*did not finish/);
+
+    const files = await writeBuiltCourse(fs.storage, BUILT, 'now', '0.8.0');
+    expect(files.priorBuildWarning).toMatch(/did not finish/);
+    expect(fs.artifacts.has('build.lock')).toBe(false);
   });
 });

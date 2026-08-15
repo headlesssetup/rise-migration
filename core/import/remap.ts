@@ -10,6 +10,11 @@ import { classifyString } from '@/core/census/scan';
 import { extractUploadedKeys } from '@/core/assets/keys';
 import { IdMap, looksLikeClientId } from './ids';
 
+// A typed local reference is valid in a Course Blueprint, never in Rise JSON.
+// Re-export the canonical scanner here so the executor's final media invariant
+// covers both foreign Rise keys and unresolved package-local references.
+export { findLocalAssetRefs } from '@/core/local-assets';
+
 /** Fields the server assigns/owns — never sent back on a create (the server
  *  re-mints them). Dropped wherever they appear in a block subtree. */
 export const SERVER_OWNED_FIELDS = new Set([

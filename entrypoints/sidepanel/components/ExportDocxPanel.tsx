@@ -186,7 +186,7 @@ export function ExportDocxPanel({ storage, addLog }: Props) {
         {courses === null && <p className="hint">Reading archive…</p>}
         {courses !== null && courses.length === 0 && (
           <p className="hint">
-            No courses in the archive — export courses first (Archive account →
+            No courses in the archive — export courses first (Export from Rise →
             C).
           </p>
         )}

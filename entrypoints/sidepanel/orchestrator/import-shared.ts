@@ -140,7 +140,12 @@ export async function refreshToken(
         ? new Date(resp.identity.expiresAt).toLocaleTimeString()
         : 'unknown';
       if (resp.advanced) {
-        const how = resp.via === 'tab-reload' ? ' (via Rise tab reload)' : '';
+        const how =
+          resp.via === 'tab-reload'
+            ? ' (via Rise tab reload)'
+            : resp.via === 'editor-bootstrap'
+              ? ' (via temporary Rise editor)'
+              : '';
         onEvent({ kind: 'log', message: `Token refreshed${tag}${how} — valid until ${exp}` });
       } else if (resp.valid) {
         // The cookie didn't rotate but the token we hold is still good — no need.

@@ -99,6 +99,8 @@ export interface ExportResult {
   saved: number;
   skipped: number;
   failed: string[];
+  /** Set only when continuing would repeat the same run-wide auth failure. */
+  stopped?: { courseId: string; remaining: number; reason: string };
 }
 
 /** Paced, strictly-sequential GET_COURSE fetch of the selected courses. Only
@@ -115,6 +117,7 @@ export async function exportCourses(
   let saved = 0;
   let skipped = 0;
   let didNetwork = false;
+  let stopped: ExportResult['stopped'];
 
   for (const [i, c] of courses.entries()) {
     onEvent({ kind: 'course', index: i, total: courses.length, courseId: c.id });
@@ -164,6 +167,26 @@ export async function exportCourses(
             : 'unexpected response';
       failed.push(c.id);
       onEvent({ kind: 'log', message: `${pfx} Failed ${c.id}: ${err}` });
+      // A token is run-wide, not course-specific. The background has already
+      // tried one automatic editor bootstrap + one retry; if that bounded
+      // recovery failed, draining the rest of the queue would only manufacture
+      // hundreds of identical failures. Stop cleanly and leave the archive
+      // resumable from the next run.
+      if (
+        resp.type === 'COURSE_RESULT' &&
+        !resp.result.ok &&
+        resp.result.code === 'AUTH_REQUIRED'
+      ) {
+        const remaining = courses.length - i - 1;
+        stopped = { courseId: c.id, remaining, reason: err };
+        onEvent({
+          kind: 'log',
+          message:
+            `${pfx} Export stopped after automatic token recovery failed; ` +
+            `${remaining} course(s) were left untouched and can be resumed safely.`,
+        });
+        break;
+      }
       continue;
     }
 
@@ -172,7 +195,7 @@ export async function exportCourses(
     onEvent({ kind: 'log', message: `${pfx} Saved: ${c.title ?? c.id}${mlNote}` });
   }
 
-  return { saved, skipped, failed };
+  return { saved, skipped, failed, ...(stopped ? { stopped } : {}) };
 }
 
 /** Scan EVERY course saved in the folder (from disk, no network) — the basis
