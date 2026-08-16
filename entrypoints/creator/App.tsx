@@ -189,11 +189,12 @@ export function App() {
       const generatedAt = new Date().toISOString();
       const built = compileCourseBlueprint(blueprint, generatedAt);
       const storage = new FileSystemStorage(folder);
+      const manifest = browser.runtime.getManifest();
       const files = await writeBuiltCourse(
         storage,
         built,
         generatedAt,
-        browser.runtime.getManifest().version,
+        manifest.version_name ?? manifest.version,
         blueprint.source.originalFileName ?? fileName ?? 'pasted blueprint',
       );
       setFolderBuildWarning(null);
