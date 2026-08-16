@@ -4,7 +4,8 @@ import {
   COURSE_BLUEPRINT_VERSION,
   type BlockIntentKind,
 } from './blueprint/types';
-import { creatorPrompt } from './prompt';
+import { validateBlueprint } from './blueprint/validate';
+import { creatorPrompt, PROMPT_EXAMPLE_BLUEPRINT } from './prompt';
 
 // Keep in sync with BlockIntent in blueprint/types.ts — if a kind is added
 // there, the prompt must document it (this list is checked exhaustively below).
@@ -53,8 +54,45 @@ describe('creatorPrompt', () => {
     expect(prompt).toContain('"production"');
   });
 
-  it('makes author block-choice comments binding', () => {
+  it('makes author directives binding, wherever they appear', () => {
     expect(prompt).toMatch(/BINDING/);
+    expect(prompt).toMatch(/on-slide label boxes/);
+  });
+
+  it('embeds a worked example that passes our own validator', () => {
+    const v = validateBlueprint(PROMPT_EXAMPLE_BLUEPRINT);
+    expect(v.issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(v.ready).toBe(true);
+    expect(prompt).toContain(PROMPT_EXAMPLE_BLUEPRINT);
+    // The per-block worked example shows intent as an OBJECT (critique #1).
+    expect(prompt).toMatch(/"intent" is never a string label/);
+  });
+
+  it('treats speaker notes neutrally — no fixed role', () => {
+    expect(prompt).toMatch(/SPEAKER NOTES have NO fixed role/);
+    expect(prompt).toMatch(/never assume they are guidance/);
+    // The old blanket assumption must not resurface.
+    expect(prompt).not.toMatch(/speaker notes are binding/i);
+  });
+
+  it('carries the directive alias table with a deterministic fallback', () => {
+    expect(prompt).toMatch(/alias table/i);
+    for (const uiName of ['flipcards', 'statement', 'numbered list', 'labeled graphic']) {
+      expect(prompt.toLowerCase(), `alias "${uiName}" missing`).toContain(uiName);
+    }
+    expect(prompt).toMatch(/nearest listed block that can carry the TEXT/);
+    expect(prompt).toMatch(/Never bury source text inside a placeholder label/);
+  });
+
+  it('states the comment, contradiction, title, and no-invented-quiz rules', () => {
+    expect(prompt).toMatch(/open\/unaddressed comment is never content/i);
+    expect(prompt).toMatch(/CONTRADICTIONS/);
+    expect(prompt).toMatch(/Never silently pick one version/);
+    expect(prompt).toMatch(/title derived — no title in source/);
+    expect(prompt).toMatch(/emit ZERO "knowledge-check" blocks/);
+    expect(prompt).toMatch(/formatting, NOT "suggested"/);
+    expect(prompt).toMatch(/ALWAYS the literal "narration"/);
+    expect(prompt).toMatch(/~200 characters/);
   });
 
   it('appends operator per-deck instructions when given', () => {

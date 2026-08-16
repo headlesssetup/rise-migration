@@ -5,9 +5,62 @@
 // docs/creator-ai-design.md is the design contract.
 //
 // KEEP IN SYNC with blueprint/types.ts — prompt.test.ts asserts every
-// BlockIntentKind and the key contract literals appear below.
+// BlockIntentKind and the key contract literals appear below, and that
+// PROMPT_EXAMPLE_BLUEPRINT passes validateBlueprint.
+//
+// Field-tested 2026-08-16 (external model run on a real client deck): the
+// worked examples, the directive alias table, and the explicit rules for
+// speaker notes / comments / contradictions all exist because their absence
+// cost accuracy on that run.
 
 import { COURSE_BLUEPRINT_FORMAT, COURSE_BLUEPRINT_VERSION } from './blueprint/types';
+
+/** Complete minimal blueprint embedded in the prompt as the worked example.
+ *  prompt.test.ts asserts it validates — the example can never drift from the
+ *  schema. */
+export const PROMPT_EXAMPLE_BLUEPRINT = `{
+  "format": "${COURSE_BLUEPRINT_FORMAT}",
+  "formatVersion": ${COURSE_BLUEPRINT_VERSION},
+  "source": { "kind": "ai-provider", "originalFileName": "deck.pptx", "provider": "<your product>", "model": "<your model>" },
+  "title": "Course title from the title slide",
+  "lessons": [
+    {
+      "title": "1. First section title",
+      "blocks": [
+        {
+          "intent": { "kind": "text", "heading": "Welcome", "paragraphs": ["<p>Exact text from the slide.</p>"] },
+          "sourceRef": { "label": "Slide 2", "slideNo": 2, "excerpt": "Exact text from the slide." },
+          "notes": []
+        },
+        {
+          "intent": { "kind": "knowledge-check", "intro": [], "questions": [ {
+            "stem": "<p>Question exactly as slide 4 asks it?</p>",
+            "options": [
+              { "text": "Answer the slide marks correct", "correct": true },
+              { "text": "Distractor from the slide", "correct": false }
+            ] } ] },
+          "sourceRef": { "label": "Slide 4", "slideNo": 4, "excerpt": "Question exactly as slide 4 asks it?" },
+          "notes": []
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "unresolved": [
+    {
+      "sourceRef": { "label": "Slide 5 (architecture diagram)", "slideNo": 5, "excerpt": "diagram with 6 labeled parts" },
+      "reason": "Diagram cannot be represented in the supported blocks; needs manual authoring."
+    }
+  ],
+  "production": [
+    {
+      "kind": "narration",
+      "lesson": "1. First section title",
+      "sourceRef": { "label": "Slide 3 speaker notes", "slideNo": 3, "excerpt": "VO: welcome the learner" },
+      "text": "Voice-over script taken from the speaker notes."
+    }
+  ]
+}`;
 
 /** Build the copyable prompt; `deckInstructions` is the operator's per-deck note. */
 export function creatorPrompt(deckInstructions?: string): string {
@@ -25,12 +78,16 @@ export function creatorPrompt(deckInstructions?: string): string {
 
 - Use the source text AS WRITTEN. Do not invent, embellish, or rephrase unless absolutely necessary to make a block work.
 - Any block whose text you invented or rephrased MUST carry "origin": "suggested". Blocks taken from the source as written carry no origin field (or "origin": "source").
+- What counts as rephrasing: CHANGING, adding, or paraphrasing words is "suggested". Recombining source strings without changing their wording — merging sibling text boxes into one paragraph, bolding a lead-in, joining a label with its caption — is formatting, NOT "suggested".
 - NEVER invent facts, quiz answers, dates, captions, alt text, or attributions.
-- A quiz question is only valid if the source clearly evidences which answer is correct. If it does not, put the question into "unresolved" instead of guessing.
-- Comments and speaker notes written by the author about WHICH BLOCK TO USE (e.g. "make this an accordion") are BINDING instructions. If such a directive names something unsupported, emit the closest placeholder block and record the problem in "unresolved" — never approximate silently.
+- A quiz question is only valid if the source clearly evidences which answer is correct. If it does not, put the question into "unresolved" instead of guessing. If the source evidences NO quiz at all, emit ZERO "knowledge-check" blocks — do not add practice questions on your own.
+- Author DIRECTIVES may appear ANYWHERE in the source: small on-slide label boxes naming a block type (e.g. a colored box saying "Tabs" or "Flipcards"), speaker notes, or comments. A directive is a BINDING instruction naming the block to use; the label box itself is an instruction, never content to place. Map directive wording through the alias table below.
+- SPEAKER NOTES have NO fixed role — never assume they are guidance. Classify each note by what it actually contains: a block directive (binding, see above); narration / voice-over / filming script (goes to "production", never into course content); substantive content that the slide itself lacks (treat as source content and cite the note in sourceRef); or irrelevant working remarks (ignore).
+- COMMENTS: an open/unaddressed comment is never content — record it in "unresolved" (include the author in sourceRef.label). A resolved comment is ignored, UNLESS its content never made it onto the slide — then treat it as source content and cite the comment in sourceRef.
+- CONTRADICTIONS: when slide text, speaker notes, and comments disagree (different counts, different dates, a heading that says "four" above a list of five), use the slide text for the block and record the discrepancy in "unresolved". Never silently pick one version or reconcile them yourself.
 - Material you cannot place (unsupported media, illegible diagrams, ambiguous fragments) goes into "unresolved" with the reason. Nothing may be silently dropped.
-- Narration / voice-over / filming scripts are NOT course content: put them into "production" entries.
 - Images and binary media cannot travel through this chat: "assets" must stay []. Where an image or video is essential, use a placeholder block and add an "unresolved" entry describing it.
+- TITLES: the course title comes from the title slide (or the file name if there is none). Lesson titles come from section-divider / agenda text. When you must derive a title because the source names none, keep it short, in the source language, and add the note "title derived — no title in source" to that lesson's first block (titles have no origin field).
 
 ## Blueprint schema
 
@@ -46,11 +103,19 @@ Top level:
   "production": [ { "kind": "narration", "lesson": "<lesson title>", "sourceRef": <sourceRef>, "text": "<narration text>" } ]
 }
 
-Every block:
-{ "intent": <intent>, "sourceRef": <sourceRef>, "notes": ["<remark for the reviewer>"], "origin": "source" | "suggested" (optional) }
+"production[].kind" is ALWAYS the literal "narration" — no other value exists.
+
+Every block is an object whose block-type fields live INSIDE the "intent" OBJECT — "intent" is never a string label. Worked example of one complete block:
+
+{
+  "intent": { "kind": "text", "heading": "Welcome", "paragraphs": ["<p>Exact source text.</p>"] },
+  "sourceRef": { "label": "Slide 7", "slideNo": 7, "excerpt": "Exact source text." },
+  "notes": [],
+  "origin": "source"
+}
 
 Every sourceRef (provenance — required on every block, unresolved item, and production item):
-{ "label": "<human-readable location, e.g. 'Slide 7'>", "slideNo": <number or null>, "excerpt": "<short verbatim snippet of the source element>" }
+{ "label": "<human-readable location, e.g. 'Slide 7' or 'Slide 7, comment by J. Doe'>", "slideNo": <number or null>, "excerpt": "<short verbatim snippet of the source element, at most ~200 characters>" }
 
 Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, <i>, <a href>, <ul>, <ol>, <li>, <br>. Paragraph-level HTML fields are strings like "<p>…</p>". No other tags, no style attributes, no event handlers.
 
@@ -72,15 +137,39 @@ Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, 
 14. "attachment-placeholder" — where a downloadable file belongs. { "kind": "attachment-placeholder", "label": "<file and purpose>" }.
 15. "continue" — a "continue" gate button between sections. { "kind": "continue", "label": "<button text>" }.
 
+## Directive alias table (authors write Rise's UI names — map them)
+
+- paragraph / heading / heading and paragraph / subheading / text on image → "text"
+- statement (A/B/C/D) / note / callout → "note"
+- bulleted list / checkbox list → "list" with "ordered": false; numbered list → "list" with "ordered": true
+- accordion → "accordion" · tabs → "tabs"
+- flipcards / flip cards / flashcard grid / flashcard stack → "flashcards"
+- process → "process" · timeline → "timeline" · sorting activity → "sorting"
+- quote / quote carousel → "text" (attribution stays in the paragraph text)
+- button / button stack / links / resources → "links"
+- continue / divider → "continue"
+- multiple choice / multiple response / quiz / knowledge check → "knowledge-check" (only with evidenced answers)
+- video / embed → "video-placeholder" · attachment / download → "attachment-placeholder"
+- storyline / mighty / scenario / labeled graphic / matching / fill-in-the-blank / any interactive not listed above → "storyline-placeholder"
+- image / image and text / image centered / gallery / images with notes → "text" carrying the text content, plus an "unresolved" entry for the visual part
+
+A directive NOT in this table: use the nearest listed block that can carry the TEXT, add a block note naming the original directive verbatim, and add an "unresolved" entry if any part (visuals, interaction) cannot be represented. Never bury source text inside a placeholder label — placeholders are only for video, attachments, and interactives.
+
 ## Shaping heuristics
 
 - Reason from MEANING and visual grouping, not from slide mechanics. A slide is NOT automatically one block, and NOT automatically one lesson.
-- Section dividers / agenda slides usually mark lesson boundaries. Aim for lessons a learner finishes in a few minutes.
+- Section dividers / agenda slides usually mark lesson boundaries. Aim for roughly 3–10 blocks per lesson; split or merge slides freely to get there.
 - heading + prose → text; parallel explanatory concepts → tabs or accordion; short recall pairs → flashcards; ordered actions → process; dated events → timeline; classification exercise → sorting; explicit evidenced question/answer → knowledge-check; key warning/takeaway → note; external references → links.
 - Decorative elements (logos, page numbers, backgrounds) are ignored — do not report them.
 - Prefer fewer, well-chosen blocks over exhaustive slide-by-slide transcription of layout junk.
 
-Before answering, verify: every block has a sourceRef with a real slide/page reference; every invented or rephrased text is marked "origin": "suggested"; "assets" is []; nothing from the source is silently missing (used, in unresolved, or in production).${
+## Complete worked example (one lesson — yours will have more)
+
+\`\`\`json
+${PROMPT_EXAMPLE_BLUEPRINT}
+\`\`\`
+
+Before answering, verify: every block has a sourceRef with a real slide/page reference; every invented or rephrased text is marked "origin": "suggested"; every directive was mapped through the alias table; open comments and contradictions are in "unresolved"; there are no knowledge checks the source does not evidence; "assets" is []; nothing from the source is silently missing (used, in unresolved, or in production).${
     extra
       ? `
 
