@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { buildPlan } from '@/core/import';
-import { assertCleanDocument, buildArchiveCourse } from './archive';
-import type { Mints } from './map';
-import { StoryboardError, type PlannedCourse } from './types';
+import type { Mints } from '@/core/storyboard/map';
+import {
+  COURSE_BLUEPRINT_FORMAT,
+  COURSE_BLUEPRINT_VERSION,
+  type CourseBlueprint,
+} from './blueprint/types';
+import { assertCleanDocument, compileCourseBlueprint } from './compiler';
+import { StoryboardError } from './errors';
+import { goldenBlueprint } from './golden-blueprint.fixture';
 
 function mints(): Mints {
   let c = 0;
@@ -13,23 +19,28 @@ function mints(): Mints {
   };
 }
 
-const PROV = (slideNo: number) => ({
-  slideNo,
-  tableRow: slideNo,
-  experience: 'Teksts',
-  comments: '',
-  rawScreenText: 'x',
-});
+const REF = (slideNo: number) => ({ label: `Slide ${slideNo}`, slideNo, excerpt: 'x' });
 
-function planned(): PlannedCourse {
+function minimal(): CourseBlueprint {
   return {
+    format: COURSE_BLUEPRINT_FORMAT,
+    formatVersion: COURSE_BLUEPRINT_VERSION,
+    source: { kind: 'ai-provider', originalFileName: 'deck.pptx' },
     title: '1.1. Testa kurss',
     lessons: [
       {
         title: 'Tēma 1',
         blocks: [
-          { intent: { kind: 'text', heading: 'H', paragraphs: ['<p>a</p>'] }, provenance: PROV(1), notes: [] },
-          { intent: { kind: 'video-placeholder', label: 'Video (~3 min)' }, provenance: PROV(2), notes: [] },
+          {
+            intent: { kind: 'text', heading: 'H', paragraphs: ['<p>a</p>'] },
+            sourceRef: REF(1),
+            notes: [],
+          },
+          {
+            intent: { kind: 'video-placeholder', label: 'Video (~3 min)' },
+            sourceRef: REF(2),
+            notes: [],
+          },
         ],
       },
       {
@@ -39,24 +50,38 @@ function planned(): PlannedCourse {
             intent: {
               kind: 'knowledge-check',
               intro: [],
-              questions: [{ stem: '<p>q</p>', options: [{ text: 'a', correct: true }, { text: 'b', correct: false }] }],
+              questions: [
+                {
+                  stem: '<p>q</p>',
+                  options: [
+                    { text: 'a', correct: true },
+                    { text: 'b', correct: false },
+                  ],
+                },
+              ],
             },
-            provenance: PROV(3),
+            sourceRef: REF(3),
             notes: [],
           },
         ],
       },
     ],
-    unparsed: [],
+    assets: [],
+    unresolved: [],
     production: [
-      { lesson: 'Tēma 1', slideNo: 2, experience: 'Video (~3 min)', audioText: 'Runas teksts.' },
+      {
+        kind: 'narration',
+        lesson: 'Tēma 1',
+        sourceRef: { label: 'Slide 2', slideNo: 2, excerpt: 'Video (~3 min)' },
+        text: 'Runas teksts.',
+      },
     ],
   };
 }
 
-describe('buildArchiveCourse', () => {
+describe('compileCourseBlueprint', () => {
   it('emits a {course, lessons} body the import can read, with clean synthetic ids', () => {
-    const built = buildArchiveCourse(planned(), '2026-08-10T00:00:00Z', mints(), () => 'cXcourse');
+    const built = compileCourseBlueprint(minimal(), '2026-08-16T00:00:00Z', mints(), () => 'cXcourse');
     expect(built.courseId).toBe('sb-cXcourse');
     const doc = JSON.parse(built.raw);
     expect(doc.course).toMatchObject({ id: 'sb-cXcourse', title: '1.1. Testa kurss', type: null });
@@ -73,20 +98,24 @@ describe('buildArchiveCourse', () => {
   });
 
   it('writes the production report grouped by lesson with slide numbers', () => {
-    const built = buildArchiveCourse(planned(), '2026-08-10T00:00:00Z', mints());
+    const built = compileCourseBlueprint(minimal(), '2026-08-16T00:00:00Z', mints());
     expect(built.productionMd).toContain('## Tēma 1');
     expect(built.productionMd).toContain('### Slaids 2 — Video (~3 min)');
     expect(built.productionMd).toContain('Runas teksts.');
   });
 
   it('records per-block provenance in the plan artifact', () => {
-    const built = buildArchiveCourse(planned(), '2026-08-10T00:00:00Z', mints());
+    const built = compileCourseBlueprint(minimal(), '2026-08-16T00:00:00Z', mints());
     const plan = JSON.parse(built.planJson);
-    expect(plan.blocks.some((b: { slideNo: number; kind: string }) => b.slideNo === 3 && b.kind === 'knowledge-check')).toBe(true);
+    expect(
+      plan.blocks.some(
+        (b: { slideNo: number; kind: string }) => b.slideNo === 3 && b.kind === 'knowledge-check',
+      ),
+    ).toBe(true);
   });
 
   it('feeds the EXISTING import planner without a forked path (buildPlan accepts it)', () => {
-    const built = buildArchiveCourse(planned(), '2026-08-10T00:00:00Z', mints());
+    const built = compileCourseBlueprint(minimal(), '2026-08-16T00:00:00Z', mints());
     const doc = JSON.parse(built.raw);
     const steps = buildPlan({
       course: doc,
@@ -104,10 +133,73 @@ describe('buildArchiveCourse', () => {
     }
   });
 
-  it('refuses an empty plan', () => {
-    expect(() =>
-      buildArchiveCourse({ title: 'x', lessons: [], unparsed: [], production: [] }, 't', mints()),
-    ).toThrow(StoryboardError);
+  it('refuses an empty course', () => {
+    expect(() => compileCourseBlueprint({ ...minimal(), lessons: [] }, 't', mints())).toThrow(
+      StoryboardError,
+    );
+  });
+
+  it('refuses provider-returned assets until a local-asset adapter exists', () => {
+    const bp = minimal();
+    bp.assets = [{ kind: 'local-asset', path: 'assets/x.png' } as never];
+    expect(() => compileCourseBlueprint(bp, 't', mints())).toThrow(/local assets/);
+  });
+
+  it('is loud when per-answer KC feedback is dropped (no donor slot yet)', () => {
+    const bp = minimal();
+    const kc = bp.lessons[1]!.blocks[0]!;
+    if (kc.intent.kind === 'knowledge-check') {
+      kc.intent.questions[0]!.options[0]!.feedback = 'Correct — well done.';
+    }
+    const built = compileCourseBlueprint(bp, 't', mints());
+    expect(built.notes.some((n) => /per-answer feedback/.test(n))).toBe(true);
+  });
+});
+
+describe('compileCourseBlueprint — golden fixture (every intent kind)', () => {
+  it('compiles the golden blueprint clean and passes assertCleanDocument', () => {
+    const built = compileCourseBlueprint(goldenBlueprint(), '2026-08-16T00:00:00Z', mints());
+    const doc = JSON.parse(built.raw);
+    expect(() => assertCleanDocument(doc)).not.toThrow();
+    expect(built.lessonCount).toBe(3);
+    expect(built.blockCount).toBeGreaterThan(15);
+
+    // Every fixture intent kind is recorded in the plan artifact.
+    const plan = JSON.parse(built.planJson);
+    const kinds = new Set(plan.blocks.map((b: { kind: string }) => b.kind));
+    for (const kind of [
+      'text',
+      'list',
+      'accordion',
+      'tabs',
+      'flashcards',
+      'process',
+      'timeline',
+      'sorting',
+      'knowledge-check',
+      'note',
+      'links',
+      'video-placeholder',
+      'storyline-placeholder',
+      'continue',
+      'attachment-placeholder',
+    ]) {
+      expect(kinds.has(kind), `kind "${kind}" missing from plan records`).toBe(true);
+    }
+
+    // The pasted blueprint (incl. origin marks) persists verbatim in the plan.
+    expect(plan.blueprint.lessons[1].blocks.at(-1).origin).toBe('suggested');
+  });
+
+  it('golden fixture still feeds the import planner', () => {
+    const built = compileCourseBlueprint(goldenBlueprint(), '2026-08-16T00:00:00Z', mints());
+    const steps = buildPlan({
+      course: JSON.parse(built.raw),
+      assets: [],
+      banksById: new Map(),
+      author: 'test-author',
+    });
+    expect(steps.map((s) => s.kind)).toContain('create-course');
   });
 });
 
@@ -173,7 +265,13 @@ describe('assertCleanDocument', () => {
             id: 'l',
             type: 'blocks',
             items: [
-              { id: 'b', type: 'text', family: 'text', variant: 'paragraph', items: [{ id: 'i', paragraph: { l10nId: 'x' } }] },
+              {
+                id: 'b',
+                type: 'text',
+                family: 'text',
+                variant: 'paragraph',
+                items: [{ id: 'i', paragraph: { l10nId: 'x' } }],
+              },
             ],
           },
         ],

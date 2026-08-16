@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BuiltCourse } from '@/core/storyboard';
+import type { BuiltCourse } from '@/core/creator/compiler';
 import type { Storage } from '@/core/storage/storage';
 import { inspectLocalArchive } from '@/core/local-archive';
 import { readCreatorBuildWarning, writeBuiltCourse } from './write';

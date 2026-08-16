@@ -4,7 +4,7 @@
 // an interrupted build is visible on the next attempt.
 
 import { buildCourseEntry, createManifestV1 } from '@/core/local-archive';
-import type { BuiltCourse } from '@/core/storyboard';
+import type { BuiltCourse } from '@/core/creator/compiler';
 import type { Storage } from '@/core/storage/storage';
 
 const BUILD_LOCK = 'build.lock';

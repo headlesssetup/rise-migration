@@ -19,7 +19,7 @@ import {
   type MappedBlockRecord,
   type Mints,
 } from '@/core/storyboard/map';
-import { StoryboardError } from '@/core/storyboard/types';
+import { StoryboardError } from '@/core/creator/errors';
 import type { GetCourseDocument, Lesson } from '@/shared/types/rise';
 
 export interface BuiltCourse {

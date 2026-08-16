@@ -1,7 +1,20 @@
-# Rise Creator AI pipeline design (deferred after v0.8.0)
+# Rise Creator AI pipeline design
 
-This document records the agreed boundary for later general conversion. It is
-not part of the v0.8.0 implementation.
+> **STATUS (2026-08-16): the CHAT-PASTE mode of this design is IMPLEMENTED.**
+> The Rise Creator page (`entrypoints/creator/`) ships the copyable prompt pack
+> (`core/creator/prompt.ts`), strict closed-schema validation of pasted
+> blueprint JSON (`core/creator/blueprint/validate.ts` — unknown fields/kinds
+> fail, path-addressed errors, a copy-back error report as the manual repair
+> pass), the pseudo-Rise preview as the operator gate, and the deterministic
+> compiler → standard Import. Blueprint v1 gained `origin: 'source'|'suggested'`
+> on blocks: the provider must mark invented/rephrased text and the preview
+> badges it. The **API mode** (provider called programmatically, binary asset
+> return, automated repair) **remains deferred** — everything below still
+> governs it. The SD-docx → Rise parser was DROPPED the same day (client docx
+> is too unreliable as deterministic input without an AI cleanup stage), so
+> this pipeline is the only doc → Rise route.
+
+This document records the agreed boundary for general conversion.
 
 ## Provider input
 

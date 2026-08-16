@@ -99,6 +99,10 @@ export interface BlueprintBlock {
   intent: BlockIntent;
   sourceRef: BlueprintSourceRef;
   notes: string[];
+  /** Content fidelity. Absent or 'source' = taken from the source document as
+   *  written; 'suggested' = invented or rephrased by the provider and must be
+   *  visibly distinguished for review (docs/creator-ai-design.md). */
+  origin?: 'source' | 'suggested';
 }
 
 export interface BlueprintLesson {

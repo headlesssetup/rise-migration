@@ -1,5 +1,18 @@
 # Storyboard → Rise: build plan
 
+> **STATUS (2026-08-16): the SD-docx → Rise direction is DROPPED.** Operator
+> decision: client docx is too unreliable to serve as deterministic input
+> without an AI cleanup stage. Doc → Rise now goes exclusively through the
+> Creator AI-paste flow (`docs/creator-ai-design.md`): external AI chat →
+> Course Blueprint JSON → validate → preview → compile. The SD parser
+> (`parse.ts`, `to-blueprint.ts`, `archive.ts`, the `Planned*` types) was
+> deleted; `map.ts` lives on as the Creator compiler's donor mapper, and
+> `docx.ts`/`xml.ts` remain as the SBDOC docx-writer's round-trip test oracle.
+> The EXPORT direction (course → SBDOC/prose docx,
+> `docs/rise-storyboard-format.md`) is unaffected. This document is kept for
+> history — the SD conventions below still describe the INTEA format and remain
+> useful prompt/vocabulary background.
+
 > **STATUS (2026-08-10): phases 1–4 BUILT** (`core/storyboard/` + review tab
 > `entrypoints/storyboard/` + panel button; 686 tests green, extension builds).
 > Verified against the real VAS SD: **44 of 45 rows parse** into 73 blocks
