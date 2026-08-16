@@ -78,6 +78,7 @@ import {
   type StorylineExportSummary,
 } from './orchestrator';
 import { rpc } from './rpc';
+import { FolderControls } from './components/FolderControls';
 
 type DirPicker = (opts?: {
   mode?: 'read' | 'readwrite';
@@ -787,19 +788,20 @@ export function App() {
           {sessionError && (
             <p className="hint" style={{ color: '#c00' }}>⚠ {sessionError}</p>
           )}
-          {!storage && !pendingHandle && (
-            <section className="card">
-              <button onClick={pickFolder}>Pick archive folder…</button>
-            </section>
-          )}
-          {pendingHandle && !storage && (
-            <section className="card">
-              <p className="hint">
-                Folder remembered but needs access —{' '}
-                <button onClick={reconnectFolder}>Reconnect: {pendingHandle.name}</button>
-              </p>
-            </section>
-          )}
+          <section className="card">
+            <p className="hint">
+              Archive folder: <b>{folderName ?? 'not connected'}</b>
+            </p>
+            <FolderControls
+              folderName={folderName}
+              pendingName={pendingHandle?.name ?? null}
+              connected={!!storage}
+              busy={busy}
+              onPick={() => void pickFolder()}
+              onReconnect={() => void reconnectFolder()}
+              onForget={() => void forgetFolder()}
+            />
+          </section>
           <TaskHome
             session={session}
             storage={storage}
@@ -840,22 +842,15 @@ export function App() {
             onRefreshCount={refreshCount}
             refreshDisabled={busy}
           />
-          <div className="row" style={{ marginTop: 6 }}>
-            <button onClick={pickFolder} disabled={busy}>
-              {folderName ? `Folder: ${folderName}` : 'Pick folder…'}
-            </button>
-            {folderName && (
-              <button onClick={forgetFolder} disabled={busy}>
-                Forget
-              </button>
-            )}
-          </div>
-          {pendingHandle && (
-            <p className="hint">
-              Folder remembered but needs access —{' '}
-              <button onClick={reconnectFolder}>Reconnect</button>
-            </p>
-          )}
+          <FolderControls
+            folderName={folderName}
+            pendingName={pendingHandle?.name ?? null}
+            connected={!!storage}
+            busy={busy}
+            onPick={() => void pickFolder()}
+            onReconnect={() => void reconnectFolder()}
+            onForget={() => void forgetFolder()}
+          />
           {!ready && setupNeeds.length > 0 && (
             <p className="hint">To continue: {setupNeeds.join(' · ')}.</p>
           )}
