@@ -110,6 +110,8 @@ export interface ManualFlag {
    *  manual-work resolver keys locations by lessonId+blockId when present. */
   sourceLessonId?: string;
   sourceKey?: string;
+  /** An intentional donor substitution whose type-change parity is expected. */
+  expectedReplacement?: 'legacy-storyline';
   detail: string;
 }
 

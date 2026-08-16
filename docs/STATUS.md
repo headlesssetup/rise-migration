@@ -382,7 +382,7 @@ unverified rewrite) — the flags make it visible. `core/import/builtin-assets.t
   ("per-pipeline sequential, max 2 pipelines") + a re-entrant executor/
   orchestrator (separate locks, shared token heartbeat, per-course logs).
 
-## Phase 5 — Storyline/Mighty end-to-end (Stage D): BUILT, needs live verification
+## Phase 5 — Storyline/Mighty end-to-end (Stage D): BUILT; modern path live-verified
 
 **This supersedes the old "placeholders only / never touch Review 360" policy**
 (CLAUDE.md is updated). Storyline + Mighty blocks now migrate for real:
@@ -418,13 +418,21 @@ SW finishes update/upload/poll); `createdAt` must be threaded through, since
 option would inflate only the wanted leaves + `runtime-data.js`; a side-effecting
 filter can still record the full inventory for the mismatch diagnostic.
 
-**Legacy Storyline capture TODO (2026-08-15):** the first 153-course account run
-completed 101 courses and failed 52: 51 packages contained a legacy Storyline
-3.9/3.26–3.34 router shell, while one unrelated `build/raw` call returned 404.
-The current web→Review transform was proven only against a modern 3.95 donor;
-3.42+ controls pass, but the legacy shell has no player-interface/`<!-- 360 -->`
-hook. Do not guess or weaken the assertion. Capture plan and implementation gate:
-`docs/rise-capture-plan-storyline-legacy.md`.
+**Legacy Storyline policy (2026-08-16):** the first large account run exposed
+the old 3.9/3.26–3.34 router packages. Manual Review uploads of representative
+3.42 and 3.48 packages then completed create + S3 transfer but ended in the
+backend state `unpackFailed` (`capture-editing-20260816-zip-uploads.mitm`). The
+extension therefore classifies Storyline 360 update **3.48 and earlier** as the
+known legacy generation; missing/unfamiliar versions are never guessed. Legacy
+entries remain in the per-course manifest for reporting, are excluded from the
+Review upload work-list even when an old staged ZIP/upload record exists, and
+add an `importability` comment to the course inventory. Import never feeds them
+to `copy_review_item`: a monolingual legacy block becomes a donor-backed visible
+text placeholder (“Legacy Storyline block, requires manual review”) plus a
+manual-work flag. The operator must open the original `.story` project in a
+current Storyline, publish it to Review 360, then replace/attach manually. The
+automatic path for non-legacy packages is unchanged. The original experiment
+plan remains in `docs/rise-capture-plan-storyline-legacy.md` as provenance.
 
 ## Full-codebase audit (2026-07-31): findings fixed
 
@@ -559,28 +567,39 @@ from the public CDN and stored content-addressed.
   (assertion: every collected key resolves to a stored asset) + `isOrphanStatus`
   (403/404 ⇒ missing at source). `core/assets/locate.ts` resolves a key's JSON
   path → `lessonTitle / family/variant / blockId` so a missing asset is findable.
+- Capture reconciliation (2026-08-16): archive completeness is based on active
+  rendering media. Distinct pre-transcode `inputKey` values, `media.tmp`, nested
+  `originalImage`, and the unselected `key`/`crushedKey` image variant are typed
+  as optional authoring provenance. They are still downloaded when reachable;
+  terminal 403/404 is reported separately as `optionalUnavailable`, not as a
+  broken course asset. Import explicitly blanks an unavailable optional key so
+  the no-source-key invariant remains absolute. Any active occurrence promotes
+  the same key back to required. Whole transformed image URLs are parsed with
+  `URL.pathname`, preserving filenames such as `Video (1).mp4`.
 - Panel: `orchestrator/assets.ts` (`cdnDownload` tries the encoding variants +
   retries transient 429/5xx; `downloadAllAssets` resumes incomplete owners and
-  splits failures into `orphaned` (403/404 — missing at source, tagged with
-  course title + location) vs retryable) + the "Assets (Phase 2)" card.
+  splits failures into active `orphaned`, `optionalUnavailable`, and retryable,
+  each tagged with course title + location) + the "Assets (Phase 2)" card.
 
 **Resume:** re-running "Download assets" skips owners whose manifest is already
 complete, reuses successful keys for incomplete ones, and retries only the
 failures — so a re-run is cheap and self-healing. (Audit-hardened: a `complete`
 skip is honored only if the current key scan is fully covered by the manifest AND
 every stored blob still exists — otherwise the owner re-runs, reusing prior keys.
-That is what lets a key-detection fix reach already-"complete" owners.) (An early full-library run hit
-1,498 failures from a `)`-truncation + double-encoding bug, since fixed; the
-~500 residual were all **403/AccessDenied = deleted at source** — S3 returns 403
-for absent keys on a bucket without public `ListBucket` — now classified as
-`orphaned`, not failures.)
+That is what lets a key-detection or policy fix reach already-"complete" owners.)
+On resume, legacy manifests are reclassified from the saved course document and
+rewritten without re-fetching intact blobs. The 2026-08-16 full-library review
+classified all 554 warnings: 396 superseded `inputKey` sources, 120 `media.tmp`
+refs, 22 `originalImage` refs, 13 inactive image variants, and 3 parser artifacts.
+The two editor captures requested every corresponding active asset successfully;
+none of the 554 represented missing active rendering media.
 
 **Archive layout (new):**
 - `assets/<sha256>.<ext>` — content-addressed media bytes, deduped across the run.
 - `courses/<id>.assets.json` / `question-banks/<id>.assets.json` — per-owner
   manifest mapping keys → `{hash, ext, file, size}` (sha256 = checksum).
-- `assets-summary.json` — run-wide totals (written/deduped/failed) + the
-  un-downloaded-key assertion result.
+- `assets-summary.json` — run-wide totals (written/deduped/failed) plus active
+  unavailable, optional unavailable, and retryable owner/key lists.
 
 **Locked decisions (as built):** content-addressed dedup; parallel pool (~4), no
 human-pacing (CDN is public-read, outside the authoring-API pacing invariant);

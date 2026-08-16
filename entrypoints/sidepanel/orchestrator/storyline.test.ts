@@ -6,6 +6,7 @@ import {
   isAuthError,
   MAX_UPLOAD_ZIP_BYTES,
   scanSavedCoursesForStoryline,
+  updateStorylineImportability,
   uploadStorylineToReview360,
 } from './storyline';
 import type { ProgressEvent } from './shared';
@@ -37,6 +38,35 @@ const COURSE_DOC = {
     },
   ],
 };
+
+function courseWithVersions(
+  entries: Array<{ blockId: string; leaf: string; version: string }>,
+) {
+  return {
+    course: { id: 'C1', title: 'Versioned' },
+    lessons: [
+      {
+        id: 'les_1',
+        items: entries.map((entry) => ({
+          id: entry.blockId,
+          family: '360',
+          variant: 'storyline',
+          items: [
+            {
+              id: `item_${entry.blockId}`,
+              media: {
+                storyline: {
+                  contentPrefix: `rise/courses/C1/${entry.leaf}`,
+                  meta: { version: entry.version },
+                },
+              },
+            },
+          ],
+        })),
+      },
+    ],
+  };
+}
 
 // A web-export zip carrying that leaf's package.
 function webExportZip(): Uint8Array {
@@ -113,6 +143,53 @@ describe('scanSavedCoursesForStoryline — scoped to selection', () => {
   });
 });
 
+describe('Storyline legacy reporting', () => {
+  it('marks the inventory column and clears it again for a checked non-legacy course', async () => {
+    let inventory = JSON.stringify([
+      {
+        id: 'C1',
+        title: 'Versioned',
+        type: 'COURSE',
+        lessonCount: 1,
+        multi_language: '',
+        owner: '',
+        ownerEmail: '',
+        folderId: '',
+        folderPath: '',
+        shareId: '',
+        createdAt: '',
+        updatedAt: '',
+        ready: '',
+        deleted: '',
+      },
+    ]);
+    let csv = '';
+    const store = {
+      readInventory: async () => inventory,
+      writeInventory: async (json: string, nextCsv: string) => {
+        inventory = json;
+        csv = nextCsv;
+      },
+    } as any;
+    const { onEvent } = sink();
+    const base = { courseId: 'C1', title: 'Versioned', blocks: [] };
+    await updateStorylineImportability(
+      store,
+      [{ ...base, legacyBlocks: [{ meta: { version: '3.48.24159.0' } } as any] }],
+      onEvent,
+    );
+    expect(JSON.parse(inventory)[0].importability).toMatch(/legacy Storyline/i);
+    expect(csv.split('\n')[0]).toContain('importability');
+
+    await updateStorylineImportability(
+      store,
+      [{ ...base, legacyBlocks: [] }],
+      onEvent,
+    );
+    expect(JSON.parse(inventory)[0].importability).toBe('');
+  });
+});
+
 describe('exportStorylinePackages', () => {
   it('triggers export, downloads, repackages each leaf, writes a manifest', async () => {
     const { store, zips, manifests } = makeStorage();
@@ -162,6 +239,42 @@ describe('exportStorylinePackages', () => {
     });
     expect(summary).toMatchObject({ packaged: 0, skipped: 1 });
     expect(exportOne).not.toHaveBeenCalled();
+  });
+
+  it('writes a report-only manifest for a legacy package without live export/auth', async () => {
+    const doc = courseWithVersions([
+      { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
+    ]);
+    const manifests = new Map<string, string>();
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+    } as any;
+    const { onEvent } = sink();
+    const exportOne = vi.fn();
+    const refresh = vi.fn();
+    const resolvePin = vi.fn();
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne,
+      refresh,
+      pinTab: resolvePin,
+    });
+    expect(summary).toMatchObject({
+      courses: 1,
+      packaged: 0,
+      skipped: 1,
+      failed: 0,
+      legacySkipped: 1,
+    });
+    expect(exportOne).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(resolvePin).not.toHaveBeenCalled();
+    expect(JSON.parse(manifests.get('C1')!).blocks[0]).toMatchObject({
+      leaf: 'OLD',
+      compatibility: 'legacy-unsupported',
+    });
   });
 
   it('aborts up-front (attempts nothing) when the token cannot be refreshed', async () => {
@@ -354,6 +467,47 @@ describe('uploadStorylineToReview360 — scoped to selection (M16)', () => {
     });
     expect(summary).toMatchObject({ courses: 2, uploaded: 2 });
     expect(uploadOne).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('uploadStorylineToReview360 — legacy exclusion', () => {
+  it('does not retrigger an old 3.48 manifest but still uploads a 3.49 package', async () => {
+    const doc = courseWithVersions([
+      { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
+      { blockId: 'new', leaf: 'NEW', version: '3.49.24347.0' },
+    ]);
+    let manifest = JSON.stringify({
+      courseId: 'C1',
+      title: 'Versioned',
+      blocks: [
+        { blockId: 'old', leaf: 'OLD', meta: { version: '3.48.24159.0' } },
+        { blockId: 'new', leaf: 'NEW', meta: { version: '3.49.24347.0' } },
+      ],
+    });
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async () => manifest,
+      writeStorylineManifest: async (_id: string, json: string) => void (manifest = json),
+      readStorylineZip: async (_id: string, leaf: string) =>
+        leaf === 'NEW' ? new Uint8Array([1, 2, 3]) : null,
+    } as any;
+    const { onEvent } = sink();
+    const uploadOne = vi.fn(async (_args: { fileName: string }) => ({
+      ok: true as const,
+      itemId: 'new-item',
+      contentPrefix: 'review/items/NEW',
+    }));
+    const summary = await uploadStorylineToReview360(store, onEvent, {
+      uploadOne,
+      refresh: vi.fn(),
+      pinTab,
+      pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ uploaded: 1, failed: 0, legacySkipped: 1 });
+    expect(uploadOne).toHaveBeenCalledTimes(1);
+    expect(uploadOne.mock.calls[0]![0].fileName).toBe('NEW.zip');
+    expect(JSON.parse(manifest).uploads.OLD).toBeUndefined();
   });
 });
 

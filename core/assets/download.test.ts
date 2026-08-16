@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  collectAssetKeys,
   downloadAssetsFor,
   downloadKeyList,
   findUndownloadedKeys,
@@ -348,6 +349,38 @@ describe('downloadAssetsFor', () => {
     expect(stats.failed).toBe(0);
     expect(manifest.complete).toBe(true);
     expect(manifest.orphanCount).toBe(1);
+  });
+
+  it('records unavailable input source separately from active rendering media', async () => {
+    const sink = memSink();
+    const original = 'rise/courses/c1/original.mp3';
+    const active = 'rise/courses/c1/transcoded.mp3';
+    const { manifest, stats } = await downloadAssetsFor(
+      'course',
+      'c1',
+      { media: { audio: { inputKey: original, key: active } } },
+      sink,
+      fakeDownloader({ [active]: enc('PLAYBACK') }),
+    );
+    expect(stats.orphaned).toBe(0);
+    expect(stats.optionalUnavailable).toBe(1);
+    expect(stats.failed).toBe(0);
+    expect(manifest.orphanCount).toBe(0);
+    expect(manifest.optionalUnavailableCount).toBe(1);
+    expect(manifest.complete).toBe(true);
+    expect(manifest.failed).toEqual([
+      expect.objectContaining({
+        key: original,
+        status: 404,
+        optionalReason: 'input-source',
+      }),
+    ]);
+    expect(
+      findUndownloadedKeys(
+        collectAssetKeys({ media: { audio: { inputKey: original, key: active } } }),
+        manifest,
+      ),
+    ).toEqual([]);
   });
 
   it('emits [i/N assets] progress for every key, in completion order', async () => {

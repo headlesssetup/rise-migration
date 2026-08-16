@@ -25,6 +25,10 @@ function ownerTable(rows: AssetsSummary['orphaned']): React.ReactElement {
 
 export function AssetsView({ summary }: { summary: AssetsSummary }) {
   const orphanCount = summary.orphaned.reduce((n, o) => n + o.keys.length, 0);
+  const optionalCount = (summary.optionalUnavailable ?? []).reduce(
+    (n, o) => n + o.keys.length,
+    0,
+  );
   const failCount = summary.undownloaded.reduce((n, o) => n + o.keys.length, 0);
   return (
     <div className="census">
@@ -35,10 +39,9 @@ export function AssetsView({ summary }: { summary: AssetsSummary }) {
       </p>
       {summary.complete ? (
         <p className="hint">
-          All reachable media downloaded — archive is self-sufficient
           {orphanCount > 0
-            ? ` (${orphanCount} asset(s) missing at source — see below).`
-            : '.'}
+            ? `Export pass complete, but ${orphanCount} active asset(s) are unavailable at source — see below.`
+            : 'All active rendering media resolved — archive is self-sufficient.'}
         </p>
       ) : (
         <p style={{ color: '#b00', fontWeight: 600 }}>
@@ -62,12 +65,23 @@ export function AssetsView({ summary }: { summary: AssetsSummary }) {
       )}
       {summary.orphaned.length > 0 && (
         <>
-          <h3>missing at source (403/404 — likely deleted)</h3>
+          <h3>active media unavailable at source (403/404)</h3>
           <p className="hint">
             Referenced by the course but gone from the CDN — flag for manual
             handling at import. Full list + per-key locations in assets-summary.json.
           </p>
           {ownerTable(summary.orphaned)}
+        </>
+      )}
+      {optionalCount > 0 && (
+        <>
+          <h3>optional source/provenance media unavailable</h3>
+          <p className="hint">
+            These are superseded inputs, temporary media, original crop sources,
+            or inactive image variants. Rise does not use them to render the
+            current course; import removes their stale source keys.
+          </p>
+          {ownerTable(summary.optionalUnavailable)}
         </>
       )}
     </div>

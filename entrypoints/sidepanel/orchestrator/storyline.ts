@@ -17,6 +17,16 @@
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import { findStorylineBlocks, type StorylineBlockRef } from '@/core/storyline/detect';
+import {
+  isKnownLegacyStorylineMeta,
+  LEGACY_STORYLINE_IMPORTABILITY,
+} from '@/core/storyline/compatibility';
+import {
+  inventoryToCsv,
+  inventoryToJson,
+  withImportability,
+  type InventoryRow,
+} from '@/core/census/inventory';
 import { md5Base64, md5Hex } from '@/core/storyline/md5';
 import {
   buildReview360Zip,
@@ -44,6 +54,8 @@ export interface StorylineCourseScan {
   courseId: string;
   title?: string;
   blocks: StorylineBlockRef[];
+  /** Packages in the capture-confirmed legacy-incompatible generation. */
+  legacyBlocks: StorylineBlockRef[];
 }
 
 /** Read `course.title` from a saved doc, tolerant of nesting. */
@@ -85,7 +97,8 @@ export async function scanSavedCoursesForStoryline(
     }
     const blocks = findStorylineBlocks(doc);
     if (blocks.length) {
-      out.push({ courseId, title: courseTitle(doc), blocks });
+      const legacyBlocks = blocks.filter((block) => isKnownLegacyStorylineMeta(block.meta));
+      out.push({ courseId, title: courseTitle(doc), blocks, legacyBlocks });
       onEvent({
         kind: 'log',
         // A STACK yields one ref PER LANGUAGE for the same block (each language
@@ -96,6 +109,9 @@ export async function scanSavedCoursesForStoryline(
           `${new Set(blocks.map((b) => b.blockId)).size} storyline block(s)` +
           (blocks.some((b) => b.locale)
             ? `, ${blocks.filter((b) => b.locale).length} language-specific package(s)`
+            : '') +
+          (legacyBlocks.length
+            ? `; ⚠ ${legacyBlocks.length} legacy package(s) require manual replacement`
             : ''),
       });
     }
@@ -107,15 +123,78 @@ export async function scanSavedCoursesForStoryline(
   return out;
 }
 
+function inventoryRows(raw: string): InventoryRow[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const value = Array.isArray(parsed)
+      ? parsed
+      : (parsed as { items?: unknown } | null)?.items;
+    return Array.isArray(value)
+      ? value.filter(
+          (row): row is InventoryRow =>
+            !!row && typeof row === 'object' && typeof (row as { id?: unknown }).id === 'string',
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Fold the content-aware legacy finding into the general course inventory. */
+export async function updateStorylineImportability(
+  storage: Storage,
+  scans: StorylineCourseScan[],
+  onEvent: (e: ProgressEvent) => void,
+): Promise<void> {
+  if (
+    typeof storage.readInventory !== 'function' ||
+    typeof storage.writeInventory !== 'function'
+  ) return;
+  const raw = await storage.readInventory();
+  if (!raw) return;
+  const rows = inventoryRows(raw);
+  if (!rows.length) return;
+  const existingById = new Map(rows.map((row) => [row.id, row.importability ?? '']));
+  const comments = new Map(
+    scans.map((scan) => {
+      const existing = existingById.get(scan.courseId) ?? '';
+      if (scan.legacyBlocks.length) {
+        return [
+          scan.courseId,
+          existing.includes(LEGACY_STORYLINE_IMPORTABILITY)
+            ? existing
+            : [existing, LEGACY_STORYLINE_IMPORTABILITY].filter(Boolean).join(' | '),
+        ];
+      }
+      return [
+        scan.courseId,
+        existing
+          .replace(` | ${LEGACY_STORYLINE_IMPORTABILITY}`, '')
+          .replace(`${LEGACY_STORYLINE_IMPORTABILITY} | `, '')
+          .replace(LEGACY_STORYLINE_IMPORTABILITY, ''),
+      ];
+    }),
+  );
+  const updated = withImportability(rows, comments);
+  await storage.writeInventory(inventoryToJson(updated), inventoryToCsv(updated));
+  const affected = scans.filter((scan) => scan.legacyBlocks.length).length;
+  onEvent({
+    kind: 'log',
+    message: `Inventory importability updated: ${affected} course(s) flagged for legacy Storyline manual review.`,
+  });
+}
+
 /** One entry in a course's storyline manifest — the import attach join key. */
 export interface StorylineManifestEntry {
   blockId: string;
   lessonId: string;
   itemId?: string;
-  leaf: string;
+  leaf?: string;
   meta?: unknown;
   /** Stored Review-360 upload zip, relative to the archive root. */
-  zip: string;
+  zip?: string;
+  /** Explicit policy result; legacy entries are reports, never upload work. */
+  compatibility?: 'automatic' | 'legacy-unsupported' | 'source-placeholder';
   /** STACK only (docs/rise-multilang.md §4.3b): the language this package
    *  belongs to, and the l10n cell that holds it. One block can have one entry
    *  per language, each with its own leaf. Absent on monolingual courses. */
@@ -128,6 +207,8 @@ export interface StorylineExportSummary {
   packaged: number;
   skipped: number;
   failed: number;
+  /** Individual legacy package refs deliberately not repackaged/uploaded. */
+  legacySkipped: number;
   /** Courses not attempted because the run aborted early (e.g. auth). */
   notAttempted: number;
   /** Set when the run aborted early; the reason (shown to the operator). */
@@ -234,10 +315,71 @@ export async function exportStorylinePackages(
     packaged: 0,
     skipped: 0,
     failed: 0,
+    legacySkipped: 0,
     notAttempted: 0,
     errors: [],
   };
   if (!targets.length) return summary;
+
+  await updateStorylineImportability(storage, targets, onEvent);
+
+  // Resume and known-legacy decisions happen before any live auth/tab work.
+  // A legacy-only selection therefore completes entirely offline.
+  const pending: Array<
+    StorylineCourseScan & { exportableBlocks: StorylineBlockRef[] }
+  > = [];
+  for (const target of targets) {
+    summary.legacySkipped += target.legacyBlocks.length;
+    if (!deps.force && (await storage.readStorylineManifest(target.courseId))) {
+      summary.skipped += 1;
+      onEvent({
+        kind: 'log',
+        message: `${target.title ?? target.courseId}: already exported, skipped`,
+      });
+      continue;
+    }
+    const exportableBlocks = target.blocks.filter(
+      (block) => !!block.leaf && !isKnownLegacyStorylineMeta(block.meta),
+    );
+    if (!exportableBlocks.length) {
+      const entries: StorylineManifestEntry[] = target.blocks.map((block) => ({
+        blockId: block.blockId,
+        lessonId: block.lessonId,
+        itemId: block.itemId,
+        leaf: block.leaf,
+        meta: block.meta,
+        compatibility: isKnownLegacyStorylineMeta(block.meta)
+          ? 'legacy-unsupported'
+          : 'source-placeholder',
+        ...(block.locale ? { locale: block.locale } : {}),
+        ...(block.l10nId ? { l10nId: block.l10nId } : {}),
+      }));
+      await storage.writeStorylineManifest(
+        target.courseId,
+        JSON.stringify(
+          { courseId: target.courseId, title: target.title, blocks: entries },
+          null,
+          2,
+        ),
+      );
+      summary.skipped += 1;
+      onEvent({
+        kind: 'log',
+        message: `${target.title ?? target.courseId}: no automatically transferable Storyline packages; legacy/manual-review manifest written`,
+      });
+      continue;
+    }
+    pending.push({ ...target, exportableBlocks });
+  }
+
+  if (!pending.length) {
+    onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
+    onEvent({
+      kind: 'log',
+      message: `Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged.`,
+    });
+    return summary;
+  }
 
   // Pin the run to ONE Rise tab so the per-course build trigger (an authoring
   // write on the SOURCE course) can't follow window focus onto the other plane
@@ -258,11 +400,11 @@ export async function exportStorylinePackages(
     // The first source course is a safe, capture-confirmed editor route. Passing
     // it removes the old requirement that the operator keep an editor open just
     // to start a long Storyline export from the dashboard.
-    const r = await refresh(pin, targets[0]!.courseId);
+    const r = await refresh(pin, pending[0]!.courseId);
     if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
     if (r && r.valid === false) {
       summary.aborted = 'stale session token';
-      summary.notAttempted = targets.length;
+      summary.notAttempted = pending.length;
       onEvent({
         kind: 'log',
         message:
@@ -275,24 +417,18 @@ export async function exportStorylinePackages(
   }
 
   const runStart = Date.now();
-  for (let i = 0; i < targets.length; i++) {
-    const { courseId, title, blocks } = targets[i]!;
-    const label = `[${i + 1}/${targets.length}]`;
-    onEvent({ kind: 'course', index: i, total: targets.length, courseId, title });
+  for (let i = 0; i < pending.length; i++) {
+    const { courseId, title, blocks, exportableBlocks } = pending[i]!;
+    const label = `[${i + 1}/${pending.length}]`;
+    onEvent({ kind: 'course', index: i, total: pending.length, courseId, title });
     onEvent(
       etaStatus({
-        label: `Exporting ${i + 1}/${targets.length}`,
-        doneFraction: i / targets.length,
+        label: `Exporting ${i + 1}/${pending.length}`,
+        doneFraction: i / pending.length,
         runStartMs: runStart,
         nowMs: Date.now(),
       }),
     );
-
-    if (!deps.force && (await storage.readStorylineManifest(courseId))) {
-      summary.skipped += 1;
-      onEvent({ kind: 'log', message: `${label} ${title ?? courseId}: already exported, skipped` });
-      continue;
-    }
 
     if (i > 0) await pacedDelay(pacing); // pace between course builds (authoring write)
 
@@ -320,9 +456,22 @@ export async function exportStorylinePackages(
       }
 
       // Repackage each storyline block's leaf into a Review-360 upload zip.
-      const entries: StorylineManifestEntry[] = [];
+      const entries: StorylineManifestEntry[] = blocks
+        .filter((block) => isKnownLegacyStorylineMeta(block.meta) || !block.leaf)
+        .map((block) => ({
+          blockId: block.blockId,
+          lessonId: block.lessonId,
+          itemId: block.itemId,
+          leaf: block.leaf,
+          meta: block.meta,
+          compatibility: isKnownLegacyStorylineMeta(block.meta)
+            ? 'legacy-unsupported'
+            : 'source-placeholder',
+          ...(block.locale ? { locale: block.locale } : {}),
+          ...(block.l10nId ? { l10nId: block.l10nId } : {}),
+        }));
       const leavesDone = new Set<string>();
-      for (const b of blocks) {
+      for (const b of exportableBlocks) {
         const where = b.locale ? `block ${b.blockId} [${b.locale}]` : `block ${b.blockId}`;
         if (!b.leaf) {
           onEvent({ kind: 'log', message: `${label} ${where}: no source leaf (placeholder), skipped` });
@@ -349,6 +498,7 @@ export async function exportStorylinePackages(
           leaf: b.leaf,
           meta: b.meta,
           zip: `storyline/${courseId}/${b.leaf}.zip`,
+          compatibility: 'automatic',
           ...(b.locale ? { locale: b.locale } : {}),
           ...(b.l10nId ? { l10nId: b.l10nId } : {}),
         });
@@ -376,7 +526,7 @@ export async function exportStorylinePackages(
       // A stale session 403s every build — abort instead of looping 152×.
       if (isAuthError(error)) {
         summary.aborted = error;
-        summary.notAttempted = targets.length - (i + 1);
+        summary.notAttempted = pending.length - (i + 1);
         onEvent({
           kind: 'log',
           message: `⛔ Aborting: looks like an auth/session failure. Open a Rise COURSE EDITOR (not the dashboard) to rotate the token, then run again. ${summary.notAttempted} course(s) not attempted.`,
@@ -389,7 +539,7 @@ export async function exportStorylinePackages(
   onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
   onEvent({
     kind: 'log',
-    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s).`,
+    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged.`,
   });
   return summary;
 }
@@ -411,6 +561,8 @@ export interface StorylineUploadSummary {
   /** Packages already uploaded (resume). */
   skipped: number;
   failed: number;
+  /** Known legacy package leaves deliberately excluded from Review upload. */
+  legacySkipped: number;
   notAttempted: number;
   aborted?: string;
   errors: Array<{ courseId: string; leaf: string; error: string }>;
@@ -461,7 +613,12 @@ const defaultUploadOne: NonNullable<StorylineUploadDeps['uploadOne']> = async ({
 interface StoredManifest {
   courseId: string;
   title?: string;
-  blocks: Array<{ leaf: string; blockId: string }>;
+  blocks: Array<{
+    leaf?: string;
+    blockId: string;
+    meta?: unknown;
+    compatibility?: StorylineManifestEntry['compatibility'];
+  }>;
   uploads?: Record<string, StorylineUploadRecord>;
   [k: string]: unknown;
 }
@@ -507,6 +664,7 @@ export async function uploadStorylineToReview360(
     uploaded: 0,
     skipped: 0,
     failed: 0,
+    legacySkipped: 0,
     notAttempted: 0,
     errors: [],
   };
@@ -518,6 +676,60 @@ export async function uploadStorylineToReview360(
   });
   if (!manifests.length) return summary;
 
+  // Flatten to a work-list of unique (courseId, leaf) packages while excluding
+  // known legacy packages. Old manifests predate `compatibility`, so also read
+  // their saved course metadata; this prevents already-staged 3.42/3.48 ZIPs
+  // from being retriggered after this policy ships.
+  const work: Array<{ courseId: string; title?: string; leaf: string }> = [];
+  for (const m of manifests) {
+    const legacyLeaves = new Set<string>();
+    for (const block of m.blocks ?? []) {
+      if (
+        block.leaf &&
+        (block.compatibility === 'legacy-unsupported' ||
+          isKnownLegacyStorylineMeta(block.meta))
+      ) legacyLeaves.add(block.leaf);
+    }
+    if (typeof storage.readCourse === 'function') {
+      const raw = await storage.readCourse(m.courseId);
+      if (raw) {
+        try {
+          for (const block of findStorylineBlocks(unwrap(raw))) {
+            if (block.leaf && isKnownLegacyStorylineMeta(block.meta)) {
+              legacyLeaves.add(block.leaf);
+            }
+          }
+        } catch {
+          // Manifest metadata remains the safe fallback; unfamiliar/corrupt
+          // course data is not guessed to be legacy.
+        }
+      }
+    }
+    summary.legacySkipped += legacyLeaves.size;
+    if (legacyLeaves.size) {
+      onEvent({
+        kind: 'log',
+        message: `${m.title ?? m.courseId}: ${legacyLeaves.size} legacy Storyline package(s) excluded from Review upload.`,
+      });
+    }
+    const seen = new Set<string>();
+    for (const block of m.blocks ?? []) {
+      const leaf = block.leaf;
+      if (!leaf || legacyLeaves.has(leaf) || seen.has(leaf)) continue;
+      seen.add(leaf);
+      work.push({ courseId: m.courseId, title: m.title, leaf });
+    }
+  }
+
+  if (!work.length) {
+    onEvent({
+      kind: 'log',
+      message: `Storyline upload: no automatic packages to upload; ${summary.legacySkipped} legacy package(s) flagged for manual replacement.`,
+    });
+    onEvent({ kind: 'import-status', label: 'Storyline upload complete', etaSeconds: null, done: true });
+    return summary;
+  }
+
   // Pin the run to ONE tab BEFORE any upload. These are real writes into the
   // TARGET account's Review 360 (items:create → S3 → items:upload); unpinned, the
   // background re-resolves the active Rise tab per message, so a focused SOURCE
@@ -527,10 +739,7 @@ export async function uploadStorylineToReview360(
   if (pinBlocked) {
     summary.aborted = pinBlocked;
     // notAttempted counts PACKAGES (the unit of work), not courses.
-    summary.notAttempted = manifests.reduce(
-      (n, m) => n + new Set((m.blocks ?? []).map((b) => b.leaf).filter(Boolean)).size,
-      0,
-    );
+    summary.notAttempted = work.length;
     onEvent({
       kind: 'log',
       message: `⛔ ${pinBlocked} Nothing was uploaded: these writes go into the TARGET account's Review 360 and must never be able to land in the source account.`,
@@ -552,17 +761,6 @@ export async function uploadStorylineToReview360(
     }
   } catch {
     /* best-effort */
-  }
-
-  // Flatten to a work-list of unique (courseId, leaf) packages.
-  const work: Array<{ courseId: string; title?: string; leaf: string }> = [];
-  for (const m of manifests) {
-    const seen = new Set<string>();
-    for (const b of m.blocks ?? []) {
-      if (!b.leaf || seen.has(b.leaf)) continue;
-      seen.add(b.leaf);
-      work.push({ courseId: m.courseId, title: m.title, leaf: b.leaf });
-    }
   }
 
   let aborted = false;
@@ -643,7 +841,7 @@ export async function uploadStorylineToReview360(
 
   onEvent({
     kind: 'log',
-    message: `Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} package(s).`,
+    message: `Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} automatic package(s); ${summary.legacySkipped} legacy package(s) flagged.`,
   });
   onEvent({ kind: 'import-status', label: 'Storyline upload complete', etaSeconds: null, done: true });
   return summary;

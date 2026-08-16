@@ -12,8 +12,8 @@
 
 import {
   collectAssetKeys,
+  buildAssetManifest,
   downloadAssetsFor,
-  findUndownloadedKeys,
   formatLocation,
   isOrphanStatus,
   keyPathCandidates,
@@ -23,6 +23,7 @@ import {
   type AssetManifest,
   type DownloadOutcome,
   type Downloader,
+  type OptionalAssetReason,
 } from '@/core/assets';
 import type { Storage } from '@/core/storage/storage';
 import { unwrap, type ProgressEvent } from './shared';
@@ -97,6 +98,7 @@ interface FailedKey {
   key: string;
   /** Human location in the source doc, e.g. `Chapter 2 › image/hero`. */
   location?: string;
+  reason?: OptionalAssetReason;
 }
 
 interface UndownloadedOwner {
@@ -122,6 +124,8 @@ export interface AssetsSummary {
    *  missing/inaccessible at source (likely deleted). Terminal: flagged every
    *  run (even when the owner is otherwise skipped), never re-fetched. */
   orphaned: UndownloadedOwner[];
+  /** Unavailable authoring/source variants which are not used for rendering. */
+  optionalUnavailable: UndownloadedOwner[];
   /** Owners with keys that failed for other (transient/network) reasons. */
   undownloaded: UndownloadedOwner[];
   /** Owners whose processing threw entirely — no manifest written this run. */
@@ -166,8 +170,8 @@ async function readPriorManifest(
   }
 }
 
-/** Split an owner's failure list into orphaned (terminal) vs retryable and
- *  record both on the summary, tagging each key with its source-doc location.
+/** Split an owner's failure list into required orphaned, optional unavailable,
+ *  and retryable, tagging each key with its source-doc location.
  *  Only retryable failures clear `summary.complete` — matching the per-owner
  *  manifest, where orphans don't block `complete` either. */
 function recordOwnerFailures(
@@ -178,13 +182,17 @@ function recordOwnerFailures(
   if (!failures.length) return;
   const title = ownerTitle(owner);
   const orphanKeys: FailedKey[] = [];
+  const optionalKeys: FailedKey[] = [];
   const otherKeys: FailedKey[] = [];
   for (const f of failures) {
     const bucket = String(f.status || 'network');
     summary.statusHistogram[bucket] = (summary.statusHistogram[bucket] ?? 0) + 1;
     const path = f.paths?.[0];
     const location = path ? formatLocation(locateKey(owner.doc, path)) : undefined;
-    (isOrphanStatus(f.status) ? orphanKeys : otherKeys).push({ key: f.key, location });
+    const item = { key: f.key, location, reason: f.optionalReason };
+    if (!isOrphanStatus(f.status)) otherKeys.push(item);
+    else if (f.optionalReason) optionalKeys.push(item);
+    else orphanKeys.push(item);
   }
   if (orphanKeys.length) {
     summary.orphaned.push({
@@ -192,6 +200,14 @@ function recordOwnerFailures(
       ownerId: owner.id,
       title,
       keys: orphanKeys,
+    });
+  }
+  if (optionalKeys.length) {
+    summary.optionalUnavailable.push({
+      ownerType: owner.ownerType,
+      ownerId: owner.id,
+      title,
+      keys: optionalKeys,
     });
   }
   if (otherKeys.length) {
@@ -257,6 +273,7 @@ export async function downloadAllAssets(
     failed: 0,
     statusHistogram: {},
     orphaned: [],
+    optionalUnavailable: [],
     undownloaded: [],
     failedOwners: [],
     complete: true,
@@ -268,23 +285,44 @@ export async function downloadAllAssets(
     try {
       const collected = collectAssetKeys(owner.doc, owner.id);
       const prior = await readPriorManifest(storage, owner);
-      // Terminal orphans from the prior run: carried forward, never re-fetched.
-      // (Legacy manifests kept orphans in `failed` with complete:false — this
-      // filter promotes them to terminal on the first re-run.)
-      const priorOrphans = (prior?.failed ?? []).filter((f) => isOrphanStatus(f.status));
+      const currentByKey = new Map(collected.map((k) => [k.key, k]));
+
+      // Reclassify legacy manifests from the current source document. This is
+      // deliberately done before resume so a 19 GB archive can adopt the new
+      // active-vs-provenance policy without downloading its good blobs again.
+      const priorAssets = (prior?.assets ?? []).filter((a) => currentByKey.has(a.key));
+      const priorFailures: AssetFailure[] = (prior?.failed ?? [])
+        .filter((f) => currentByKey.has(f.key))
+        .map((f) => {
+          const optionalReason = currentByKey.get(f.key)?.optionalReason;
+          if (optionalReason) return { ...f, optionalReason };
+          const { optionalReason: _oldReason, ...requiredFailure } = f;
+          return requiredFailure;
+        });
+      const normalizedPrior = prior
+        ? buildAssetManifest(
+            owner.ownerType,
+            owner.id,
+            collected,
+            priorAssets,
+            priorFailures,
+            prior.generatedAt,
+          )
+        : null;
+      const priorTerminal = priorFailures.filter((f) => isOrphanStatus(f.status));
 
       // Resume: a complete prior manifest → skip, but only after verifying it
       // still covers every collected key (the key scanner may have improved
       // since it was written) and every stored blob still exists.
-      if (prior?.complete) {
+      if (normalizedPrior?.complete) {
         const covered = new Set([
-          ...(prior.assets ?? []).map((a) => a.key),
-          ...priorOrphans.map((f) => f.key),
+          ...priorAssets.map((a) => a.key),
+          ...priorTerminal.map((f) => f.key),
         ]);
         const newKeys = collected.filter((k) => !covered.has(k.key)).map((k) => k.key);
         let lostBlob: string | undefined;
         if (newKeys.length === 0) {
-          for (const a of prior.assets ?? []) {
+          for (const a of priorAssets) {
             const name = a.file.split('/').pop() ?? a.file;
             if (!(await storage.hasAsset(name))) {
               lostBlob = a.file;
@@ -293,12 +331,23 @@ export async function downloadAllAssets(
           }
         }
         if (newKeys.length === 0 && !lostBlob) {
+          // Persist the upgraded policy/counts and prune stale parser artifacts
+          // even though no network work is needed.
+          await storage.writeAssetManifest(
+            owner.scope,
+            owner.id,
+            assetManifestToJson(normalizedPrior),
+          );
           summary.skipped += 1;
-          recordOwnerFailures(summary, owner, priorOrphans);
+          recordOwnerFailures(summary, owner, priorTerminal);
+          const optionalCount = priorTerminal.filter((f) => f.optionalReason).length;
+          const orphanCount = priorTerminal.length - optionalCount;
           onEvent({
             kind: 'log',
             message: `Assets already done: ${owner.id}${
-              priorOrphans.length ? ` (⚠ ${priorOrphans.length} orphaned at source)` : ''
+              orphanCount ? ` (⚠ ${orphanCount} active asset(s) unavailable)` : ''
+            }${
+              optionalCount ? ` (${optionalCount} optional source ref(s) unavailable)` : ''
             }`,
           });
           continue;
@@ -318,8 +367,8 @@ export async function downloadAllAssets(
         storage,
         downloader,
         {
-          priorAssets: prior?.assets,
-          priorOrphans,
+          priorAssets,
+          priorOrphans: priorTerminal,
           onProgress: (message) => onEvent({ kind: 'log', message }),
         },
       );
@@ -337,18 +386,21 @@ export async function downloadAllAssets(
 
       recordOwnerFailures(summary, owner, manifest.failed);
 
-      const missing = findUndownloadedKeys(collected, manifest);
-      if (missing.length) {
+      if (stats.orphaned || stats.failed) {
         onEvent({
           kind: 'log',
-          message: `⚠ ${owner.id}: ${stats.orphaned} orphaned, ${stats.failed} failed`,
+          message: `⚠ ${owner.id}: ${stats.orphaned} active unavailable, ${stats.failed} failed${
+            stats.optionalUnavailable
+              ? `, ${stats.optionalUnavailable} optional source ref(s) unavailable`
+              : ''
+          }`,
         });
       } else {
         onEvent({
           kind: 'log',
           message: `Assets ${owner.id}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
             stats.fetched || stats.reused ? '' : ' (no media)'
-          }`,
+          }${stats.optionalUnavailable ? `; ${stats.optionalUnavailable} optional source ref(s) unavailable` : ''}`,
         });
       }
     } catch (e) {

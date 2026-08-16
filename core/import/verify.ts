@@ -309,6 +309,14 @@ export function verifyParity(
   const flaggedBlockIds = new Set(
     flags.filter((f) => f.sourceBlockId).map((f) => f.sourceBlockId),
   );
+  const isExpectedReplacement = (lessonId: unknown, blockId: unknown): boolean =>
+    typeof blockId === 'string' &&
+    flags.some(
+      (flag) =>
+        flag.sourceBlockId === blockId &&
+        flag.expectedReplacement === 'legacy-storyline' &&
+        (!flag.sourceLessonId || flag.sourceLessonId === lessonId),
+    );
   const flaggedKeys = flags
     .map((f) => f.sourceKey)
     .filter((k): k is string => !!k);
@@ -368,7 +376,13 @@ export function verifyParity(
       compared++;
 
       if (blockKey(a) !== blockKey(b)) {
-        issues.push({ kind: 'block-type-changed', path: bpath, detail: `${blockKey(a)} → ${blockKey(b)}` });
+        const announced = isExpectedReplacement(s.id, a.id);
+        (announced ? expected : issues).push({
+          kind: 'block-type-changed',
+          path: bpath,
+          detail: `${blockKey(a)} → ${blockKey(b)}`,
+          ...(announced ? { expected: true } : {}),
+        });
         continue;
       }
 

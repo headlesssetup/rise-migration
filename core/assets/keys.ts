@@ -32,7 +32,19 @@ export interface AssetKey {
   kind: DownloadableKind;
   /** JSON paths where this key was found (deduped, capped). */
   paths: string[];
+  /**
+   * The bytes improve authoring provenance but are not used to render the
+   * current course. A key is optional only when EVERY occurrence is optional;
+   * one active occurrence promotes it back to required.
+   */
+  optionalReason?: OptionalAssetReason;
 }
+
+export type OptionalAssetReason =
+  | 'input-source'
+  | 'temporary-media'
+  | 'original-image'
+  | 'inactive-image-variant';
 
 // Extractors. Two modes:
 //  - Whole-value fast path: a string node that IS a single bare key or
@@ -67,8 +79,28 @@ function canonicalizeKey(raw: string): string {
  * and de-duplicated.
  */
 export function extractUploadedKeys(value: string): string[] {
+  // A whole transformed URL (notably images.articulate.com posters) may carry
+  // literal parentheses in its filename. Parse the pathname instead of using
+  // the bounded embedded-text regex, whose `)` delimiter is correct for CSS
+  // `url(...)` but used to truncate `(1).mp4` into a bogus key ending in `(1`.
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const pathname = new URL(trimmed).pathname.replace(/^\//, '');
+      const start = pathname.search(/(?:^|\/)rise\/(?:courses|questionBanks)\//);
+      if (start >= 0) {
+        const key = pathname.slice(start).replace(/^\//, '');
+        if (/^rise\/(?:courses|questionBanks)\//.test(key)) {
+          return [canonicalizeKey(key)];
+        }
+      }
+    } catch {
+      // Fall through to the tolerant extractors for malformed/embedded text.
+    }
+  }
+
   // Fast path: the entire value is one key/URL — take it whole (parens etc.).
-  const whole = value.trim().match(RE_WHOLE_VALUE);
+  const whole = trimmed.match(RE_WHOLE_VALUE);
   if (whole?.[1]) return [canonicalizeKey(whole[1])];
 
   const out: string[] = [];
@@ -133,20 +165,92 @@ function capPush(arr: string[], value: string, cap = 5): void {
 }
 
 /**
+ * Classify JSON fields which Rise retains for editing/history but does not use
+ * to render the current course. This remains a generic recursive walk: it is
+ * based on media-object contracts, never block family/variant names.
+ *
+ * Capture-confirmed examples (2026-08-16):
+ * - audio/video `inputKey` is the pre-transcode source; playback uses `key`;
+ * - `media.tmp` is abandoned staging state;
+ * - `originalImage` is the uncropped source; the parent image is current;
+ * - `useCrushedKey` selects exactly one active image variant.
+ */
+function optionalAssetPaths(doc: unknown): Map<string, OptionalAssetReason> {
+  const out = new Map<string, OptionalAssetReason>();
+  const walk = (
+    node: unknown,
+    path: string,
+    inherited?: OptionalAssetReason,
+  ): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach((child, i) => walk(child, `${path}[${i}]`, inherited));
+      return;
+    }
+
+    const obj = node as Record<string, unknown>;
+    const fieldReasons = new Map<string, OptionalAssetReason>();
+    if (
+      typeof obj.inputKey === 'string' &&
+      typeof obj.key === 'string' &&
+      obj.inputKey !== obj.key
+    ) {
+      fieldReasons.set('inputKey', 'input-source');
+    }
+    if (
+      obj.useCrushedKey === true &&
+      typeof obj.key === 'string' &&
+      typeof obj.crushedKey === 'string' &&
+      obj.key !== obj.crushedKey
+    ) {
+      fieldReasons.set('key', 'inactive-image-variant');
+    } else if (
+      obj.useCrushedKey === false &&
+      typeof obj.key === 'string' &&
+      typeof obj.crushedKey === 'string' &&
+      obj.key !== obj.crushedKey
+    ) {
+      fieldReasons.set('crushedKey', 'inactive-image-variant');
+    }
+
+    for (const [k, value] of Object.entries(obj)) {
+      const childPath = `${path}.${k}`;
+      const reason =
+        inherited ??
+        (k === 'tmp' && /(?:^|\.)media$/.test(path)
+          ? 'temporary-media'
+          : k === 'originalImage'
+            ? 'original-image'
+            : fieldReasons.get(k));
+      if (reason && typeof value === 'string') out.set(childPath, reason);
+      walk(value, childPath, reason);
+    }
+  };
+  walk(doc, '$');
+  return out;
+}
+
+/**
  * Collect the distinct uploaded-media keys in a document (course or bank).
  * Reuses `scanRefs` (with untruncated values) to find media occurrences, drops
  * the non-downloadable kinds, extracts clean keys, and dedups by canonical key.
  */
 export function collectAssetKeys(doc: unknown, ownerId?: string): AssetKey[] {
   const byKey = new Map<string, AssetKey>();
+  const optionalPaths = optionalAssetPaths(doc);
   for (const ref of scanRefs(doc, ownerId, { maxSnippet: Infinity })) {
     if (!DOWNLOADABLE.has(ref.kind)) continue;
     const kind = ref.kind as DownloadableKind;
+    const optionalReason = optionalPaths.get(ref.path);
     for (const key of extractUploadedKeys(ref.value)) {
       let entry = byKey.get(key);
       if (!entry) {
-        entry = { key, kind, paths: [] };
+        entry = { key, kind, paths: [], optionalReason };
         byKey.set(key, entry);
+      } else if (!optionalReason) {
+        // One live occurrence makes the bytes required even if another path
+        // happens to retain the same key as provenance/staging data.
+        delete entry.optionalReason;
       }
       capPush(entry.paths, ref.path);
     }

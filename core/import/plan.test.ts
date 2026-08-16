@@ -341,6 +341,55 @@ describe('buildPlan media + flags', () => {
     expect(steps.some((s) => s.kind === 'upload-asset')).toBe(false);
   });
 
+  it('drops unavailable input provenance without flagging the active media', () => {
+    const source = 'rise/courses/SRC/original.mp3';
+    const active = 'rise/courses/SRC/transcoded.mp3';
+    const steps = buildPlan(
+      input({
+        assets: [
+          {
+            key: source,
+            kind: 'media-other',
+            optionalUnavailable: true,
+            optionalReason: 'input-source',
+          },
+          { key: active, kind: 'media-audio', file: 'assets/a.mp3', ext: 'mp3' },
+        ],
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              items: [
+                {
+                  id: 'cb1',
+                  family: 'multimedia',
+                  variant: 'audio',
+                  items: [{ media: { audio: { inputKey: source, key: active } } }],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    expect(steps).toContainEqual(
+      expect.objectContaining({
+        kind: 'drop-optional-media',
+        sourceKey: source,
+        reason: 'input-source',
+      }),
+    );
+    expect(steps).toContainEqual(
+      expect.objectContaining({ kind: 'upload-asset', sourceKey: active }),
+    );
+    expect(steps.some((s) => s.kind === 'flag-orphan-media')).toBe(false);
+    expect(planStats(steps).orphanFlags).toBe(0);
+  });
+
   it('uploads a course cover image (set-course-images), not flag it', () => {
     const steps = buildPlan(
       input({
@@ -467,6 +516,51 @@ describe('buildPlan media + flags', () => {
     // cb2 has no uploaded package → still flagged
     expect(steps.some((s) => s.kind === 'flag-storyline' && s.sourceBlockId === 'cb2')).toBe(true);
     expect(steps.some((s) => s.kind === 'attach-storyline' && s.sourceBlockId === 'cb2')).toBe(false);
+  });
+
+  it('legacy Storyline wins over a stale uploaded package and requests a text replacement', () => {
+    const sourceBlock = {
+      id: 'cb-legacy',
+      family: '360',
+      variant: 'storyline',
+      items: [
+        {
+          id: 'ci-legacy',
+          media: {
+            storyline: {
+              contentPrefix: 'rise/courses/SRC/OLD',
+              meta: { version: '3.48.24159.0' },
+            },
+          },
+        },
+      ],
+    };
+    const steps = buildPlan(
+      input({
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [sourceBlock] },
+          ],
+        },
+        storylineAttach: new Map([
+          [blockKey('L1', 'cb-legacy'), { reviewPrefix: 'review/items/STALE' }],
+        ]),
+      }),
+    );
+    const create = steps.find((step) => step.kind === 'create-blocks');
+    expect(create?.kind === 'create-blocks' && create.blocks[0]?.replacement).toBe(
+      'legacy-storyline',
+    );
+    expect(
+      steps.some(
+        (step) =>
+          step.kind === 'flag-storyline' &&
+          step.sourceBlockId === 'cb-legacy' &&
+          step.reason === 'legacy',
+      ),
+    ).toBe(true);
+    expect(steps.some((step) => step.kind === 'attach-storyline')).toBe(false);
   });
 
   it('joins storyline packages by LESSON + block id (ids repeat across lessons)', () => {

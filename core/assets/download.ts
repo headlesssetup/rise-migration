@@ -100,6 +100,8 @@ export interface DownloadStats {
   failed: number;
   /** Keys missing at source (403/404 — terminal, never re-fetched). */
   orphaned: number;
+  /** Unavailable source/provenance variants not used by the current rendering. */
+  optionalUnavailable: number;
 }
 
 export interface DownloadResult {
@@ -266,7 +268,7 @@ export async function downloadAssetsFor(
     concurrency?: number;
     generatedAt?: string;
     priorAssets?: AssetManifestEntry[];
-    /** Prior orphan failures (isOrphanStatus) — kept, never re-attempted. */
+    /** Prior terminal failures — required orphans and optional unavailable refs. */
     priorOrphans?: AssetFailure[];
     /** Per-item `[i/N assets] …` progress line (CLAUDE.md loop convention). */
     onProgress?: (message: string) => void;
@@ -274,7 +276,7 @@ export async function downloadAssetsFor(
 ): Promise<DownloadResult> {
   const collected = collectAssetKeys(doc, ownerId);
   const reuse = new Map((opts.priorAssets ?? []).map((e) => [e.key, e]));
-  const knownOrphans = new Map((opts.priorOrphans ?? []).map((f) => [f.key, f]));
+  const knownUnavailable = new Map((opts.priorOrphans ?? []).map((f) => [f.key, f]));
   const storeOnce = makeStoreOnce(sink);
   const progress = makeItemProgress(collected.length, 'assets', opts.onProgress);
 
@@ -283,10 +285,18 @@ export async function downloadAssetsFor(
     opts.concurrency ?? DEFAULT_CONCURRENCY,
     async (ak): Promise<PerKeyResult> => {
       try {
-        const orphan = knownOrphans.get(ak.key);
-        if (orphan) {
-          progress(`ORPHAN ${baseName(ak.key)} (missing at source, not retried)`);
-          return { failure: { ...orphan, paths: ak.paths } };
+        const unavailable = knownUnavailable.get(ak.key);
+        if (unavailable) {
+          progress(
+            `${ak.optionalReason ? 'OPTIONAL' : 'ORPHAN'} ${baseName(ak.key)} (unavailable, not retried)`,
+          );
+          return {
+            failure: {
+              ...unavailable,
+              paths: ak.paths,
+              optionalReason: ak.optionalReason,
+            },
+          };
         }
 
         const prior = reuse.get(ak.key);
@@ -299,8 +309,13 @@ export async function downloadAssetsFor(
         const res = await downloader(ak.key);
         if (!res.ok || !res.bytes) {
           const error = res.error ?? `HTTP ${res.status ?? 0}`;
+          const label = !isOrphanStatus(res.status)
+            ? 'FAILED'
+            : ak.optionalReason
+              ? 'OPTIONAL'
+              : 'ORPHAN';
           progress(
-            `${isOrphanStatus(res.status) ? 'ORPHAN' : 'FAILED'} ${baseName(ak.key)}: ${error}`,
+            `${label} ${baseName(ak.key)}: ${error}`,
           );
           return {
             failure: {
@@ -309,6 +324,7 @@ export async function downloadAssetsFor(
               status: res.status,
               urlTried: res.urlTried,
               paths: ak.paths,
+              optionalReason: ak.optionalReason,
             },
           };
         }
@@ -331,7 +347,14 @@ export async function downloadAssetsFor(
         };
       } catch (e) {
         progress(`FAILED ${baseName(ak.key)}: ${String(e)}`);
-        return { failure: { key: ak.key, error: String(e), paths: ak.paths } };
+        return {
+          failure: {
+            key: ak.key,
+            error: String(e),
+            paths: ak.paths,
+            optionalReason: ak.optionalReason,
+          },
+        };
       }
     },
   );
@@ -342,6 +365,7 @@ export async function downloadAssetsFor(
   let deduped = 0;
   let reused = 0;
   let orphaned = 0;
+  let optionalUnavailable = 0;
   for (const r of perKey) {
     if (r.entry) {
       assets.push(r.entry);
@@ -350,7 +374,8 @@ export async function downloadAssetsFor(
       else deduped += 1;
     } else if (r.failure) {
       failed.push(r.failure);
-      if (isOrphanStatus(r.failure.status)) orphaned += 1;
+      if (r.failure.optionalReason && isOrphanStatus(r.failure.status)) optionalUnavailable += 1;
+      else if (isOrphanStatus(r.failure.status)) orphaned += 1;
     }
   }
 
@@ -368,8 +393,9 @@ export async function downloadAssetsFor(
       written,
       deduped,
       reused,
-      failed: failed.length - orphaned,
+      failed: failed.filter((f) => !isOrphanStatus(f.status)).length,
       orphaned,
+      optionalUnavailable,
     },
   };
 }

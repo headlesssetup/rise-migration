@@ -9,12 +9,14 @@ export {
   extFromContentType,
   type AssetKey,
   type DownloadableKind,
+  type OptionalAssetReason,
 } from './keys';
 export {
   buildAssetManifest,
   assetManifestToJson,
   findUndownloadedKeys,
   isOrphanStatus,
+  ASSET_POLICY_VERSION,
   type AssetManifest,
   type AssetManifestEntry,
   type AssetFailure,

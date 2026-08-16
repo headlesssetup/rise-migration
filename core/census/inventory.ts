@@ -27,6 +27,10 @@ export interface InventoryRow {
   updatedAt: string;
   ready: string;
   deleted: string;
+  /** Operator-facing reasons why the archived course needs manual handling.
+   *  Optional so a fresh list merge does not erase comments added by later,
+   *  content-aware export passes. CSV still always includes the column. */
+  importability?: string;
 }
 
 const INVENTORY_COLUMNS: (keyof InventoryRow)[] = [
@@ -44,10 +48,24 @@ const INVENTORY_COLUMNS: (keyof InventoryRow)[] = [
   'updatedAt',
   'ready',
   'deleted',
+  'importability',
 ];
 
 function str(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
+}
+
+/** Apply content-aware importability findings without disturbing other rows. */
+export function withImportability(
+  rows: InventoryRow[],
+  commentsByCourseId: ReadonlyMap<string, string>,
+): InventoryRow[] {
+  if (!commentsByCourseId.size) return rows;
+  return rows.map((row) =>
+    commentsByCourseId.has(row.id)
+      ? { ...row, importability: commentsByCourseId.get(row.id) ?? '' }
+      : row,
+  );
 }
 
 export function buildInventory(

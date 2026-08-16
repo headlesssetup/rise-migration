@@ -5,7 +5,10 @@
 // (per lesson) create → update → lock → (per block) create → media upload+patch
 // or draw-from-bank bind → unlock.
 
-import { collectAssetKeys } from '@/core/assets/keys';
+import {
+  collectAssetKeys,
+  type OptionalAssetReason,
+} from '@/core/assets/keys';
 import { courseImageKind } from './builtin-assets';
 // Type-only imports back from executor-types keep this cycle-free at runtime.
 import { blockKey } from './executor-types';
@@ -25,6 +28,7 @@ import {
   writableLocaleCodes,
 } from '@/core/l10n';
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
+import { isKnownLegacyStorylineBlock } from '@/core/storyline/compatibility';
 
 /** One source asset, as recorded in `courses/<id>.assets.json` (+ orphan flag). */
 export interface AssetEntry {
@@ -38,6 +42,9 @@ export interface AssetEntry {
   size?: number;
   /** 403/404 at source (assets-summary `orphaned`): no bytes to upload. */
   orphaned?: boolean;
+  /** Unavailable non-rendering source/provenance bytes. Silently blanked. */
+  optionalUnavailable?: boolean;
+  optionalReason?: OptionalAssetReason;
 }
 
 /** Upload size ceiling (as base64 length). The S3 PUT now goes DIRECT from the
@@ -174,7 +181,13 @@ export type PlanStep =
       // chaining (interleaved with media uploads) mis-ordered larger lessons.
       kind: 'create-blocks';
       sourceLessonId: string;
-      blocks: { sourceBlockId: string; family: string; variant: string }[];
+      blocks: {
+        sourceBlockId: string;
+        family: string;
+        variant: string;
+        /** Known-incompatible Storyline packages become a visible text donor. */
+        replacement?: 'legacy-storyline';
+      }[];
       summary: string;
     }
   | {
@@ -217,6 +230,7 @@ export type PlanStep =
       kind: 'flag-storyline';
       sourceLessonId: string;
       sourceBlockId: string;
+      reason?: 'legacy' | 'missing-package';
       summary: string;
     }
   | {
@@ -244,6 +258,13 @@ export type PlanStep =
       sourceLessonId: string;
       sourceBlockId: string;
       sourceKey: string;
+      summary: string;
+    }
+  | {
+      /** Remove a stale non-rendering source/provenance key without a manual flag. */
+      kind: 'drop-optional-media';
+      sourceKey: string;
+      reason: OptionalAssetReason;
       summary: string;
     }
   | {
@@ -619,6 +640,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       for (const ak of collectAssetKeys(img, sourceCourseId)) {
         handledKeys.add(ak.key);
         const entry = assetByKey.get(ak.key);
+        if (entry?.optionalUnavailable) continue;
         if ((entry?.orphaned || (entry && !entry.file)) && !flaggedImgKeys.has(ak.key)) {
           flaggedImgKeys.add(ak.key);
           steps.push({
@@ -705,6 +727,20 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     summary: `Create course "${title}"`,
   });
 
+  // Optional authoring provenance is capture-confirmed as non-rendering. Its
+  // unavailable source key must still not survive the import, but it is not a
+  // broken course asset and therefore must not create a manual-work flag.
+  for (const entry of input.assets) {
+    if (!entry.optionalUnavailable || !entry.optionalReason) continue;
+    handledKeys.add(entry.key);
+    steps.push({
+      kind: 'drop-optional-media',
+      sourceKey: entry.key,
+      reason: entry.optionalReason,
+      summary: `Drop unavailable optional ${entry.optionalReason}: ${entry.key}`,
+    });
+  }
+
   // 3. Lessons in DISPLAY ORDER (already applied above via `course.lessons`,
   // the authoritative ordered id list — §2). CREATE_LESSON honors `position`, so
   // we send a sequential 0-based slot (idx) and each create appends in this exact
@@ -733,6 +769,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     for (const ak of collectAssetKeys(lessonMedia, sourceCourseId)) {
       const entry = assetByKey.get(ak.key);
       handledKeys.add(ak.key);
+      if (entry?.optionalUnavailable) continue;
       if (entry?.orphaned || (entry && !entry.file)) {
         steps.push({
           kind: 'flag-orphan-media',
@@ -784,6 +821,9 @@ export function buildPlan(input: PlanInput): PlanStep[] {
         sourceBlockId: typeof b.id === 'string' ? b.id : '',
         family: String(b.family ?? ''),
         variant: String(b.variant ?? ''),
+        ...(!stack && isStoryline(b) && isKnownLegacyStorylineBlock(b)
+          ? { replacement: 'legacy-storyline' as const }
+          : {}),
       })),
       summary: `Create ${blocks.length} block(s) in "${lTitle}"`,
     });
@@ -797,6 +837,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       const variant = String(block.variant ?? '');
 
       if (isStoryline(block)) {
+        const legacy = isKnownLegacyStorylineBlock(block);
         const attach = input.storylineAttach?.get(blockKey(sourceLessonId, sourceBlockId));
         // On a STACK (idea 2) each language's package lives in its own cell
         // (docs/rise-multilang.md §4.3b). The DEFAULT locale's package attaches
@@ -860,7 +901,15 @@ export function buildPlan(input: PlanInput): PlanStep[] {
           }
           continue;
         }
-        if (attach) {
+        if (legacy) {
+          steps.push({
+            kind: 'flag-storyline',
+            sourceLessonId,
+            sourceBlockId,
+            reason: 'legacy',
+            summary: `⚠ Legacy Storyline block replaced with a manual-review placeholder`,
+          });
+        } else if (attach) {
           steps.push({
             kind: 'attach-storyline',
             sourceLessonId,
@@ -875,6 +924,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
             kind: 'flag-storyline',
             sourceLessonId,
             sourceBlockId,
+            reason: 'missing-package',
             summary: `⚠ Storyline/Mighty block needs manual Review-360 attach`,
           });
         }
@@ -914,6 +964,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       const uploadable: string[] = [];
       for (const ak of keys) {
         const entry = assetByKey.get(ak.key);
+        if (entry?.optionalUnavailable) continue;
         // Key already handled by an earlier sweep (the stack's table-media
         // pass, or course images): no second upload step — but the block still
         // needs its media PATCH, so the key stays in `uploadable` (the

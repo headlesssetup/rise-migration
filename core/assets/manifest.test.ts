@@ -51,6 +51,21 @@ describe('buildAssetManifest', () => {
     expect(mixed.orphanCount).toBe(1);
     expect(mixed.complete).toBe(false); // the 500 is retryable
   });
+
+  it('counts optional terminal failures separately from active orphans', () => {
+    const m = buildAssetManifest('course', 'c1', collected, [entryA], [
+      {
+        key: 'rise/courses/c1/b.mp4',
+        error: 'HTTP 403',
+        status: 403,
+        optionalReason: 'input-source',
+      },
+    ]);
+    expect(m.assetPolicyVersion).toBe(2);
+    expect(m.orphanCount).toBe(0);
+    expect(m.optionalUnavailableCount).toBe(1);
+    expect(m.complete).toBe(true);
+  });
 });
 
 describe('isOrphanStatus', () => {
@@ -83,5 +98,23 @@ describe('findUndownloadedKeys', () => {
     };
     const m = buildAssetManifest('course', 'c1', collected, [entryA, entryB], []);
     expect(findUndownloadedKeys(collected, m)).toEqual([]);
+  });
+
+  it('does not report an unavailable optional provenance key as active media', () => {
+    const optional: AssetKey = {
+      key: 'rise/courses/c1/source.mp3',
+      kind: 'media-audio',
+      paths: ['$.media.audio.inputKey'],
+      optionalReason: 'input-source',
+    };
+    const m = buildAssetManifest('course', 'c1', [optional], [], [
+      {
+        key: optional.key,
+        error: 'HTTP 403',
+        status: 403,
+        optionalReason: 'input-source',
+      },
+    ]);
+    expect(findUndownloadedKeys([optional], m)).toEqual([]);
   });
 });

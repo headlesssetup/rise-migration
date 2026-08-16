@@ -84,6 +84,14 @@ describe('extractUploadedKeys', () => {
     ).toEqual(['rise/courses/c1/cover%2520(5).png']);
   });
 
+  it('keeps parentheses in a whole transformed images URL', () => {
+    expect(
+      extractUploadedKeys(
+        'https://images.articulate.com/f:png,w:1920,s:cover/rise/courses/c1/My%20Video%20(1).mp4',
+      ),
+    ).toEqual(['rise/courses/c1/My%20Video%20(1).mp4']);
+  });
+
   it('keeps double-encoding and NFD unicode in a whole-value key', () => {
     expect(extractUploadedKeys('rise/courses/c1/Ka%CC%88tting.mp4')).toEqual([
       'rise/courses/c1/Ka%CC%88tting.mp4',
@@ -207,5 +215,45 @@ describe('collectAssetKeys — video poster + captions', () => {
     expect(set).toContain('rise/courses/SRC/chHQR-poster.jpg'); // poster + thumbnail (deduped)
     expect(set).toContain('rise/courses/SRC/9aR8-cap.vtt');
     expect(set).toContain('rise/courses/SRC/TuJw-cap.vtt');
+  });
+});
+
+describe('collectAssetKeys — active vs optional authoring media', () => {
+  it('classifies capture-confirmed non-rendering references', () => {
+    const doc = {
+      audio: {
+        inputKey: 'rise/courses/c1/original.mp3',
+        key: 'rise/courses/c1/transcoded.mp3',
+      },
+      image: {
+        key: 'rise/courses/c1/original.jpg',
+        crushedKey: 'rise/courses/c1/current.jpg',
+        useCrushedKey: true,
+        originalImage: { key: 'rise/courses/c1/pre-crop.jpg' },
+      },
+      staging: {
+        media: { tmp: { image: { key: 'rise/courses/c1/abandoned.svg' } } },
+      },
+    };
+    const byKey = new Map(collectAssetKeys(doc, 'c1').map((k) => [k.key, k]));
+    expect(byKey.get('rise/courses/c1/original.mp3')?.optionalReason).toBe('input-source');
+    expect(byKey.get('rise/courses/c1/transcoded.mp3')?.optionalReason).toBeUndefined();
+    expect(byKey.get('rise/courses/c1/original.jpg')?.optionalReason).toBe(
+      'inactive-image-variant',
+    );
+    expect(byKey.get('rise/courses/c1/current.jpg')?.optionalReason).toBeUndefined();
+    expect(byKey.get('rise/courses/c1/pre-crop.jpg')?.optionalReason).toBe('original-image');
+    expect(byKey.get('rise/courses/c1/abandoned.svg')?.optionalReason).toBe(
+      'temporary-media',
+    );
+  });
+
+  it('promotes a key to required when any occurrence is active', () => {
+    const key = 'rise/courses/c1/shared.jpg';
+    const keys = collectAssetKeys({
+      old: { originalImage: { key } },
+      live: { media: { image: { key } } },
+    });
+    expect(keys.find((k) => k.key === key)?.optionalReason).toBeUndefined();
   });
 });

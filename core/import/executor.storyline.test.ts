@@ -105,4 +105,55 @@ describe('executePlan — storyline attach', () => {
     expect(res.storylineAttached ?? 0).toBe(0);
     expect(copied).toBe(false);
   });
+
+  it('creates a visible text placeholder for a known legacy package', async () => {
+    const input = storylineCourse(
+      new Map([
+        [
+          blockKey('L1', 'cblock00000000000000000000'),
+          { reviewPrefix: 'review/items/STALE' },
+        ],
+      ]),
+    );
+    const item = input.course.lessons![0]!.items![0] as any;
+    item.items[0].media = {
+      storyline: {
+        contentPrefix: 'rise/courses/SRC/OLD',
+        meta: { version: '3.48.24159.0' },
+      },
+    };
+    let created: any[] = [];
+    let copied = false;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      CREATE_BLOCKS: (body: any) => {
+        created = body.payload.blocks;
+        return {
+          payload: {
+            success: true,
+            blockMetadata: created.map((block) => ({ id: block.id })),
+          },
+        };
+      },
+      copy_review_item: () => {
+        copied = true;
+        return [];
+      },
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(created[0]).toMatchObject({
+      family: 'text',
+      variant: 'paragraph',
+      items: [{ paragraph: expect.stringContaining('Legacy Storyline block') }],
+    });
+    expect(res.flags[0]?.detail).toContain('incompatible with Review 360');
+    expect(copied).toBe(false);
+  });
 });

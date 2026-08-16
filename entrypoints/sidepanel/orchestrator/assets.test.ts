@@ -261,6 +261,36 @@ describe('downloadAllAssets', () => {
     ]);
   });
 
+  it('reclassifies a legacy inputKey orphan without re-downloading good media', async () => {
+    const source = 'rise/courses/c1/original.mp3';
+    const active = 'rise/courses/c1/transcoded.mp3';
+    const store = fakeStorage(
+      {
+        c1: {
+          course: { id: 'c1', title: 'Audio course' },
+          lessons: [{ media: { audio: { inputKey: source, key: active } } }],
+        },
+      },
+      { c1: completeManifest('c1', [active], [source]) },
+      ['hash0.jpg'],
+    );
+    const fetched: string[] = [];
+    const summary = await downloadAllAssets(store.storage, onEvent, servingDownloader(fetched));
+    expect(summary.skipped).toBe(1);
+    expect(fetched).toEqual([]);
+    expect(summary.orphaned).toEqual([]);
+    expect(summary.optionalUnavailable).toHaveLength(1);
+    expect(summary.optionalUnavailable[0]?.keys[0]).toMatchObject({
+      key: source,
+      reason: 'input-source',
+    });
+    const rewritten = JSON.parse(store.manifests.get('courses/c1')!) as AssetManifest;
+    expect(rewritten.assetPolicyVersion).toBe(2);
+    expect(rewritten.orphanCount).toBe(0);
+    expect(rewritten.optionalUnavailableCount).toBe(1);
+    expect(rewritten.failed[0]?.optionalReason).toBe('input-source');
+  });
+
   it('isolates one owner\'s crash: records it in failedOwners, continues (M8)', async () => {
     const store = fakeStorage({
       c1: docWith('c1', ['rise/courses/c1/one.jpg']),

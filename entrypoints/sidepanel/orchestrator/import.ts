@@ -59,7 +59,12 @@ import {
   type RunCsvCourse,
   verifyTypefaceBindings,
 } from '@/core/import';
-import { collectAssetKeys, isOrphanStatus } from '@/core/assets';
+import { isKnownLegacyStorylineMeta } from '@/core/storyline/compatibility';
+import {
+  collectAssetKeys,
+  isOrphanStatus,
+  type OptionalAssetReason,
+} from '@/core/assets';
 import { archiveErrorSummary, inspectLocalArchive } from '@/core/local-archive';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
@@ -110,9 +115,18 @@ export {
 export function missingAssetKeys(
   doc: unknown,
   courseId: string,
-  entries: { key: string; file?: string; orphaned?: boolean }[],
+  entries: {
+    key: string;
+    file?: string;
+    orphaned?: boolean;
+    optionalUnavailable?: boolean;
+  }[],
 ): string[] {
-  const have = new Set(entries.filter((e) => e.file || e.orphaned).map((e) => e.key));
+  const have = new Set(
+    entries
+      .filter((e) => e.file || e.orphaned || e.optionalUnavailable)
+      .map((e) => e.key),
+  );
   const missing = new Set<string>();
   for (const k of collectAssetKeys(doc, courseId)) {
     if (!have.has(k.key)) missing.add(k.key);
@@ -121,28 +135,50 @@ export function missingAssetKeys(
 }
 
 /**
- * Split a manifest's `failed` list into the two states the import must treat
- * differently. ONLY 403/404 means "deleted at the source" — a terminal orphan the
- * import may drop (blanked key + manual flag). Anything else (500, network, 0) is
- * an UNKNOWN state: the asset probably still exists and the export simply didn't
- * get it, so calling it orphaned would silently discard live media.
+ * Split a manifest's `failed` list into the three states the import must treat
+ * differently. A required 403/404 is blanked + manually flagged. A typed
+ * optional 403/404 is blanked without a flag. Anything else (500, network, 0)
+ * is UNKNOWN and blocks import rather than silently discarding possible media.
  */
 export function classifyAssetFailures(
-  failed: { key: string; status?: number; error?: string }[] | undefined,
+  failed:
+    | {
+        key: string;
+        status?: number;
+        error?: string;
+        optionalReason?: OptionalAssetReason;
+      }[]
+    | undefined,
 ): {
   orphans: { key: string; status?: number }[];
+  optional: {
+    key: string;
+    status?: number;
+    optionalReason: OptionalAssetReason;
+  }[];
   unresolved: { key: string; status?: number; error?: string }[];
 } {
   const orphans: { key: string; status?: number }[] = [];
+  const optional: {
+    key: string;
+    status?: number;
+    optionalReason: OptionalAssetReason;
+  }[] = [];
   const unresolved: { key: string; status?: number; error?: string }[] = [];
   for (const f of failed ?? []) {
-    if (isOrphanStatus(f.status)) orphans.push({ key: f.key, status: f.status });
+    if (isOrphanStatus(f.status) && f.optionalReason) {
+      optional.push({
+        key: f.key,
+        status: f.status,
+        optionalReason: f.optionalReason,
+      });
+    } else if (isOrphanStatus(f.status)) orphans.push({ key: f.key, status: f.status });
     else unresolved.push({ key: f.key, status: f.status, error: f.error });
   }
-  return { orphans, unresolved };
+  return { orphans, optional, unresolved };
 }
 
-/** Map a course's saved asset manifest → plan AssetEntry[] (downloaded + orphan).
+/** Map a course's saved asset manifest → plan AssetEntry[] (downloaded + terminal).
  *  `fileByKey` also yields the archive filename so we can read bytes for upload.
  *  `unresolved` lists keys whose bytes are missing for a NON-terminal reason. */
 async function readCourseAssets(
@@ -161,7 +197,12 @@ async function readCourseAssets(
   try {
     const m = JSON.parse(raw) as {
       assets?: { key: string; kind: string; file: string; ext: string; size?: number }[];
-      failed?: { key: string; status?: number; error?: string }[];
+      failed?: {
+        key: string;
+        status?: number;
+        error?: string;
+        optionalReason?: OptionalAssetReason;
+      }[];
     };
     for (const a of m.assets ?? []) {
       entries.push({ key: a.key, kind: a.kind, file: a.file, ext: a.ext, size: a.size });
@@ -171,6 +212,14 @@ async function readCourseAssets(
     // aborts the course in runImport rather than dropping media as "deleted".
     const split = classifyAssetFailures(m.failed);
     for (const f of split.orphans) entries.push({ key: f.key, kind: 'media-other', orphaned: true });
+    for (const f of split.optional) {
+      entries.push({
+        key: f.key,
+        kind: 'media-other',
+        optionalUnavailable: true,
+        optionalReason: f.optionalReason,
+      });
+    }
     unresolved.push(...split.unresolved);
   } catch {
     /* tolerate a malformed manifest — treat as no assets */
@@ -209,8 +258,9 @@ async function readStorylineAttach(
       blocks?: Array<{
         blockId: string;
         lessonId?: string;
-        leaf: string;
+        leaf?: string;
         meta?: unknown;
+        compatibility?: 'automatic' | 'legacy-unsupported' | 'source-placeholder';
         locale?: string;
         l10nId?: string;
       }>;
@@ -222,6 +272,14 @@ async function readStorylineAttach(
       { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
     >();
     for (const b of m.blocks ?? []) {
+      // Legacy packages may exist in pre-policy manifests and may even have a
+      // stale upload record from an `unpackFailed` Review item. They must never
+      // reach copy_review_item; the planner inserts the explicit placeholder.
+      if (
+        b.compatibility === 'legacy-unsupported' ||
+        isKnownLegacyStorylineMeta(b.meta)
+      ) continue;
+      if (!b.leaf) continue;
       const reviewPrefix = m.uploads?.[b.leaf]?.reviewPrefix;
       if (!reviewPrefix) continue;
       // Every manifest since Stage D records lessonId; an entry without one

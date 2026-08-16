@@ -5,7 +5,10 @@
 // size + checksum (sha256 = the content address = the checksum). Storyline /
 // cdn / embed refs are recorded under `skipped` (kept as references, not bytes).
 
-import type { AssetKey, DownloadableKind } from './keys';
+import type { AssetKey, DownloadableKind, OptionalAssetReason } from './keys';
+
+/** Increment when the required/optional media classification changes. */
+export const ASSET_POLICY_VERSION = 2;
 
 export type OwnerType = 'course' | 'bank';
 
@@ -30,6 +33,8 @@ export interface AssetFailure {
   urlTried?: string;
   /** JSON path(s) in the source doc where this key was referenced (locating). */
   paths?: string[];
+  /** Present when this is unavailable authoring provenance, not live media. */
+  optionalReason?: OptionalAssetReason;
 }
 
 /**
@@ -47,19 +52,22 @@ export interface AssetManifest {
   ownerType: OwnerType;
   ownerId: string;
   generatedAt: string;
+  /** Required/optional reference policy used to build this manifest. */
+  assetPolicyVersion?: number;
   /** Distinct keys discovered (= assets.length + failed.length when complete). */
   keyCount: number;
   assets: AssetManifestEntry[];
-  /** Every key without bytes: retryable failures AND terminal orphans (403/404).
-   *  Orphans stay in this list across runs — the import plan reads `failed` to
-   *  flag block-less keys — but are never re-fetched (see `priorOrphans`). */
+  /** Every key without bytes: retryable failures, terminal active orphans, and
+   *  terminal optional provenance. Terminal rows stay visible across runs and
+   *  are never re-fetched (see `priorOrphans`). */
   failed: AssetFailure[];
-  /** How many of `failed` are terminal orphans (missing at source). Absent in
-   *  manifests written before orphan accounting — treat as unknown, not 0. */
+  /** How many of `failed` are terminal REQUIRED orphans (missing at source).
+   *  Absent in manifests written before orphan accounting — treat as unknown. */
   orphanCount: number;
-  /** True when every DOWNLOADABLE key was stored. Orphans (403/404 at source)
-   *  are a terminal, separately-counted state and do not block completeness;
-   *  retryable failures do. */
+  /** Unavailable non-rendering source/provenance references. */
+  optionalUnavailableCount?: number;
+  /** True when every fetch reached a terminal state. Required orphans and
+   *  optional unavailable refs do not block completion; retryable failures do. */
   complete: boolean;
 }
 
@@ -71,16 +79,24 @@ export function buildAssetManifest(
   failed: AssetFailure[],
   generatedAt: string = new Date().toISOString(),
 ): AssetManifest {
-  const orphanCount = failed.filter((f) => isOrphanStatus(f.status)).length;
+  const optionalUnavailableCount = failed.filter(
+    (f) => f.optionalReason && isOrphanStatus(f.status),
+  ).length;
+  const orphanCount = failed.filter(
+    (f) => !f.optionalReason && isOrphanStatus(f.status),
+  ).length;
+  const unresolved = failed.filter((f) => !isOrphanStatus(f.status)).length;
   return {
     ownerType,
     ownerId,
     generatedAt,
+    assetPolicyVersion: ASSET_POLICY_VERSION,
     keyCount: collected.length,
     assets,
     failed,
     orphanCount,
-    complete: failed.length === orphanCount,
+    optionalUnavailableCount,
+    complete: unresolved === 0,
   };
 }
 
@@ -90,13 +106,16 @@ export function assetManifestToJson(m: AssetManifest): string {
 
 /**
  * Loud-fail check (CLAUDE.md: "no source media keys may survive"): every
- * collected key must resolve to a downloaded asset entry. Returns the keys that
- * did NOT — empty array means the owner's media is fully self-sufficient.
+ * required collected key must resolve to a downloaded asset entry. Returns the
+ * required keys that did NOT; optional provenance never defines render fidelity.
  */
 export function findUndownloadedKeys(
   collected: AssetKey[],
   manifest: AssetManifest,
 ): string[] {
   const have = new Set(manifest.assets.map((a) => a.key));
-  return collected.map((c) => c.key).filter((k) => !have.has(k));
+  return collected
+    .filter((c) => !c.optionalReason)
+    .map((c) => c.key)
+    .filter((k) => !have.has(k));
 }

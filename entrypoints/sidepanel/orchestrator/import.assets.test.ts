@@ -24,8 +24,23 @@ describe('classifyAssetFailures', () => {
   });
 
   it('tolerates a manifest with no failures', () => {
-    expect(classifyAssetFailures(undefined)).toEqual({ orphans: [], unresolved: [] });
-    expect(classifyAssetFailures([])).toEqual({ orphans: [], unresolved: [] });
+    expect(classifyAssetFailures(undefined)).toEqual({
+      orphans: [],
+      optional: [],
+      unresolved: [],
+    });
+    expect(classifyAssetFailures([])).toEqual({ orphans: [], optional: [], unresolved: [] });
+  });
+
+  it('separates terminal optional provenance from missing active media', () => {
+    const split = classifyAssetFailures([
+      { key: 'active', status: 403 },
+      { key: 'source', status: 403, optionalReason: 'input-source' },
+    ]);
+    expect(split.orphans.map((f) => f.key)).toEqual(['active']);
+    expect(split.optional).toEqual([
+      { key: 'source', status: 403, optionalReason: 'input-source' },
+    ]);
   });
 });
 
@@ -69,6 +84,24 @@ describe('missingAssetKeys — forgotten "Download assets" pre-flight', () => {
       { key: 'rise/courses/C1/ru-override.jpg', file: 'assets/b.jpg' },
     ];
     expect(missingAssetKeys(doc, 'C1', entries)).toEqual([]);
+  });
+
+  it('counts an unavailable optional provenance key as handled', () => {
+    const source = 'rise/courses/C1/source.mp3';
+    const shaped = {
+      media: {
+        audio: {
+          inputKey: source,
+          key: 'rise/courses/C1/transcoded.mp3',
+        },
+      },
+    };
+    expect(
+      missingAssetKeys(shaped, 'C1', [
+        { key: source, optionalUnavailable: true },
+        { key: 'rise/courses/C1/transcoded.mp3', file: 'assets/audio.mp3' },
+      ]),
+    ).toEqual([]);
   });
 
   it('is empty for a course with no media at all (no false alarm)', () => {

@@ -53,6 +53,7 @@ import {
   blockKey,
   authorProfile,
 } from './executor-types';
+import { legacyStorylinePlaceholderBlock } from '@/core/storyline/compatibility';
 import type { ExecutorDeps, ExecResult, AssetBytes } from './executor-types';
 import type { GetCourseDocument } from '@/shared/types/rise';
 
@@ -666,7 +667,13 @@ export async function executePlan(
             // per-block id, so two lessons never claim the same block id. Then the
             // usual IdMap pass handles cuid-shaped ids + refs globally.
             const normalized = freshClientIds(entry.block, mint);
-            const remapped = blankUploadedMediaKeys(remapIds(normalized, ids)) as Record<string, unknown>;
+            const remappedSource = blankUploadedMediaKeys(
+              remapIds(normalized, ids),
+            ) as Record<string, unknown>;
+            const remapped =
+              ref.replacement === 'legacy-storyline'
+                ? legacyStorylinePlaceholderBlock(remappedSource, mint)
+                : remappedSource;
             const newBlockId = String(remapped.id ?? '');
             newIdToSource.set(newBlockId, ref.sourceBlockId);
             built.push(remapped);
@@ -831,13 +838,21 @@ export async function executePlan(
           break;
         }
         case 'flag-storyline': {
+          const legacy = step.reason === 'legacy';
           result.flags.push({
             kind: 'storyline',
             sourceBlockId: step.sourceBlockId,
             sourceLessonId: step.sourceLessonId,
-            detail: 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
+            ...(legacy ? { expectedReplacement: 'legacy-storyline' as const } : {}),
+            detail: legacy
+              ? 'Legacy Storyline package is incompatible with Review 360 — a visible placeholder was imported; republish the original .story project in current Storyline, upload it to Review 360, and attach it manually'
+              : 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
           });
-          log(`${pfx()} ⚠ FLAG storyline — block ${step.sourceBlockId} needs manual Review 360 attach`);
+          log(
+            legacy
+              ? `${pfx()} ⚠ FLAG legacy storyline — block ${step.sourceBlockId} replaced with a manual-review placeholder`
+              : `${pfx()} ⚠ FLAG storyline — block ${step.sourceBlockId} needs manual Review 360 attach`,
+          );
           break;
         }
         case 'flag-draw-from-bank': {
@@ -864,6 +879,14 @@ export async function executePlan(
           // strips the dead source key instead of shipping it verbatim.
           keyMap.set(step.sourceKey, '');
           log(`${pfx()} ⚠ FLAG orphan-media — ${step.sourceKey} (deleted at source)`);
+          break;
+        }
+        case 'drop-optional-media': {
+          // Capture-confirmed non-rendering provenance (pre-transcode inputs,
+          // temp media, original crop sources, inactive image variants). It is
+          // safe to omit, but the source key must never leak into target JSON.
+          keyMap.set(step.sourceKey, '');
+          log(`${pfx()} Drop optional ${step.reason} — ${step.sourceKey}`);
           break;
         }
         case 'flag-unsupported-media': {

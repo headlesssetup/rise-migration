@@ -21,6 +21,8 @@ const STACK_AWAIT_S = 300;
 /** How many paced authoring envelopes a step costs (rough). */
 function pacedEnvelopes(step: PlanStep): number {
   switch (step.kind) {
+    case 'drop-optional-media':
+      return 0;
     case 'create-course':
       return 2; // POST /content + GET_COURSE handshake
     case 'create-bank':

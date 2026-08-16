@@ -207,6 +207,81 @@ describe('executePlan — mixed uploadable + orphaned key on one block (C2)', ()
   });
 });
 
+describe('executePlan — unavailable optional source media', () => {
+  it('blanks the source inputKey, uploads active playback media, and adds no flag', async () => {
+    const source = 'rise/courses/SRC/original.mp3';
+    const active = 'rise/courses/SRC/transcoded.mp3';
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [
+        {
+          key: source,
+          kind: 'media-other',
+          optionalUnavailable: true,
+          optionalReason: 'input-source',
+        },
+        { key: active, kind: 'media-audio', file: 'assets/a.mp3', ext: 'mp3' },
+      ],
+      banksById: new Map(),
+      course: {
+        course: { id: 'SRC', title: 'C' },
+        lessons: [
+          {
+            id: 'L1',
+            position: 0,
+            type: 'blocks',
+            title: 'L',
+            items: [
+              {
+                id: 'cblock00000000000000000000',
+                family: 'multimedia',
+                variant: 'audio',
+                items: [
+                  {
+                    id: 'citem000000000000000000000',
+                    media: { audio: { inputKey: source, key: active } },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    let patched: any = null;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      GET_YURL: () => ({
+        payload: {
+          key: 'rise/courses/NEWCOURSE/server.mp3',
+          url: 'https://s3/put',
+          type: 'audio/mpeg',
+        },
+      }),
+      UPDATE_BLOCK_DEBOUNCE: (body: any) => {
+        patched = body.payload;
+        return { payload: { success: true } };
+      },
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async (key) =>
+        key === active ? { base64: 'AAAA', contentType: 'audio/mpeg' } : null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.flags).toEqual([]);
+    expect(res.survivingKeys).toEqual([]);
+    expect(patched.item.items[0].media.audio.inputKey).toBe('');
+    expect(patched.item.items[0].media.audio.key).toBe(
+      'rise/courses/NEWCOURSE/server.mp3',
+    );
+  });
+});
+
 describe('executePlan — orphaned course cover (missing archived bytes)', () => {
   it('flags + blanks the cover so UPDATE_COURSE ships without it and the course SUCCEEDS', async () => {
     const COVER = 'rise/courses/SRC/cover.jpg';

@@ -633,6 +633,10 @@ export function App() {
         setAssets(summary);
         setPhase('done');
         const orphan = summary.orphaned.reduce((s, o) => s + o.keys.length, 0);
+        const optionalUnavailable = summary.optionalUnavailable.reduce(
+          (s, o) => s + o.keys.length,
+          0,
+        );
         addLog(
           `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
             summary.skipped ? ` (${summary.skipped} already done)` : ''
@@ -640,7 +644,12 @@ export function App() {
         );
         if (orphan) {
           addLog(
-            `${orphan} asset(s) missing at source (403/404 — likely deleted); flagged in assets-summary.json, not blocking.`,
+            `⚠ ${orphan} active asset(s) unavailable at source (403/404); flagged for manual handling.`,
+          );
+        }
+        if (optionalUnavailable) {
+          addLog(
+            `${optionalUnavailable} optional source/provenance ref(s) unavailable; active rendering media is unaffected.`,
           );
         }
         if (!summary.complete) {
@@ -708,7 +717,7 @@ export function App() {
         setStoryline(summary);
         setPhase('done');
         addLog(
-          `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks. → storyline/<courseId>/<leaf>.zip + manifest.`,
+          `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged for manual replacement. → storyline/<courseId>/<leaf>.zip + manifest.`,
         );
         if (summary.failed) {
           for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);

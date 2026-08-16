@@ -100,6 +100,30 @@ describe('verifyParity', () => {
     expect(r.issues.some((i) => i.kind === 'block-type-changed')).toBe(true);
   });
 
+  it('treats only an announced legacy Storyline donor replacement as expected', () => {
+    const s = src();
+    (s.lessons![0]!.items![0] as any) = {
+      id: 'b1src',
+      family: '360',
+      variant: 'storyline',
+      items: [{ id: 'i1', media: { storyline: { meta: { version: '3.48.24159.0' } } } }],
+    };
+    const t = faithfulTarget();
+    const r = verifyParity(s, t, [
+      {
+        kind: 'storyline',
+        sourceLessonId: 'L1src',
+        sourceBlockId: 'b1src',
+        expectedReplacement: 'legacy-storyline',
+        detail: 'legacy placeholder',
+      },
+    ]);
+    expect(r.issues.some((issue) => issue.kind === 'block-type-changed')).toBe(false);
+    expect(
+      r.expectedDivergences.some((issue) => issue.kind === 'block-type-changed'),
+    ).toBe(true);
+  });
+
   it('flags real content change (text differs)', () => {
     const t = faithfulTarget();
     (t.lessons![0]!.items![0] as any).items[0].paragraph = '<p>Goodbye</p>';

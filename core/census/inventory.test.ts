@@ -3,6 +3,7 @@ import {
   buildInventory,
   inventoryToCsv,
   inventoryToJson,
+  withImportability,
   withFolderPaths,
   type InventoryRow,
 } from './inventory';
@@ -45,9 +46,17 @@ describe('inventory', () => {
     const csv = inventoryToCsv(rows);
     const lines = csv.split('\n');
     expect(lines[0]).toBe(
-      'id,title,type,lessonCount,multi_language,owner,ownerEmail,folderId,folderPath,shareId,createdAt,updatedAt,ready,deleted',
+      'id,title,type,lessonCount,multi_language,owner,ownerEmail,folderId,folderPath,shareId,createdAt,updatedAt,ready,deleted,importability',
     );
     expect(csv).toContain('"Course, with comma"');
+  });
+
+  it('adds general importability comments while leaving unscanned rows alone', () => {
+    const two = [...rows, { ...rows[0]!, id: 'other' }];
+    const updated = withImportability(two, new Map([['abc', 'Legacy Storyline']]));
+    expect(updated[0]!.importability).toBe('Legacy Storyline');
+    expect(updated[1]!.importability).toBeUndefined();
+    expect(inventoryToCsv(updated)).toContain('Legacy Storyline');
   });
 
   describe('multi_language column', () => {
