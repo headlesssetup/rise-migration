@@ -72,6 +72,18 @@ describe('writeBuiltCourse', () => {
     ]);
   });
 
+  it('skips the production file entirely when there is no narration', async () => {
+    const fs = fakeStorage();
+    const files = await writeBuiltCourse(
+      fs.storage,
+      { ...BUILT, productionMd: null },
+      '2026-08-10T00:00:00Z',
+      '0.8.0',
+    );
+    expect(fs.artifacts.has('sb-c1.production.md')).toBe(false);
+    expect(files.productionFile).toBeUndefined();
+  });
+
   it('warns but does not block when a previous interrupted-build lock exists', async () => {
     const fs = fakeStorage(
       JSON.stringify({ startedAt: '2026-08-09T01:02:03Z', sourceFile: 'old.pptx' }),

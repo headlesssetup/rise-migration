@@ -380,7 +380,9 @@ export function App() {
                   <li>{written.courseFile}</li>
                   <li>{written.manifestFile}</li>
                   <li>{written.planFile} — the pasted blueprint, verbatim</li>
-                  <li>{written.productionFile} — narration scripts for production</li>
+                  {written.productionFile && (
+                    <li>{written.productionFile} — narration scripts for production</li>
+                  )}
                 </ul>
                 {written.priorBuildWarning && (
                   <p className="error">⚠ {written.priorBuildWarning}</p>

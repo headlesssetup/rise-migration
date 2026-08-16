@@ -97,11 +97,21 @@ describe('compileCourseBlueprint', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('writes the production report grouped by lesson with slide numbers', () => {
+  it('writes the production report (English scaffolding) grouped by lesson with slide numbers', () => {
     const built = compileCourseBlueprint(minimal(), '2026-08-16T00:00:00Z', mints());
+    expect(built.productionMd).toContain('# Production material — 1.1. Testa kurss');
     expect(built.productionMd).toContain('## Tēma 1');
-    expect(built.productionMd).toContain('### Slaids 2 — Video (~3 min)');
+    expect(built.productionMd).toContain('### Slide 2 — Video (~3 min)');
     expect(built.productionMd).toContain('Runas teksts.');
+  });
+
+  it('returns no production report when the blueprint has no narration', () => {
+    const built = compileCourseBlueprint(
+      { ...minimal(), production: [] },
+      '2026-08-16T00:00:00Z',
+      mints(),
+    );
+    expect(built.productionMd).toBeNull();
   });
 
   it('records per-block provenance in the plan artifact', () => {

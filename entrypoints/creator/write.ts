@@ -13,7 +13,8 @@ export interface WrittenFiles {
   courseFile: string;
   manifestFile: string;
   planFile: string;
-  productionFile: string;
+  /** Absent when the blueprint carried no narration entries. */
+  productionFile?: string;
   /** Present when a lock from an earlier interrupted build was replaced. */
   priorBuildWarning?: string;
 }
@@ -68,7 +69,9 @@ export async function writeBuiltCourse(
   const planName = `${built.courseId}.blueprint.json`;
   const productionName = `${built.courseId}.production.md`;
   await storage.writeCreatorArtifact(planName, built.planJson);
-  await storage.writeCreatorArtifact(productionName, built.productionMd);
+  if (built.productionMd !== null) {
+    await storage.writeCreatorArtifact(productionName, built.productionMd);
+  }
 
   await storage.writeManifest(createManifestV1({ ...manifestArgs, state: 'ready' }));
   await storage.removeCreatorArtifact(BUILD_LOCK);
@@ -77,7 +80,7 @@ export async function writeBuiltCourse(
     courseFile: `courses/${built.courseId}.json`,
     manifestFile: 'manifest.json',
     planFile: `_creator/${planName}`,
-    productionFile: `_creator/${productionName}`,
+    ...(built.productionMd !== null ? { productionFile: `_creator/${productionName}` } : {}),
     ...(priorBuildWarning ? { priorBuildWarning } : {}),
   };
 }
