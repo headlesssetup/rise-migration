@@ -119,6 +119,11 @@ export interface Storage {
   hasStorylineZip(courseId: string, leaf: string): Promise<boolean>;
   /** Read a built storyline package zip (import: upload to Review 360), or null. */
   readStorylineZip(courseId: string, leaf: string): Promise<Uint8Array | null>;
+  /** Preserve a known-incompatible package outside the uploadable store →
+   *  `storyline-legacy/<courseId>/<leaf>.zip`. Never consumed by import. */
+  writeLegacyStorylineZip(courseId: string, leaf: string, bytes: Uint8Array): Promise<void>;
+  /** Whether the quarantined legacy package is already preserved (resume). */
+  hasLegacyStorylineZip(courseId: string, leaf: string): Promise<boolean>;
   /** Write a course's storyline manifest → `storyline/<courseId>.manifest.json`
    *  (blockId → {lessonId, leaf, meta, zip}). The join key for the import attach. */
   writeStorylineManifest(courseId: string, json: string): Promise<void>;

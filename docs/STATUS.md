@@ -423,9 +423,14 @@ the old 3.9/3.26–3.34 router packages. Manual Review uploads of representative
 3.42 and 3.48 packages then completed create + S3 transfer but ended in the
 backend state `unpackFailed` (`capture-editing-20260816-zip-uploads.mitm`). The
 extension therefore classifies Storyline 360 update **3.48 and earlier** as the
-known legacy generation; missing/unfamiliar versions are never guessed. Legacy
-entries remain in the per-course manifest for reporting, are excluded from the
-Review upload work-list even when an old staged ZIP/upload record exists, and
+known legacy generation; missing/unfamiliar versions are never guessed. Each
+legacy package is extracted without the Review transform and preserved under
+`storyline-legacy/<courseId>/<leaf>.zip`; the manifest records that path as
+`archiveZip`. File bytes/paths inside the package are unchanged (the enclosing
+ZIP is deterministic because the source package arrived inside a larger web
+export). Resume backfills this artifact even when a pre-policy manifest already
+exists, preserving its modern upload records. Legacy entries are excluded from
+the Review upload work-list even when an old staged ZIP/upload record exists and
 add an `importability` comment to the course inventory. Import never feeds them
 to `copy_review_item`: a monolingual legacy block becomes a donor-backed visible
 text placeholder (“Legacy Storyline block, requires manual review”) plus a

@@ -69,12 +69,15 @@ function courseWithVersions(
 }
 
 // A web-export zip carrying that leaf's package.
-function webExportZip(): Uint8Array {
+function webExportZip(
+  leaf = LEAF,
+  storyHtml = '<head><meta name="robots" content="noindex, nofollow"></head><!-- 360 -->',
+): Uint8Array {
   return zipSync(
     {
       'content/runtime-data.js': enc('__jsonp("runtime-data.js","")'),
-      [`content/assets/${LEAF}/story.html`]: enc('<head><meta name="robots" content="noindex, nofollow"></head><!-- 360 -->'),
-      [`content/assets/${LEAF}/threeSixty.json`]: enc('{"title":"Geo 101"}'),
+      [`content/assets/${leaf}/story.html`]: enc(storyHtml),
+      [`content/assets/${leaf}/threeSixty.json`]: enc('{"title":"Geo 101"}'),
     },
     { mtime: Date.UTC(1980, 0, 1) },
   );
@@ -84,6 +87,7 @@ function webExportZip(): Uint8Array {
 function makeStorage() {
   const courses = new Map<string, string>([['C1', JSON.stringify({ payload: COURSE_DOC })]]);
   const zips = new Map<string, Uint8Array>();
+  const legacyZips = new Map<string, Uint8Array>();
   const manifests = new Map<string, string>();
   return {
     store: {
@@ -93,8 +97,13 @@ function makeStorage() {
       writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
       writeStorylineZip: async (id: string, leaf: string, bytes: Uint8Array) =>
         void zips.set(`${id}/${leaf}`, bytes),
+      writeLegacyStorylineZip: async (id: string, leaf: string, bytes: Uint8Array) =>
+        void legacyZips.set(`${id}/${leaf}`, bytes),
+      hasLegacyStorylineZip: async (id: string, leaf: string) =>
+        legacyZips.has(`${id}/${leaf}`),
     } as any,
     zips,
+    legacyZips,
     manifests,
   };
 }
@@ -241,40 +250,98 @@ describe('exportStorylinePackages', () => {
     expect(exportOne).not.toHaveBeenCalled();
   });
 
-  it('writes a report-only manifest for a legacy package without live export/auth', async () => {
+  it('preserves a legacy package unchanged in the quarantined store', async () => {
     const doc = courseWithVersions([
       { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
     ]);
     const manifests = new Map<string, string>();
+    const legacyZips = new Map<string, Uint8Array>();
     const store = {
       listSaved: async () => ['C1'],
       readCourse: async () => JSON.stringify({ payload: doc }),
       readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
       writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      hasLegacyStorylineZip: async (id: string, leaf: string) =>
+        legacyZips.has(`${id}/${leaf}`),
+      writeLegacyStorylineZip: async (id: string, leaf: string, bytes: Uint8Array) =>
+        void legacyZips.set(`${id}/${leaf}`, bytes),
     } as any;
     const { onEvent } = sink();
-    const exportOne = vi.fn();
-    const refresh = vi.fn();
-    const resolvePin = vi.fn();
+    const exportOne = vi.fn(async () => ({
+      ok: true as const,
+      location: 'https://cdn/legacy.zip',
+      jobId: 'legacy-job',
+    }));
+    const legacyHtml = '<html><!-- version: 3.48.24159.0 --><body>legacy</body></html>';
     const summary = await exportStorylinePackages(store, onEvent, {
       exportOne,
-      refresh,
-      pinTab: resolvePin,
+      fetchZip: vi.fn(async () => webExportZip('OLD', legacyHtml)),
+      refresh: vi.fn(async () => ({ advanced: true, valid: true })),
+      pinTab,
+      pacing: { baseMs: 0, jitterMs: 0 },
     });
     expect(summary).toMatchObject({
       courses: 1,
-      packaged: 0,
-      skipped: 1,
+      packaged: 1,
+      skipped: 0,
       failed: 0,
       legacySkipped: 1,
+      legacySaved: 1,
     });
-    expect(exportOne).not.toHaveBeenCalled();
-    expect(refresh).not.toHaveBeenCalled();
-    expect(resolvePin).not.toHaveBeenCalled();
+    expect(exportOne).toHaveBeenCalledTimes(1);
+    const preserved = unzipSync(legacyZips.get('C1/OLD')!);
+    expect(new TextDecoder().decode(preserved['story.html']!)).toBe(legacyHtml);
     expect(JSON.parse(manifests.get('C1')!).blocks[0]).toMatchObject({
       leaf: 'OLD',
       compatibility: 'legacy-unsupported',
+      archiveZip: 'storyline-legacy/C1/OLD.zip',
     });
+  });
+
+  it('backfills a missing legacy ZIP despite a pre-policy manifest and preserves uploads', async () => {
+    const doc = courseWithVersions([
+      { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
+      { blockId: 'new', leaf: 'NEW', version: '3.49.24347.0' },
+    ]);
+    let manifest = JSON.stringify({
+      courseId: 'C1',
+      blocks: [{ blockId: 'new', lessonId: 'les_1', leaf: 'NEW' }],
+      uploads: { NEW: { itemId: 'review-new', reviewPrefix: 'review/items/NEW' } },
+    });
+    const legacyZips = new Map<string, Uint8Array>();
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async () => manifest,
+      writeStorylineManifest: async (_id: string, json: string) => void (manifest = json),
+      hasLegacyStorylineZip: async () => false,
+      writeLegacyStorylineZip: async (id: string, leaf: string, bytes: Uint8Array) =>
+        void legacyZips.set(`${id}/${leaf}`, bytes),
+      writeStorylineZip: vi.fn(),
+    } as any;
+    const exportOne = vi.fn(async () => ({
+      ok: true as const,
+      location: 'https://cdn/mixed.zip',
+      jobId: 'backfill-job',
+    }));
+    const mixedZip = zipSync({
+      'content/runtime-data.js': enc('__jsonp("runtime-data.js","")'),
+      'content/assets/OLD/story.html': enc('<html>old</html>'),
+      'content/assets/OLD/threeSixty.json': enc('{"version":"3.48.24159.0"}'),
+      'content/assets/NEW/story.html': enc('<html>new</html>'),
+    });
+    const { onEvent } = sink();
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne,
+      fetchZip: vi.fn(async () => mixedZip),
+      refresh: vi.fn(async () => ({ advanced: true, valid: true })),
+      pinTab,
+      pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ packaged: 1, legacySaved: 1, failed: 0 });
+    expect(store.writeStorylineZip).not.toHaveBeenCalled();
+    expect(legacyZips.has('C1/OLD')).toBe(true);
+    expect(JSON.parse(manifest).uploads.NEW.reviewPrefix).toBe('review/items/NEW');
   });
 
   it('aborts up-front (attempts nothing) when the token cannot be refreshed', async () => {

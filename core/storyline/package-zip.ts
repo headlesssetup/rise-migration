@@ -103,6 +103,17 @@ export function buildReview360Zip(pkg: PackageFiles): Uint8Array {
   return zipSync(entries, { mtime: FIXED_MTIME });
 }
 
+/**
+ * Preserve an extracted package without applying the Review-360 transform.
+ * File bytes and paths are unchanged; only the deterministic ZIP container is
+ * new because the source arrives embedded in a larger Rise web export.
+ */
+export function buildPreservedPackageZip(pkg: PackageFiles): Uint8Array {
+  const entries: Record<string, Uint8Array> = {};
+  for (const [rel, data] of pkg) entries[rel] = data;
+  return zipSync(entries, { mtime: FIXED_MTIME });
+}
+
 /** Convenience: web-export zip bytes + leaf → Review-360 zip bytes. */
 export function repackageLeafFromWebExport(webExportZip: Uint8Array, leaf: string): Uint8Array {
   const files = unzipToMap(webExportZip);

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import {
+  buildPreservedPackageZip,
   buildReview360Zip,
   extractPackage,
   getRuntimeDataJs,
@@ -91,6 +92,14 @@ describe('buildReview360Zip', () => {
   it('is deterministic (same input → identical bytes)', () => {
     const pkg = extractPackage(unzipToMap(makeWebExportZip()), LEAF);
     expect(buildReview360Zip(pkg)).toEqual(buildReview360Zip(pkg));
+  });
+
+  it('preserves legacy package file bytes without the Review transform', () => {
+    const pkg = extractPackage(unzipToMap(makeWebExportZip()), LEAF);
+    const out = unzipSync(buildPreservedPackageZip(pkg));
+    expect(out['story.html']).toEqual(enc(WEB_STORY));
+    expect(out['story_content/user.js']).toEqual(enc('var x=1;\r\n'));
+    expect(Object.keys(out).some((path) => path.startsWith('content/'))).toBe(false);
   });
 
   it('aborts the package loudly when the story.html transform no longer matches (M14)', () => {

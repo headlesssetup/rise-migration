@@ -6,8 +6,10 @@
 //    the zip pipeline). No network, no Rise tab.
 //  - exportStorylinePackages(): LIVE — for each such course, trigger the Rise
 //    web/raw export (background owns the bearer + ws.eu socket), download the zip
-//    from the CDN, repackage each Storyline leaf into a Review-360 upload zip, and
-//    store it under storyline/<courseId>/<leaf>.zip with a per-course manifest.
+//    from the CDN, repackage modern leaves into Review-360 upload zips under
+//    storyline/<courseId>/<leaf>.zip, preserve legacy leaves without transform
+//    under storyline-legacy/<courseId>/<leaf>.zip, and write one manifest that
+//    keeps the two stores unambiguous.
 //
 // Pacing: the build trigger is an authoring write, so courses are processed
 // strictly sequentially with a ~2s gap (the background does the build+await; we
@@ -29,6 +31,7 @@ import {
 } from '@/core/census/inventory';
 import { md5Base64, md5Hex } from '@/core/storyline/md5';
 import {
+  buildPreservedPackageZip,
   buildReview360Zip,
   extractPackage,
   getRuntimeDataJs,
@@ -193,6 +196,8 @@ export interface StorylineManifestEntry {
   meta?: unknown;
   /** Stored Review-360 upload zip, relative to the archive root. */
   zip?: string;
+  /** Preserved legacy runtime package, outside the uploadable store. */
+  archiveZip?: string;
   /** Explicit policy result; legacy entries are reports, never upload work. */
   compatibility?: 'automatic' | 'legacy-unsupported' | 'source-placeholder';
   /** STACK only (docs/rise-multilang.md §4.3b): the language this package
@@ -209,6 +214,8 @@ export interface StorylineExportSummary {
   failed: number;
   /** Individual legacy package refs deliberately not repackaged/uploaded. */
   legacySkipped: number;
+  /** Distinct legacy package leaves preserved to `storyline-legacy/`. */
+  legacySaved: number;
   /** Courses not attempted because the run aborted early (e.g. auth). */
   notAttempted: number;
   /** Set when the run aborted early; the reason (shown to the operator). */
@@ -316,6 +323,7 @@ export async function exportStorylinePackages(
     skipped: 0,
     failed: 0,
     legacySkipped: 0,
+    legacySaved: 0,
     notAttempted: 0,
     errors: [],
   };
@@ -323,14 +331,42 @@ export async function exportStorylinePackages(
 
   await updateStorylineImportability(storage, targets, onEvent);
 
-  // Resume and known-legacy decisions happen before any live auth/tab work.
-  // A legacy-only selection therefore completes entirely offline.
+  // Resume is artifact-aware: a pre-policy manifest does NOT count as complete
+  // when one of its legacy package leaves is absent from storyline-legacy/.
+  // This lets an operator rerun an existing archive and backfill preservation
+  // without forcing/rebuilding its already-staged modern packages.
   const pending: Array<
-    StorylineCourseScan & { exportableBlocks: StorylineBlockRef[] }
+    StorylineCourseScan & {
+      blocksToSave: StorylineBlockRef[];
+      previousManifest?: Record<string, unknown>;
+    }
   > = [];
   for (const target of targets) {
     summary.legacySkipped += target.legacyBlocks.length;
-    if (!deps.force && (await storage.readStorylineManifest(target.courseId))) {
+    const rawManifest = await storage.readStorylineManifest(target.courseId);
+    let previousManifest: Record<string, unknown> | undefined;
+    if (rawManifest) {
+      try {
+        const parsed = JSON.parse(rawManifest) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          previousManifest = parsed as Record<string, unknown>;
+        }
+      } catch {
+        previousManifest = undefined;
+      }
+    }
+
+    const missingLegacyLeaves = new Set<string>();
+    for (const block of target.legacyBlocks) {
+      if (!block.leaf || missingLegacyLeaves.has(block.leaf)) continue;
+      const exists =
+        !deps.force &&
+        typeof storage.hasLegacyStorylineZip === 'function' &&
+        (await storage.hasLegacyStorylineZip(target.courseId, block.leaf));
+      if (!exists) missingLegacyLeaves.add(block.leaf);
+    }
+
+    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
       summary.skipped += 1;
       onEvent({
         kind: 'log',
@@ -338,10 +374,17 @@ export async function exportStorylinePackages(
       });
       continue;
     }
-    const exportableBlocks = target.blocks.filter(
-      (block) => !!block.leaf && !isKnownLegacyStorylineMeta(block.meta),
-    );
-    if (!exportableBlocks.length) {
+
+    const blocksToSave = target.blocks.filter((block) => {
+      if (!block.leaf) return false;
+      if (isKnownLegacyStorylineMeta(block.meta)) {
+        return deps.force || missingLegacyLeaves.has(block.leaf);
+      }
+      // A prior manifest means the automatic package was already handled; this
+      // run exists only to backfill missing legacy preservation.
+      return deps.force || !rawManifest;
+    });
+    if (!blocksToSave.length) {
       const entries: StorylineManifestEntry[] = target.blocks.map((block) => ({
         blockId: block.blockId,
         lessonId: block.lessonId,
@@ -357,7 +400,12 @@ export async function exportStorylinePackages(
       await storage.writeStorylineManifest(
         target.courseId,
         JSON.stringify(
-          { courseId: target.courseId, title: target.title, blocks: entries },
+          {
+            ...(previousManifest ?? {}),
+            courseId: target.courseId,
+            title: target.title,
+            blocks: entries,
+          },
           null,
           2,
         ),
@@ -369,14 +417,14 @@ export async function exportStorylinePackages(
       });
       continue;
     }
-    pending.push({ ...target, exportableBlocks });
+    pending.push({ ...target, blocksToSave, previousManifest });
   }
 
   if (!pending.length) {
     onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
     onEvent({
       kind: 'log',
-      message: `Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged.`,
+      message: `Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
     });
     return summary;
   }
@@ -418,7 +466,7 @@ export async function exportStorylinePackages(
 
   const runStart = Date.now();
   for (let i = 0; i < pending.length; i++) {
-    const { courseId, title, blocks, exportableBlocks } = pending[i]!;
+    const { courseId, title, blocks, blocksToSave, previousManifest } = pending[i]!;
     const label = `[${i + 1}/${pending.length}]`;
     onEvent({ kind: 'course', index: i, total: pending.length, courseId, title });
     onEvent(
@@ -455,23 +503,34 @@ export async function exportStorylinePackages(
         runtimeLeaves = null; // diagnostics only — the physical check decides
       }
 
-      // Repackage each storyline block's leaf into a Review-360 upload zip.
-      const entries: StorylineManifestEntry[] = blocks
-        .filter((block) => isKnownLegacyStorylineMeta(block.meta) || !block.leaf)
-        .map((block) => ({
+      // Build the complete manifest from current source metadata. Modern
+      // packages point at the uploadable store; legacy packages point only at
+      // their quarantined preservation store.
+      const entries: StorylineManifestEntry[] = blocks.map((block) => {
+        const legacy = isKnownLegacyStorylineMeta(block.meta);
+        return {
           blockId: block.blockId,
           lessonId: block.lessonId,
           itemId: block.itemId,
           leaf: block.leaf,
           meta: block.meta,
-          compatibility: isKnownLegacyStorylineMeta(block.meta)
+          ...(block.leaf && legacy
+            ? { archiveZip: `storyline-legacy/${courseId}/${block.leaf}.zip` }
+            : block.leaf
+              ? { zip: `storyline/${courseId}/${block.leaf}.zip` }
+              : {}),
+          compatibility: legacy
             ? 'legacy-unsupported'
-            : 'source-placeholder',
+            : block.leaf
+              ? 'automatic'
+              : 'source-placeholder',
           ...(block.locale ? { locale: block.locale } : {}),
           ...(block.l10nId ? { l10nId: block.l10nId } : {}),
-        }));
-      const leavesDone = new Set<string>();
-      for (const b of exportableBlocks) {
+        };
+      });
+      const automaticDone = new Set<string>();
+      const legacyDone = new Set<string>();
+      for (const b of blocksToSave) {
         const where = b.locale ? `block ${b.blockId} [${b.locale}]` : `block ${b.blockId}`;
         if (!b.leaf) {
           onEvent({ kind: 'log', message: `${label} ${where}: no source leaf (placeholder), skipped` });
@@ -486,33 +545,40 @@ export async function exportStorylinePackages(
                 : '; its runtime-data.js could not be parsed'),
           );
         }
-        if (!leavesDone.has(b.leaf)) {
+        if (isKnownLegacyStorylineMeta(b.meta)) {
+          if (!legacyDone.has(b.leaf)) {
+            const zip = buildPreservedPackageZip(extractPackage(files, b.leaf));
+            await storage.writeLegacyStorylineZip(courseId, b.leaf, zip);
+            legacyDone.add(b.leaf);
+          }
+        } else if (!automaticDone.has(b.leaf)) {
           const zip = buildReview360Zip(extractPackage(files, b.leaf));
           await storage.writeStorylineZip(courseId, b.leaf, zip);
-          leavesDone.add(b.leaf);
+          automaticDone.add(b.leaf);
         }
-        entries.push({
-          blockId: b.blockId,
-          lessonId: b.lessonId,
-          itemId: b.itemId,
-          leaf: b.leaf,
-          meta: b.meta,
-          zip: `storyline/${courseId}/${b.leaf}.zip`,
-          compatibility: 'automatic',
-          ...(b.locale ? { locale: b.locale } : {}),
-          ...(b.l10nId ? { l10nId: b.l10nId } : {}),
-        });
       }
 
       await storage.writeStorylineManifest(
         courseId,
-        JSON.stringify({ courseId, title, jobId: res.jobId, blocks: entries }, null, 2),
+        JSON.stringify(
+          {
+            ...(previousManifest ?? {}),
+            courseId,
+            title,
+            jobId: res.jobId,
+            blocks: entries,
+          },
+          null,
+          2,
+        ),
       );
       summary.packaged += 1;
+      summary.legacySaved += legacyDone.size;
       onEvent({
         kind: 'log',
         message:
-          `${label} ${title ?? courseId}: ${leavesDone.size} package(s) → storyline/${courseId}/` +
+          `${label} ${title ?? courseId}: ${automaticDone.size} automatic package(s) → storyline/${courseId}/; ` +
+          `${legacyDone.size} legacy package(s) preserved → storyline-legacy/${courseId}/` +
           (entries.some((e) => e.locale)
             ? ` (${entries.filter((e) => e.locale).length} language-specific)`
             : ''),
@@ -539,7 +605,7 @@ export async function exportStorylinePackages(
   onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
   onEvent({
     kind: 'log',
-    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged.`,
+    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
   });
   return summary;
 }

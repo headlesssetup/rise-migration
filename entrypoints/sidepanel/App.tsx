@@ -717,7 +717,7 @@ export function App() {
         setStoryline(summary);
         setPhase('done');
         addLog(
-          `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged for manual replacement. → storyline/<courseId>/<leaf>.zip + manifest.`,
+          `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved. → storyline/<courseId>/<leaf>.zip, storyline-legacy/<courseId>/<leaf>.zip + manifest.`,
         );
         if (summary.failed) {
           for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
@@ -1015,14 +1015,17 @@ export function App() {
         <p className="hint">
           For the courses <b>selected above</b> (or all saved courses if none selected) that
           contain Storyline/Mighty blocks: triggers a Rise web export (paced), downloads the zip,
-          and repackages every storyline bundle into a Review-360 upload zip →
-          storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip + a per-course manifest. Select 1–2 courses in
-          C to test without exporting everything. Re-runnable (skips courses already exported).
+          and repackages modern bundles into Review-360 upload zips →
+          storyline/&lt;courseId&gt;/&lt;leaf&gt;.zip. Legacy bundles are preserved unchanged and
+          quarantined under storyline-legacy/&lt;courseId&gt;/&lt;leaf&gt;.zip; they are never uploaded.
+          A per-course manifest records both. Select 1–2 courses in C to test without exporting
+          everything. Re-runnable (skips only when all required artifacts already exist).
         </p>
         {storyline && (
           <p className="hint">
             {storyline.packaged} packaged · {storyline.skipped} skipped · {storyline.failed} failed
-            {' '}of {storyline.courses} storyline course(s).
+            {' '}of {storyline.courses} storyline course(s) · {storyline.legacySaved} legacy zip(s)
+            preserved.
           </p>
         )}
       </section>

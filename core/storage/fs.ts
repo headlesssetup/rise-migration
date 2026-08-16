@@ -5,6 +5,8 @@
 //   <root>/courses/<id>.assets.json         per-course asset manifest
 //   <root>/question-banks/<id>.json|_index  raw banks (+ per-bank asset manifest)
 //   <root>/assets/<sha256>.<ext>            content-addressed media bytes (dedup)
+//   <root>/storyline/<id>/<leaf>.zip        uploadable modern Storyline packages
+//   <root>/storyline-legacy/<id>/<leaf>.zip quarantined legacy runtime packages
 //   <root>/account/                         raw account source: folders.json,
 //                                           block-templates/typefaces
 //   <root>/_metadata/                       derived reports (regenerated each run):
@@ -488,6 +490,36 @@ export class FileSystemStorage implements Storage {
       return new Uint8Array(await (await handle.getFile()).arrayBuffer());
     } catch {
       return null;
+    }
+  }
+
+  private legacyStorylineDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('storyline-legacy', { create });
+  }
+
+  private async legacyStorylineCourseDir(
+    courseId: string,
+    create = false,
+  ): Promise<FileSystemDirectoryHandle> {
+    return (await this.legacyStorylineDir(create)).getDirectoryHandle(courseId, { create });
+  }
+
+  async writeLegacyStorylineZip(
+    courseId: string,
+    leaf: string,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    const dir = await this.legacyStorylineCourseDir(courseId, true);
+    await this.writeFile(dir, `${leaf}.zip`, bytes as BufferSource);
+  }
+
+  async hasLegacyStorylineZip(courseId: string, leaf: string): Promise<boolean> {
+    try {
+      const dir = await this.legacyStorylineCourseDir(courseId);
+      await dir.getFileHandle(`${leaf}.zip`);
+      return true;
+    } catch {
+      return false;
     }
   }
 
