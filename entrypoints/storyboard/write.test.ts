@@ -13,13 +13,16 @@ function fakeStorage(initialLock?: string) {
   const storage = {
     writeCourse: async (id: string, raw: string) => void courses.set(id, raw),
     readCourse: async (id: string) => courses.get(id) ?? null,
+    hasCourse: async (id: string) => courses.has(id),
     listSaved: async () => [...courses.keys()],
     readManifest: async () => manifest,
     writeManifest: async (value: unknown) => {
       manifest = JSON.stringify(value);
       manifestStates.push((value as { state: string }).state);
     },
+    hasAssetManifest: async () => false,
     readAssetManifest: async () => null,
+    hasAsset: async () => false,
     readAsset: async () => null,
     writeCreatorArtifact: async (name: string, contents: string) =>
       void artifacts.set(name, contents),

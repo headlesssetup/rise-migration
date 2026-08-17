@@ -7,7 +7,8 @@
 export interface AccountIdentity {
   /** Display name from the Rise header / export manifest. */
   name?: string | null;
-  /** JWT `sub` (stable user id), when available. */
+  /** JWT `sub` (stable signed-in USER id), when available. It is not a Rise
+   *  account/tenant id: one person may use the same `sub` on both planes. */
   sub?: string | null;
   /** Account-local Rise user id (`_articulate_user_id` cookie) — the valid
    *  principal for folder ownership (differs from `sub` on a cross-plane
@@ -46,8 +47,10 @@ export type GuardVerdict =
 
 /**
  * Source ≠ Target guard. Refuses to write into the same account (and warns on
- * same plane) unless explicitly overridden. Matching is by `sub` when both
- * sides expose it (strongest), else by case-folded name.
+ * same plane) unless explicitly overridden. Two known different planes are
+ * different Rise accounts, but a matching signed-in user id still blocks: when
+ * the operator expects different people, that match proves the target token is
+ * stale or mis-filled. Within one plane, a case-folded name is also evidence.
  */
 export function checkSourceNotTarget(
   source: AccountIdentity | undefined,
@@ -70,6 +73,8 @@ export function checkSourceNotTarget(
     };
   }
 
+  const sourcePlane = source.plane;
+  const targetPlane = target.plane;
   const sameSub =
     !!source.sub && !!target.sub && source.sub === target.sub;
   const sameName =
@@ -80,21 +85,28 @@ export function checkSourceNotTarget(
   // A destructive write guard should over-block (operator can override) rather
   // than under-block — e.g. when the target tab's JWT identity isn't captured
   // yet (target.sub null) but the names plainly match.
-  const sameAccount = sameSub || sameName;
   const samePlane =
     !!source.plane && !!target.plane && source.plane === target.plane;
+  const differentKnownPlanes =
+    !!sourcePlane && !!targetPlane && sourcePlane !== targetPlane;
+  // A user-id match is suspicious on every plane combination. A display-name
+  // match is weaker and only blocks within the same data plane; independent US
+  // and EU accounts may legitimately use the same organization name.
+  const sameAccount = sameSub || (samePlane && sameName);
 
   if (sameAccount && !override) {
     const matchedBy: 'sub' | 'name' = sameSub ? 'sub' : 'name';
     // Names present AND different, yet the JWT sub matched: the cached bearer
     // almost certainly predates an account switch. Say so — the operator would
     // otherwise see two different names above a "same account" verdict.
-    const namesDiffer =
-      !!source.name && !!target.name && !sameName;
+    const namesDiffer = !!source.name && !!target.name && !sameName;
     const detail =
       matchedBy === 'sub'
-        ? namesDiffer
-          ? `matched by signed-in user id (JWT sub) while the account names differ ("${source.name}" vs "${target.name}") — the captured token may predate an account switch: reload the target Rise COURSE EDITOR tab and re-check before overriding`
+        ? namesDiffer || differentKnownPlanes
+          ? `the target token carries the source signed-in user id (JWT sub)` +
+            `${namesDiffer ? ` while the displayed names differ ("${source.name}" vs "${target.name}")` : ''}` +
+            `${differentKnownPlanes ? ` across different planes (${sourcePlane!.toUpperCase()} → ${targetPlane!.toUpperCase()})` : ''}` +
+            ' — the target token is stale or mis-filled if these are different people: reload the target Rise COURSE EDITOR tab and re-check; do not override'
           : // A sub match with matching/absent names is either a genuine
             // same-account write OR a target token slot holding the SOURCE
             // account's bearer (stale, or — pre-F0 — cross-plane-poisoned).
@@ -104,14 +116,22 @@ export function checkSourceNotTarget(
         : `matched by account name ("${target.name}")`;
     return {
       ok: false,
-      reason: `Target looks like the SAME account as the source (${detail}). Importing here would write into the source account. Override only if you are certain.`,
+      reason: `Target authentication is not safely distinct from the source (${detail}). Importing now could use the wrong identity.`,
       sameAccount: true,
       samePlane,
       matchedBy,
     };
   }
   if (sameAccount && override) {
-    return { ok: true, reason: 'Same-account write explicitly overridden by operator.' };
+    return { ok: true, reason: 'Source/target identity match explicitly overridden by operator.' };
+  }
+  if (differentKnownPlanes) {
+    return {
+      ok: true,
+      reason:
+        `Target "${target.name ?? 'unknown'}" differs from source — ` +
+        `different Rise planes (${sourcePlane.toUpperCase()} → ${targetPlane.toUpperCase()}).`,
+    };
   }
   return {
     ok: true,

@@ -36,10 +36,12 @@ New exports and Creator builds use `rise-local-archive` format version 1:
   _import/                           # import reports and resume state
 ```
 
-The manifest records building/ready state and SHA-256 checksums. Import validates
-course JSON, ids, checksums, asset manifests, and asset bytes before target
-pinning or network work. Existing legacy archives remain readable with a visible
-integrity warning and are never upgraded merely by reading them.
+The manifest records building/ready state, file locations, and export-time
+SHA-256 provenance. Import readiness checks file presence, not historical byte
+identity: operators may intentionally replace local assets. Before network work,
+the selected courses are parsed and their media references must be covered by
+present files or recorded source-side failures. Existing legacy archives remain
+readable with a visible warning and are never upgraded merely by reading them.
 
 For Rise exports, fetching courses leaves the archive in `building` state;
 **Download assets** promotes it to `ready` after the byte set is complete.

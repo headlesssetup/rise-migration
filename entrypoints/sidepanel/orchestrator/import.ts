@@ -58,6 +58,7 @@ import {
   type L10nParityReport,
   type RunCsvCourse,
   verifyTypefaceBindings,
+  READ_BACK_POLICY_VERSION,
 } from '@/core/import';
 import { isKnownLegacyStorylineMeta } from '@/core/storyline/compatibility';
 import {
@@ -65,7 +66,7 @@ import {
   isOrphanStatus,
   type OptionalAssetReason,
 } from '@/core/assets';
-import { archiveErrorSummary, inspectLocalArchive } from '@/core/local-archive';
+import { archiveErrorSummary, inspectSelectedArchive } from '@/core/local-archive';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
@@ -393,6 +394,8 @@ interface PriorCourseReport {
   parity?: ParityReport;
   manual: ManualWorkItem[];
   idMap?: Record<string, string>;
+  /** Whether this report proves completion under the current parity contract. */
+  currentReadBackPolicy: boolean;
   /** A FINISHED live import: ok, not stopped, with a real target course id. */
   completed: boolean;
 }
@@ -401,17 +404,25 @@ function parsePriorReport(raw: string | null | undefined): PriorCourseReport | n
   if (!raw) return null;
   try {
     const p = JSON.parse(raw) as FidelityReport & {
+      readBackPolicyVersion?: number;
       parity?: ParityReport | null;
       manualWork?: ManualWorkItem[];
       idMap?: Record<string, string>;
     };
+    const currentReadBackPolicy = p.readBackPolicyVersion === READ_BACK_POLICY_VERSION;
     return {
       report: p,
       parity: p.parity ?? undefined,
       manual: p.manualWork ?? [],
       idMap: p.idMap,
+      currentReadBackPolicy,
       completed:
-        p.ok === true && p.dryRun === false && !p.stopped && typeof p.newCourseId === 'string' && !!p.newCourseId,
+        currentReadBackPolicy &&
+        p.ok === true &&
+        p.dryRun === false &&
+        !p.stopped &&
+        typeof p.newCourseId === 'string' &&
+        !!p.newCourseId,
     };
   } catch {
     return null; // corrupt report — treat as no prior run
@@ -478,11 +489,12 @@ export async function runImport(
   // Rows for the single run-level CSV (one file for the whole run), built per course.
   const csvCourses: RunCsvCourse[] = [];
 
-  // Archive integrity is the first gate, before target pinning, authentication,
-  // or any other network work. A v1 archive is usable only after its writer has
-  // marked it ready and every declared course/asset checksum verifies. Legacy
-  // archives remain supported by the inspector, with their explicit warning.
-  const archive = await inspectLocalArchive(storage);
+  // Selected-input readiness is the first gate, before target pinning,
+  // authentication, or any network work. Validate only what this run will use:
+  // files exist, selected course JSON parses, and its media refs are covered.
+  // Export-time hashes are intentionally NOT enforced; local replacement assets
+  // are an operator-supported workflow.
+  const archive = await inspectSelectedArchive(storage, courseIds);
   if (!archive.ready) {
     const reason = `Archive is not ready: ${archiveErrorSummary(archive) || 'validation failed'}`;
     onEvent({ kind: 'log', message: `BLOCKED: ${reason}` });
@@ -730,6 +742,14 @@ export async function runImport(
     // a re-run — the plan's create-course step would create a SECOND target
     // course — so the skip is what makes a re-run idempotent.
     const prior = parsePriorReport(await storage.readImportArtifact(`${courseId}.report.json`));
+    if (!opts.dryRun && prior && !prior.currentReadBackPolicy) {
+      onEvent({
+        kind: 'log',
+        message:
+          `${pfx} Prior report predates read-back policy v${READ_BACK_POLICY_VERSION}; ` +
+          'reusing its target ID map, but re-running final parity before this course can be considered imported',
+      });
+    }
     if (!opts.dryRun && prior?.completed) {
       onEvent({
         kind: 'log',
@@ -748,6 +768,7 @@ export async function runImport(
         targetCourseId: prior.report.newCourseId,
         status: 'imported',
         manual: prior.manual,
+        parity: prior.parity,
       });
       continue;
     }
@@ -961,12 +982,6 @@ export async function runImport(
       if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
         const targetDoc = unwrap(rb.result.data.raw);
         parity = verifyParity(course, targetDoc, res.flags);
-        onEvent({
-          kind: 'log',
-          message: parity.ok
-            ? `Parity OK — ${parity.blocks.compared} block(s) match (${parity.expectedDivergences.length} expected divergence(s))`
-            : `Parity DIVERGENCES — ${parity.issues.length} unexpected (see ${courseId}.report.md)`,
-        });
 
         // INVARIANT, measured on the REAL target (CLAUDE.md: "no source media keys
         // may survive"). The executor asserts this against a doc it derived itself,
@@ -1202,20 +1217,37 @@ export async function runImport(
           // cannot). Listed in the report for review.
           aiTextCells = defaultOnlyTextCells(course).map((c) => `${c.l10nId} ${c.locale}`);
         }
+        const blockingReadBackIssues =
+          parity.issues.length +
+          readBackForeign.length +
+          (l10nParity?.issues.length ?? 0);
+        onEvent({
+          kind: 'log',
+          message: blockingReadBackIssues === 0
+            ? `Read-back confirmation OK — ${parity.blocks.compared} block(s), course fields/settings, media ownership${l10nParity ? ', and language cells' : ''} match (${parity.expectedDivergences.length} announced exception(s))`
+            : `Read-back confirmation FAILED — ${blockingReadBackIssues} blocking divergence(s) (see ${courseId}.report.md)`,
+        });
       } else {
         onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
       }
     }
 
-    // Structural / course-field parity: unexpected divergences fail the course
-    // too (docs/rise-multilang.md §6: any divergence → partial, never
-    // imported). Expected divergences (course-settings gap, flagged media,
-    // draw-from-bank randomness) ride the expected bucket and don't downgrade.
-    if (parity && !parity.ok) {
+    // A successful live write is not "imported" until GET_COURSE read-back was
+    // obtained and every blocking structural/course-field/settings comparison
+    // passed. Announced media replacements and draw-from-bank randomness remain
+    // in the expected bucket; unmigrated course settings do not.
+    const parityReadBackMissing =
+      !opts.dryRun && res.ok && !!res.newCourseId && parity === undefined;
+    if (parityReadBackMissing) {
       report.ok = false;
       report.error =
         report.error ??
-        `Parity read-back FAILED: ${parity.issues.length} unexpected divergence(s) on ${res.newCourseId}`;
+        `Parity read-back UNAVAILABLE: could not confirm target course ${res.newCourseId}`;
+    } else if (parity && !parity.ok) {
+      report.ok = false;
+      report.error =
+        report.error ??
+        `Parity read-back FAILED: ${parity.issues.length} blocking divergence(s) on ${res.newCourseId}`;
     }
 
     // Resolve every manual-handling flag to a real location (course/lesson/block
@@ -1243,12 +1275,13 @@ export async function runImport(
       }),
     );
 
-    // Any UNEXPECTED read-back divergence — a surviving foreign key, a
+    // Any BLOCKING read-back divergence — a surviving foreign key, a
     // translation-cell divergence, or a structural/course-field parity issue
-    // (missing/changed blocks, a wrong title) — means the course exists but is
-    // NOT faithful. Known-gap divergences (course settings, flagged media)
-    // ride the expected bucket and do not downgrade.
+    // (including an unmigrated setting), or an unavailable GET_COURSE — means
+    // the course exists but is NOT confirmed faithful. Only explicitly
+    // announced replacements/absences ride the expected bucket.
     const readBackDiverged =
+      parityReadBackMissing ||
       readBackForeign.length > 0 ||
       (l10nParity && !l10nParity.ok) ||
       (parity && !parity.ok);
@@ -1282,6 +1315,7 @@ export async function runImport(
       targetCourseId: res.newCourseId,
       status,
       manual,
+      parity,
     });
 
     const titleStr = courseTitle ?? courseId;
@@ -1289,7 +1323,9 @@ export async function runImport(
     if (res.stopped) {
       msg = `STOPPED "${titleStr}" mid-course — partial, resumable on re-run (course ${res.newCourseId ?? '—'})`;
     } else if (res.ok && readBackDiverged) {
-      msg = `PARTIAL "${titleStr}": ${report.error} — course ${res.newCourseId} kept (re-run to repair)`;
+      msg =
+        `PARTIAL "${titleStr}": ${report.error} — course ${res.newCourseId} kept; ` +
+        'inspect the report (re-running only retries currently supported writes)';
     } else if (res.ok) {
       msg = `${opts.dryRun ? 'Planned' : 'Imported'} "${titleStr}" — ${report.planned.blocks} block(s), ${report.flags.length} flag(s)`;
     } else if (status === 'partial') {
@@ -1375,11 +1411,18 @@ function emitRunSummary(
   if (notStarted.length) parts.push(`${notStarted.length} not started`);
   onEvent({ kind: 'log', message: `  ${parts.join(', ')}` });
 
-  const resumable = [...partial, ...stoppedC];
-  if (resumable.length) {
+  if (partial.length) {
     onEvent({
       kind: 'log',
-      message: `  resumable (re-run to continue): ${resumable.map((o) => `"${o.title ?? o.courseId}"`).join(', ')}`,
+      message:
+        `  needs review (re-run only retries supported writes): ` +
+        partial.map((o) => `"${o.title ?? o.courseId}"`).join(', '),
+    });
+  }
+  if (stoppedC.length) {
+    onEvent({
+      kind: 'log',
+      message: `  stopped/resumable (re-run to continue): ${stoppedC.map((o) => `"${o.title ?? o.courseId}"`).join(', ')}`,
     });
   }
   const orphanCourses = outcomes.filter((o) => o.orphanedCourseId);

@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-08-15 (v0.8.0 format foundation built; automated certification green, live matrix pending). Keep this current at each phase boundary._
+_Last updated: 2026-08-16 (v0.8.0 live import certification in progress). Keep this current at each phase boundary._
 
 ## v0.8.0 format foundation — BUILT, certification pending
 
@@ -10,10 +10,12 @@ Launch Rise Creator. The full-page extension page is Creator-only; its duplicate
 Rise-to-DOCX mode was removed.
 
 New Rise exports and Creator builds use versioned `rise-local-archive` v1
-manifests with building/ready state and course/asset checksums. Import displays
-strict preflight results and `runImport` blocks invalid/incomplete archives
-before target pinning or network work. Legacy folders remain readable with an
-explicit integrity warning. Creator writes one source file as one course, uses
+manifests with building/ready state, file locations, and export-time checksum
+provenance. Import performs a lightweight file-presence check for the picker,
+then parses and verifies media coverage only for selected courses before target
+pinning or network work. Checksums do not block intentional operator asset
+replacement. Legacy folders remain readable with an explicit warning. Creator
+writes one source file as one course, uses
 `_creator/build.lock` for interrupted-build visibility, writes a building
 manifest during the transaction, and marks ready/removes the lock only after
 all course and review artifacts exist.
@@ -167,8 +169,9 @@ Fixes shipped in the same pass (all with regression tests; 615 tests):
   `l10n-placeholder` flag (status-neutral, policy pending — no per-locale
   delete exists); tolerated absences scoped to ANNOUNCED ones only (an
   attached storyline cell missing on read-back fails again); structural/
-  course-field parity failures now mark `partial` (course-settings gap +
-  unavoidable default-cover ride the EXPECTED bucket).
+  course-field parity failures now mark `partial` (at that point the
+  course-settings gap + unavoidable default-cover rode the EXPECTED bucket;
+  v0.8.0 now makes settings differences blocking as described below).
 - **Executor**: captured attach sequence mirrored exactly (2nd language =
   bare `update`); Stop between convert/await no longer risks clobbering the
   title ref; unmatched-ref cells not shipped as orphans; draw-from-bank bind
@@ -345,6 +348,20 @@ report honest `course-field-changed` divergences. The write to close it is small
 and its envelope is captured (`UPDATE_COURSE_DEBOUNCE {id, settings:{…}}`,
 capture1aug). Stack lesson labels in parity reports no longer print
 `[object Object]`.
+
+### Course-settings read-back gate (v0.8.0, 2026-08-16)
+
+The settings write remains deliberately deferred, but its absence can no longer
+produce a successful import report. End-of-course `GET_COURSE` now compares the
+full currently known settings surface: all scalar fields above plus nested
+`course.settings` (`aiTutorEnabled`, `isAIConceptToCourse`) and the created
+course `type`. Any mismatch is a blocking `course-field-changed` divergence and
+marks the course `partial`. A missing/unreadable final GET_COURSE also marks the
+course `partial`, because parity was not confirmed. Per-course markdown/json and
+the run CSV contain the exact paths and details; "Manual work: none" is never
+printed when blocking parity differences exist. Reports persist
+`readBackPolicyVersion: 2`; older permissive reports are rechecked rather than
+silently accepted as completed.
 
 ### Duplicate client ids across lessons — FIXED (v0.6.3)
 

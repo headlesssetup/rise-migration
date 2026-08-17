@@ -3,6 +3,7 @@ import { buildAssetManifest, assetManifestToJson, sha256Hex } from '@/core/asset
 import {
   createManifestV1,
   inspectLocalArchive,
+  inspectSelectedArchive,
   type LocalArchiveReader,
 } from '.';
 
@@ -22,9 +23,11 @@ function reader(args: {
   return {
     readManifest: async () => args.manifest ?? null,
     readCourse: async (id) => courses[id] ?? null,
+    hasCourse: async (id) => id in courses,
     listSaved: async () => Object.keys(courses),
+    hasAssetManifest: async (_scope, id) => id in (args.assetManifests ?? {}),
     readAssetManifest: async (_scope, id) => args.assetManifests?.[id] ?? null,
-    readAsset: async (name) => args.assets?.[name] ?? null,
+    hasAsset: async (name) => name in (args.assets ?? {}),
   };
 }
 
@@ -54,7 +57,7 @@ function course(id = 'c1', mediaKey?: string): string {
 }
 
 describe('inspectLocalArchive — v1', () => {
-  it('accepts a checksummed ready course archive', async () => {
+  it('accepts a ready course archive whose listed files exist', async () => {
     const raw = course();
     const manifest = createManifestV1({
       origin: 'creator',
@@ -80,7 +83,43 @@ describe('inspectLocalArchive — v1', () => {
     expect(inspected.issues).toEqual([]);
   });
 
-  it('fails closed on a changed course file', async () => {
+  it('does not open course JSON, asset manifests, or asset bytes for the picker check', async () => {
+    const raw = course();
+    const manifest = createManifestV1({
+      origin: 'rise-export',
+      createdAt: '2026-08-14T00:00:00Z',
+      toolVersion: '0.8.0',
+      courses: [
+        {
+          id: 'c1',
+          title: 'Course',
+          file: 'courses/c1.json',
+          sha256: await hash(raw),
+          assetManifest: 'courses/c1.assets.json',
+          assetManifestSha256: await hash('{}'),
+        },
+      ],
+    });
+    const inspected = await inspectLocalArchive({
+      readManifest: async () => JSON.stringify(manifest),
+      hasCourse: async () => true,
+      readCourse: async () => {
+        throw new Error('picker must not read course JSON');
+      },
+      listSaved: async () => ['c1'],
+      hasAssetManifest: async () => true,
+      readAssetManifest: async () => {
+        throw new Error('picker must not read asset manifests');
+      },
+      hasAsset: async () => {
+        throw new Error('picker must not walk assets');
+      },
+    });
+    expect(inspected.ready).toBe(true);
+    expect(inspected.courses).toEqual([{ id: 'c1', title: 'Course' }]);
+  });
+
+  it('allows an intentional local course edit without updating the export-time hash', async () => {
     const raw = course();
     const manifest = createManifestV1({
       origin: 'creator',
@@ -94,17 +133,18 @@ describe('inspectLocalArchive — v1', () => {
         },
       ],
     });
-    const inspected = await inspectLocalArchive(
+    const inspected = await inspectSelectedArchive(
       reader({
         manifest: JSON.stringify(manifest),
         courses: { c1: raw.replace('Course', 'Tampered') },
       }),
+      ['c1'],
     );
-    expect(inspected.ready).toBe(false);
-    expect(inspected.issues.some((i) => i.code === 'course-hash')).toBe(true);
+    expect(inspected.ready).toBe(true);
+    expect(inspected.issues).toEqual([]);
   });
 
-  it('verifies asset-manifest and asset-byte hashes', async () => {
+  it('requires asset files but allows their bytes to be intentionally replaced', async () => {
     const key = 'rise/courses/c1/picture.png';
     const raw = course('c1', key);
     const bytes = new Uint8Array([1, 2, 3, 4]);
@@ -141,26 +181,62 @@ describe('inspectLocalArchive — v1', () => {
         },
       ],
     });
-    const good = await inspectLocalArchive(
+    const good = await inspectSelectedArchive(
       reader({
         manifest: JSON.stringify(manifest),
         courses: { c1: raw },
         assetManifests: { c1: assetRaw },
         assets: { [`${assetHash}.png`]: bytes },
       }),
+      ['c1'],
     );
     expect(good.ready).toBe(true);
 
-    const bad = await inspectLocalArchive(
+    const bad = await inspectSelectedArchive(
       reader({
         manifest: JSON.stringify(manifest),
         courses: { c1: raw },
         assetManifests: { c1: assetRaw },
         assets: { [`${assetHash}.png`]: new Uint8Array([9]) },
       }),
+      ['c1'],
     );
-    expect(bad.ready).toBe(false);
-    expect(bad.issues.some((i) => i.code === 'asset-hash')).toBe(true);
+    expect(bad.ready).toBe(true);
+
+    const missing = await inspectSelectedArchive(
+      reader({
+        manifest: JSON.stringify(manifest),
+        courses: { c1: raw },
+        assetManifests: { c1: assetRaw },
+        assets: {},
+      }),
+      ['c1'],
+    );
+    expect(missing.ready).toBe(false);
+    expect(missing.issues.some((i) => i.code === 'asset-missing')).toBe(true);
+  });
+
+  it('deep-checks only selected courses for parseability and media coverage', async () => {
+    const good = course('good');
+    const broken = '{not-json';
+    const manifest = createManifestV1({
+      origin: 'rise-export',
+      createdAt: '2026-08-14T00:00:00Z',
+      toolVersion: '0.8.0',
+      courses: [
+        { id: 'good', title: 'Good', file: 'courses/good.json', sha256: await hash(good) },
+        { id: 'broken', title: 'Broken', file: 'courses/broken.json', sha256: await hash(broken) },
+      ],
+    });
+    const store = reader({
+      manifest: JSON.stringify(manifest),
+      courses: { good, broken },
+    });
+    expect((await inspectLocalArchive(store)).ready).toBe(true);
+    expect((await inspectSelectedArchive(store, ['good'])).ready).toBe(true);
+    const selectedBroken = await inspectSelectedArchive(store, ['broken']);
+    expect(selectedBroken.ready).toBe(false);
+    expect(selectedBroken.issues.some((i) => i.code === 'course-json')).toBe(true);
   });
 
   it('rejects duplicate course ids and a non-ready state', async () => {

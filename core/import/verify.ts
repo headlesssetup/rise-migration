@@ -15,6 +15,10 @@ import { looksLikeClientId } from './ids';
 import { orderLessons } from './plan';
 import type { ManualFlag } from './executor';
 
+/** Persisted with each import report. Bump whenever an older "completed"
+ *  report is no longer sufficient proof under the current read-back contract. */
+export const READ_BACK_POLICY_VERSION = 2;
+
 // Fields the server assigns / that are inherently volatile between two copies —
 // dropped before comparing (an id mismatch is expected, not a fidelity defect).
 const VOLATILE = new Set([
@@ -112,7 +116,7 @@ export interface ParityReport {
   ok: boolean;
   lessons: { source: number; target: number };
   blocks: { source: number; target: number; compared: number };
-  /** Real, unexpected divergences (drive ok=false). */
+  /** Blocking source/target divergences (drive ok=false). */
   issues: ParityIssue[];
   /** Expected divergences (flagged media not carried, draw-from-bank random draw). */
   expectedDivergences: ParityIssue[];
@@ -132,9 +136,10 @@ function orderedLessons(doc: GetCourseDocument): Lesson[] {
 /**
  * Course-level fields the read-back verifies, one canonicalized diff each.
  * Everything the importer WRITES is here (title, description, theme, the four
- * image objects) plus the course settings scalars — which the importer does NOT
- * migrate yet, so a source with non-default settings reports honest
- * `course-field-changed` divergences instead of passing silently.
+ * image objects) plus the complete course-settings surface currently present in
+ * GET_COURSE. Settings are not written yet, so any source/target difference is
+ * deliberately a BLOCKING `course-field-changed` divergence until that later
+ * migration pass exists.
  *
  * Deliberately absent:
  *  - `labelSetId` — documented gap (monolingual label sets unmigrated); pure noise.
@@ -145,6 +150,7 @@ function orderedLessons(doc: GetCourseDocument): Lesson[] {
 const COURSE_FIELDS = [
   'title',
   'description',
+  'type',
   'theme',
   'coverImage',
   'cardImage',
@@ -163,15 +169,15 @@ const COURSE_FIELDS = [
   'markComplete',
   'enableVideoPlaybackSpeed',
   'color',
+  'settings',
   'aiTutorConfig',
 ] as const;
 
-/** Course settings the importer does NOT migrate yet (documented gap — the
- *  write is captured, `UPDATE_COURSE_DEBOUNCE {id, settings}`, just not built).
- *  Divergences here are verified and REPORTED, but routed to the expected
- *  bucket: they are a known limitation of the tool, not an unexpected fidelity
- *  failure, so they must not mark an otherwise-faithful course `partial`.
- *  Remove a field from this list the moment its migration ships. */
+/** Course settings the importer does NOT migrate yet. This set is only used to
+ *  make the blocking report actionable; membership never excuses a mismatch.
+ *  `settings` covers nested flags such as `aiTutorEnabled` and
+ *  `isAIConceptToCourse`. Remove the annotation field-by-field as settings
+ *  migration ships. */
 const COURSE_SETTINGS_FIELDS: ReadonlySet<string> = new Set([
   'sidebarMode',
   'navigationMode',
@@ -183,6 +189,7 @@ const COURSE_SETTINGS_FIELDS: ReadonlySet<string> = new Set([
   'markComplete',
   'enableVideoPlaybackSpeed',
   'color',
+  'settings',
   'aiTutorConfig',
 ]);
 
@@ -223,8 +230,7 @@ function compareCourseFields(
     const raw = JSON.stringify(sv ?? null);
     const isSettingsGap = COURSE_SETTINGS_FIELDS.has(f);
     const isDefaultImage = IMAGE_FIELDS.has(f) && isDeepEmpty(sv) && !isDeepEmpty(tv);
-    const isExpected =
-      isSettingsGap || isDefaultImage || flaggedKeys.some((k) => raw.includes(k));
+    const isExpected = isDefaultImage || flaggedKeys.some((k) => raw.includes(k));
     const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
     collectLeafDiffs(a, b, f, diffs);
     const detailPaths = [...diffs.changed, ...diffs.mediaMissing];
@@ -236,7 +242,7 @@ function compareCourseFields(
       kind: 'course-field-changed',
       path: `course.${f}`,
       detail: isSettingsGap
-        ? `${detail} (course settings are not migrated yet — known gap; set manually)`
+        ? `${detail} (course setting is not migrated yet; parity cannot be confirmed)`
         : isDefaultImage
           ? `${detail} (source has no ${f}; the target keeps Rise's random default — no captured write clears an image slot)`
           : detail,
@@ -442,10 +448,10 @@ export function parityReportToMarkdown(
       `Blocks: ${r.blocks.source} source / ${r.blocks.target} target (${r.blocks.compared} compared)`,
   );
   if (r.issues.length) {
-    lines.push(`- **Unexpected divergences: ${r.issues.length}**`);
+    lines.push(`- **Blocking divergences: ${r.issues.length}**`);
     for (const x of r.issues.slice(0, 25)) lines.push(`  - [${x.kind}] ${x.path}${x.detail ? ` — ${x.detail}` : ''}`);
   } else {
-    lines.push('- Unexpected divergences: 0 ✓');
+    lines.push('- Blocking divergences: 0 ✓');
   }
   if (r.expectedDivergences.length) {
     lines.push(`- Expected divergences (flagged/random): ${r.expectedDivergences.length}`);

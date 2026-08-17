@@ -41,6 +41,37 @@ describe('checkSourceNotTarget', () => {
     expect(v.ok).toBe(true);
   });
 
+  it('blocks a matching signed-in user across different planes as stale when different people are expected', () => {
+    const v = checkSourceNotTarget(src, {
+      name: 'Konstantin S',
+      sub: src.sub,
+      plane: 'eu',
+    });
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.reason).toMatch(/target token carries the source signed-in user id/i);
+      expect(v.reason).toMatch(/different planes \(US → EU\)/);
+      expect(v.reason).toMatch(/do not override/i);
+    }
+  });
+
+  it('allows distinct signed-in users across different Rise planes', () => {
+    const v = checkSourceNotTarget(
+      { sub: 'auth0|source', plane: 'us' },
+      { name: 'Konstantin S', sub: 'auth0|target', plane: 'eu' },
+    );
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.reason).toMatch(/different Rise planes \(US → EU\)/);
+  });
+
+  it('allows the same display name across different planes when user ids differ', () => {
+    const v = checkSourceNotTarget(
+      { name: 'INTEA', sub: 'auth0|source', plane: 'us' },
+      { name: 'INTEA', sub: 'auth0|target', plane: 'eu' },
+    );
+    expect(v.ok).toBe(true);
+  });
+
   it('flags same plane in the reason for a different account', () => {
     const v = checkSourceNotTarget(src, {
       name: 'Other US',
@@ -54,7 +85,7 @@ describe('checkSourceNotTarget', () => {
   it('matches by name when neither side has a sub', () => {
     const v = checkSourceNotTarget(
       { name: 'Acme', plane: 'us' },
-      { name: 'acme', plane: 'eu' },
+      { name: 'acme', plane: 'us' },
     );
     expect(v.ok).toBe(false);
   });
@@ -91,7 +122,7 @@ describe('checkSourceNotTarget — why a same-account verdict fired', () => {
     if (!v.ok) {
       expect(v.matchedBy).toBe('sub');
       expect(v.reason).toMatch(/JWT sub/);
-      expect(v.reason).toMatch(/account names differ/);
+      expect(v.reason).toMatch(/displayed names differ/);
       expect(v.reason).toMatch(/reload the target Rise COURSE EDITOR tab/i);
     }
   });
@@ -111,7 +142,7 @@ describe('checkSourceNotTarget — why a same-account verdict fired', () => {
   it('a name-only match reports the name (target JWT identity not captured yet)', () => {
     const v = checkSourceNotTarget(
       { name: 'Acme', sub: 'auth0|aaa', plane: 'us' },
-      { name: 'acme', sub: null, plane: 'eu' },
+      { name: 'acme', sub: null, plane: 'us' },
     );
     expect(v.ok).toBe(false);
     if (!v.ok) {

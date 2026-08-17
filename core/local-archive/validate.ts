@@ -1,4 +1,4 @@
-import { collectAssetKeys, sha256Hex } from '@/core/assets';
+import { collectAssetKeys } from '@/core/assets';
 import type { AssetManifest } from '@/core/assets/manifest';
 import type { GetCourseDocument } from '@/shared/types/rise';
 import {
@@ -121,6 +121,8 @@ async function inspectCourse(
   reader: LocalArchiveReader,
   entry: LocalArchiveCourseEntryV1,
   issues: ArchiveIssue[],
+  parseCourse: boolean,
+  assetPresence: Map<string, Promise<boolean>>,
 ): Promise<ArchiveCourseSummary | null> {
   const expectedFile = `courses/${entry.id}.json`;
   if (entry.file !== expectedFile) {
@@ -132,20 +134,22 @@ async function inspectCourse(
       `Course file must be ${expectedFile}; found ${entry.file}.`,
     );
   }
-  const raw = await reader.readCourse(entry.id);
-  if (!raw) {
+  if (!(await reader.hasCourse(entry.id))) {
     issue(issues, 'error', 'course-missing', expectedFile, 'Referenced course file is missing.');
     return null;
   }
-  const actualHash = await sha256Hex(new TextEncoder().encode(raw));
-  if (actualHash !== entry.sha256) {
-    issue(
-      issues,
-      'error',
-      'course-hash',
-      expectedFile,
-      `Course checksum mismatch: expected ${entry.sha256}, found ${actualHash}.`,
-    );
+  if (!parseCourse) {
+    await inspectAssets(reader, entry, undefined, issues, assetPresence);
+    return {
+      id: entry.id,
+      ...(entry.title !== undefined ? { title: entry.title } : {}),
+      ...(entry.type !== undefined ? { type: entry.type } : {}),
+    };
+  }
+  const raw = await reader.readCourse(entry.id);
+  if (!raw) {
+    issue(issues, 'error', 'course-missing', expectedFile, 'Referenced course file became unavailable.');
+    return null;
   }
   let parsed: unknown;
   try {
@@ -175,7 +179,7 @@ async function inspectCourse(
       `Manifest id ${entry.id} does not match course.id ${documentId}.`,
     );
   }
-  await inspectAssets(reader, entry, doc, issues);
+  await inspectAssets(reader, entry, doc, issues, assetPresence);
   return {
     ...courseSummary(doc, entry.id),
     ...(entry.title !== undefined ? { title: entry.title } : {}),
@@ -186,13 +190,14 @@ async function inspectCourse(
 async function inspectAssets(
   reader: LocalArchiveReader,
   entry: LocalArchiveCourseEntryV1,
-  doc: GetCourseDocument,
+  doc: GetCourseDocument | undefined,
   issues: ArchiveIssue[],
+  assetPresence: Map<string, Promise<boolean>>,
 ): Promise<void> {
-  const referenced = collectAssetKeys(doc, entry.id);
+  const referenced = doc ? collectAssetKeys(doc, entry.id) : [];
   const path = `courses/${entry.id}.assets.json`;
-  const raw = await reader.readAssetManifest('courses', entry.id);
-  if (!raw) {
+  const exists = await reader.hasAssetManifest('courses', entry.id);
+  if (!exists) {
     if (referenced.length > 0 || entry.assetManifest) {
       issue(issues, 'error', 'asset-manifest-missing', path, 'Course references media but its asset manifest is missing.');
     }
@@ -207,13 +212,14 @@ async function inspectAssets(
       `Asset manifest path must be ${path}.`,
     );
   }
-  if (!entry.assetManifestSha256) {
-    issue(issues, 'error', 'course-entry', path, 'Asset manifest checksum is missing from manifest.json.');
-  } else {
-    const hash = await sha256Hex(new TextEncoder().encode(raw));
-    if (hash !== entry.assetManifestSha256) {
-      issue(issues, 'error', 'asset-manifest-hash', path, 'Asset manifest checksum does not match.');
-    }
+  // The picker stops here: it proves the manifest's immediate files exist but
+  // does not open course JSON, walk asset rows, or touch binary blobs. Selected
+  // import preflight supplies `doc` and performs the deeper coverage checks.
+  if (!doc) return;
+  const raw = await reader.readAssetManifest('courses', entry.id);
+  if (!raw) {
+    issue(issues, 'error', 'asset-manifest-missing', path, 'Asset manifest became unavailable.');
+    return;
   }
   let manifest: AssetManifest;
   try {
@@ -229,27 +235,18 @@ async function inspectAssets(
     issue(issues, 'error', 'asset-manifest-shape', path, 'Asset manifest has an invalid owner or rows.');
     return;
   }
-  const declared = new Set<string>();
+  const declared = new Map<string, AssetManifest['assets'][number]>();
   for (const [i, asset] of manifest.assets.entries()) {
-    if (!asset || typeof asset.key !== 'string' || typeof asset.hash !== 'string' || !SHA256.test(asset.hash)) {
+    if (!asset || typeof asset.key !== 'string' || typeof asset.file !== 'string' || !asset.file) {
       issue(issues, 'error', 'asset-manifest-shape', `${path}#assets[${i}]`, 'Asset row is invalid.');
       continue;
     }
-    declared.add(asset.key);
-    const name = String(asset.file ?? '').replace(/^assets\//, '');
-    const bytes = name ? await reader.readAsset(name) : null;
-    if (!bytes) {
-      issue(issues, 'error', 'asset-missing', `assets/${name}`, `Bytes for ${asset.key} are missing.`);
-      continue;
-    }
-    const hash = await sha256Hex(bytes);
-    if (hash !== asset.hash) {
-      issue(issues, 'error', 'asset-hash', `assets/${name}`, `Asset checksum mismatch for ${asset.key}.`);
-    }
+    declared.set(asset.key, asset);
   }
   const terminal = new Set((manifest.failed ?? []).map((f) => f.key));
   for (const ref of referenced) {
-    if (!declared.has(ref.key) && !terminal.has(ref.key)) {
+    const asset = declared.get(ref.key);
+    if (!asset && !terminal.has(ref.key)) {
       issue(
         issues,
         'error',
@@ -257,6 +254,18 @@ async function inspectAssets(
         ref.paths[0] ?? path,
         `Referenced media ${ref.key} has no asset bytes or recorded failure.`,
       );
+      continue;
+    }
+    if (asset) {
+      const name = String(asset.file ?? '').replace(/^assets\//, '');
+      let present = assetPresence.get(name);
+      if (!present) {
+        present = reader.hasAsset(name);
+        assetPresence.set(name, present);
+      }
+      if (!name || !(await present)) {
+        issue(issues, 'error', 'asset-missing', `assets/${name}`, `Bytes for ${asset.key} are missing.`);
+      }
     }
   }
 }
@@ -271,7 +280,7 @@ async function inspectLegacy(
     'warning',
     'legacy',
     'manifest.json',
-    'Legacy archive: file checksums and the v1 readiness marker are unavailable.',
+    'Legacy archive: the v1 readiness and canonical file-list contract are unavailable.',
   );
   const rows = Array.isArray(manifest?.courses)
     ? manifest.courses.filter((v): v is { id: string; title?: string } => {
@@ -310,8 +319,9 @@ async function inspectLegacy(
   };
 }
 
-export async function inspectLocalArchive(
+async function inspectArchive(
   reader: LocalArchiveReader,
+  selectedCourseIds?: ReadonlySet<string>,
 ): Promise<LocalArchiveInspection> {
   const issues: ArchiveIssue[] = [];
   const raw = await reader.readManifest();
@@ -339,14 +349,33 @@ export async function inspectLocalArchive(
   const manifest = parseV1Manifest(root, issues);
   if (!manifest) return { kind: 'invalid', ready: false, courses: [], issues };
   const seen = new Set<string>();
-  const courses: ArchiveCourseSummary[] = [];
+  const byId = new Map<string, LocalArchiveCourseEntryV1>();
   for (const entry of manifest.courses) {
     if (seen.has(entry.id)) {
       issue(issues, 'error', 'course-duplicate', 'manifest.json.courses', `Duplicate course id ${entry.id}.`);
       continue;
     }
     seen.add(entry.id);
-    const summary = await inspectCourse(reader, entry, issues);
+    byId.set(entry.id, entry);
+  }
+  const entries = selectedCourseIds
+    ? [...selectedCourseIds].flatMap((id) => {
+        const entry = byId.get(id);
+        if (entry) return [entry];
+        issue(issues, 'error', 'course-missing', 'manifest.json.courses', `Selected course ${id} is not listed in the manifest.`);
+        return [];
+      })
+    : manifest.courses;
+  const courses: ArchiveCourseSummary[] = [];
+  const assetPresence = new Map<string, Promise<boolean>>();
+  for (const entry of entries) {
+    const summary = await inspectCourse(
+      reader,
+      entry,
+      issues,
+      selectedCourseIds !== undefined,
+      assetPresence,
+    );
     if (summary) courses.push(summary);
   }
   return {
@@ -358,6 +387,25 @@ export async function inspectLocalArchive(
     courses,
     issues,
   };
+}
+
+/** Lightweight folder readiness check used by the Import screen. It validates
+ * manifest structure and file presence only. Export-time hashes are provenance,
+ * not an import gate: the operator may intentionally replace local assets. */
+export async function inspectLocalArchive(
+  reader: LocalArchiveReader,
+): Promise<LocalArchiveInspection> {
+  return inspectArchive(reader);
+}
+
+/** Import-time preflight for only the courses the operator selected. In
+ * addition to file presence, parse their JSON and prove every media reference
+ * is covered by archived bytes or a recorded source-side failure. */
+export async function inspectSelectedArchive(
+  reader: LocalArchiveReader,
+  courseIds: readonly string[],
+): Promise<LocalArchiveInspection> {
+  return inspectArchive(reader, new Set(courseIds));
 }
 
 export function archiveErrorSummary(inspection: LocalArchiveInspection): string {

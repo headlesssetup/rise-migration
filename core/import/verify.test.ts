@@ -183,7 +183,7 @@ describe('verifyParity', () => {
   it('renders a markdown summary', () => {
     const md = parityReportToMarkdown(verifyParity(src(), faithfulTarget()));
     expect(md).toContain('Read-back parity');
-    expect(md).toContain('Unexpected divergences: 0');
+    expect(md).toContain('Blocking divergences: 0');
   });
 
   // Regression: parity must align both sides by the authoritative `course.lessons`
@@ -403,24 +403,61 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     expect(r.issues.map((i) => i.path)).toContain('course.title');
   });
 
-  it('reports unmigrated settings honestly as EXPECTED (known gap); theme stays a real issue', () => {
+  it('makes every unmigrated setting difference a blocking parity failure', () => {
     const source = base({
       sidebarMode: 'closed',
       markComplete: true,
+      settings: { aiTutorEnabled: false, isAIConceptToCourse: true },
       theme: { themeId: 'classic', colorAccent: '#123456' },
     });
     const target = base(); // fresh-course defaults
     const r = verifyParity(source, target);
-    // Settings are verified + reported, but routed to the expected bucket: the
-    // tool documents it doesn't migrate them yet, so they must not mark an
-    // otherwise-faithful course partial. Theme IS written by the import — a
-    // theme divergence is a real, unexpected failure.
-    expect(r.issues.map((i) => i.path)).toEqual(['course.theme']);
-    const expectedPaths = r.expectedDivergences.map((i) => i.path).sort();
-    expect(expectedPaths).toEqual(['course.markComplete', 'course.sidebarMode']);
+    expect(r.ok).toBe(false);
+    expect(r.issues.map((i) => i.path).sort()).toEqual([
+      'course.markComplete',
+      'course.settings',
+      'course.sidebarMode',
+      'course.theme',
+    ]);
+    expect(r.expectedDivergences).toEqual([]);
     expect(
-      r.expectedDivergences.every((i) => i.detail?.includes('not migrated yet')),
+      r.issues
+        .filter((i) => i.path !== 'course.theme')
+        .every((i) => i.detail?.includes('parity cannot be confirmed')),
     ).toBe(true);
+  });
+
+  it('reads back the complete top-level settings surface, including nested settings', () => {
+    const fields: Record<string, unknown> = {
+      sidebarMode: 'closed',
+      navigationMode: 'restricted',
+      showLessonCount: false,
+      showNavigationButtons: false,
+      allowSearch: false,
+      allowCopy: true,
+      animateBlockEntrance: false,
+      markComplete: true,
+      enableVideoPlaybackSpeed: false,
+      color: '#123456',
+      settings: { aiTutorEnabled: true, isAIConceptToCourse: true },
+      aiTutorConfig: { mode: 'guided' },
+    };
+    const source = base(fields);
+    const target = base();
+    const r = verifyParity(source, target);
+    expect(r.ok).toBe(false);
+    expect(new Set(r.issues.map((i) => i.path))).toEqual(
+      new Set(Object.keys(fields).map((field) => `course.${field}`)),
+    );
+    expect(r.expectedDivergences).toEqual([]);
+  });
+
+  it('confirms the course kind created by the importer', () => {
+    const r = verifyParity(base({ type: 'onePage' }), base({ type: null }));
+    expect(r.ok).toBe(false);
+    expect(r.issues).toEqual([
+      expect.objectContaining({ kind: 'course-field-changed', path: 'course.type' }),
+    ]);
   });
 
   it('stack refs on both sides canonicalize equal (different l10nIds)', () => {

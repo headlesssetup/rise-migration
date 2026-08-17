@@ -51,13 +51,10 @@ export interface ArchiveIssue {
     | 'course-json'
     | 'course-shape'
     | 'course-id'
-    | 'course-hash'
     | 'asset-manifest-missing'
     | 'asset-manifest-json'
     | 'asset-manifest-shape'
-    | 'asset-manifest-hash'
     | 'asset-missing'
-    | 'asset-hash'
     | 'legacy';
   path: string;
   message: string;
@@ -77,10 +74,15 @@ export interface LocalArchiveInspection {
 export interface LocalArchiveReader {
   readManifest(): Promise<string | null>;
   readCourse(courseId: string): Promise<string | null>;
+  hasCourse(courseId: string): Promise<boolean>;
   listSaved(): Promise<string[]>;
+  hasAssetManifest(
+    scope: 'courses' | 'question-banks',
+    id: string,
+  ): Promise<boolean>;
   readAssetManifest(
     scope: 'courses' | 'question-banks',
     id: string,
   ): Promise<string | null>;
-  readAsset(name: string): Promise<Uint8Array | null>;
+  hasAsset(name: string): Promise<boolean>;
 }

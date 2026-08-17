@@ -16,7 +16,12 @@ import { orderLessons } from './plan';
 import type { ManualFlag } from './executor';
 import { blockKey } from './executor-types';
 import { fidelityStatus, type FidelityReport } from './fidelity';
-import { l10nParityToMarkdown, type L10nParityReport, type ParityReport } from './verify';
+import {
+  l10nParityToMarkdown,
+  READ_BACK_POLICY_VERSION,
+  type L10nParityReport,
+  type ParityReport,
+} from './verify';
 
 /** Where a source block lives, in human (display-order, 1-based) terms. */
 export interface BlockLocation {
@@ -243,7 +248,7 @@ function parityLine(parity?: ParityReport): string {
     const exp = parity.expectedDivergences.length;
     return `OK ${parity.blocks.compared}/${parity.blocks.source}${exp ? ` (${exp} expected)` : ''}`;
   }
-  return `DIVERGENCES — ${parity.issues.length} unexpected`;
+  return `DIVERGENCES — ${parity.issues.length} blocking`;
 }
 
 /** The truthful pending-translation read-back (F5): the SET of pending
@@ -278,9 +283,14 @@ export function buildCourseReportMarkdown(args: {
 }): string {
   const { report: r, parity, l10nParity, l10nPending, l10nPendingSet, aiTextCells, manual } = args;
   const status = fidelityStatus(r);
-  const resumable = status === 'PARTIAL' || status === 'STOPPED';
+  const statusNote =
+    status === 'STOPPED'
+      ? ' (re-run to continue)'
+      : status === 'PARTIAL'
+        ? ' (review required)'
+        : '';
   const lines: string[] = [];
-  lines.push(`# ${r.title ?? r.sourceCourseId ?? 'Course'} — ${status}${resumable ? ' (resumable — re-run to continue)' : ''}`);
+  lines.push(`# ${r.title ?? r.sourceCourseId ?? 'Course'} — ${status}${statusNote}`);
   if (r.error) lines.push(`- Error: ${r.error}`);
   lines.push(
     `- Source \`${r.sourceCourseId ?? '—'}\` → Target \`${r.newCourseId ?? '—'}\``,
@@ -300,7 +310,11 @@ export function buildCourseReportMarkdown(args: {
     for (const m of manual) lines.push(`- **${m.location}** — ${m.itemType}: ${m.action}`);
   } else {
     lines.push('## Manual work');
-    lines.push('- none — nothing left to do');
+    lines.push(
+      parity && !parity.ok
+        ? '- no executor flags; the course is not confirmed faithful — resolve the parity divergences below'
+        : '- none — nothing left to do',
+    );
   }
 
   if (parity && !parity.ok && parity.issues.length) {
@@ -373,6 +387,7 @@ export function buildCourseReportJson(args: {
   return JSON.stringify(
     {
       ...args.report,
+      readBackPolicyVersion: READ_BACK_POLICY_VERSION,
       parity: args.parity ?? null,
       l10nParity: args.l10nParity ?? null,
       l10nPending: args.l10nPending ?? null,
@@ -395,6 +410,9 @@ export interface RunCsvCourse {
   targetCourseId?: string;
   status: string;
   manual: ManualWorkItem[];
+  /** Blocking GET_COURSE read-back differences, written as first-class CSV
+   *  rows even when the executor emitted no manual flag. */
+  parity?: ParityReport;
 }
 
 function csvCell(v: string): string {
@@ -410,7 +428,7 @@ function statusGuidance(status: string): { issue: string; action: string } {
     case 'planned':
       return { issue: '(dry run)', action: 'Run live to import' };
     case 'partial':
-      return { issue: 'Partially imported', action: 'Re-run to continue (resumable)' };
+      return { issue: 'Partially imported', action: 'Review the course report; fix or re-run after support is available' };
     case 'stopped':
       return { issue: 'Stopped mid-course', action: 'Re-run to continue (resumable)' };
     case 'failed':
@@ -429,7 +447,8 @@ export function buildRunCsv(courses: RunCsvCourse[]): string {
   for (const c of courses) {
     const name = c.title ?? c.courseId;
     const tgt = c.targetCourseId ?? '';
-    if (c.manual.length === 0) {
+    const parityIssues = c.parity?.issues ?? [];
+    if (c.manual.length === 0 && parityIssues.length === 0) {
       const g = statusGuidance(c.status);
       rows.push([name, c.status, tgt, '', g.issue, g.action, c.courseId]);
       continue;
@@ -437,6 +456,19 @@ export function buildRunCsv(courses: RunCsvCourse[]): string {
     for (const m of c.manual) {
       const ref = m.sourceKey ?? m.sourceBlockId ?? c.courseId;
       rows.push([name, c.status, tgt, m.location, m.itemType, m.action, ref]);
+    }
+    for (const issue of parityIssues) {
+      rows.push([
+        name,
+        c.status,
+        tgt,
+        issue.path,
+        `Read-back parity: ${issue.kind}`,
+        issue.detail
+          ? `Source and target differ: ${issue.detail}`
+          : 'Source and target differ; inspect the per-course report.',
+        c.courseId,
+      ]);
     }
   }
   return rows.map((r) => r.map(csvCell).join(',')).join('\n');

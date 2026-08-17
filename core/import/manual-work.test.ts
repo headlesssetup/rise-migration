@@ -214,6 +214,26 @@ describe('buildCourseReportMarkdown', () => {
     expect(md).toContain('## Manual work (1)');
     expect(md).toContain('Lesson 1 "How to Econ" › block 2 (Storyline/Mighty)');
   });
+
+  it('never says nothing is left when read-back parity failed', () => {
+    const parity = {
+      ok: false,
+      lessons: { source: 0, target: 0 },
+      blocks: { source: 0, target: 0, compared: 0 },
+      issues: [
+        {
+          kind: 'course-field-changed' as const,
+          path: 'course.navigationMode',
+          detail: 'course setting is not migrated yet; parity cannot be confirmed',
+        },
+      ],
+      expectedDivergences: [],
+    };
+    const md = buildCourseReportMarkdown({ report: { ...baseReport, ok: false }, parity, manual: [] });
+    expect(md).not.toContain('none — nothing left to do');
+    expect(md).toContain('course is not confirmed faithful');
+    expect(md).toContain('course.navigationMode');
+  });
 });
 
 describe('buildCourseReportJson', () => {
@@ -226,6 +246,7 @@ describe('buildCourseReportJson', () => {
       }),
     );
     expect(json.title).toBe('Econ 101');
+    expect(json.readBackPolicyVersion).toBe(2);
     expect(json.parity).toBeNull();
     expect(json.manualWork).toEqual([]);
     expect(json.idMap).toEqual({ old1: 'new1' });
@@ -244,6 +265,26 @@ describe('buildRunCsv', () => {
         manual: resolveManualWork([{ kind: 'storyline', sourceBlockId: 'b4', detail: 'x' }], idx),
       },
       { title: 'Clean', courseId: 'C2', targetCourseId: 'T2', status: 'imported', manual: [] },
+      {
+        title: 'Settings differ',
+        courseId: 'C4',
+        targetCourseId: 'T4',
+        status: 'partial',
+        manual: [],
+        parity: {
+          ok: false,
+          lessons: { source: 1, target: 1 },
+          blocks: { source: 1, target: 1, compared: 1 },
+          issues: [
+            {
+              kind: 'course-field-changed',
+              path: 'course.settings',
+              detail: 'settings.aiTutorEnabled differs (parity cannot be confirmed)',
+            },
+          ],
+          expectedDivergences: [],
+        },
+      },
       { courseId: 'C3', status: 'not-started', manual: [] },
     ];
     const csv = buildRunCsv(courses);
@@ -253,7 +294,10 @@ describe('buildRunCsv', () => {
     expect(rows[1]).toContain('"Lesson 1 ""How to Econ"" › block 2 (Storyline/Mighty)"');
     // clean course → summary row
     expect(rows[2]).toBe('Clean,imported,T2,,(none),Nothing to do,C2');
+    // parity-only failure gets a specific row instead of a misleading
+    // "nothing to do" summary.
+    expect(rows[3]).toContain('course.settings,Read-back parity: course-field-changed');
     // not-started course → guidance row
-    expect(rows[3]).toBe('C3,not-started,,,Not started,Re-run to import,C3');
+    expect(rows[4]).toBe('C3,not-started,,,Not started,Re-run to import,C3');
   });
 });

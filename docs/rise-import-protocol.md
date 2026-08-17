@@ -320,17 +320,19 @@ Three read-backs per course, all against real `GET_COURSE` responses:
 3. **End-of-course parity** (`verifyParity` + `findForeignMediaKeys` unfiltered
    + `verifyL10nParity` on stacks):
    - **course fields** (v0.6.4): a canonicalized diff of an explicit list —
-     `title`, `description`, `theme`, the four course image objects,
+     `title`, `description`, course `type`, `theme`, the four course image objects,
      `blockBackgroundImage`, `overlayNavigationImage`, and the settings scalars
      (`sidebarMode`, `navigationMode`, `showLessonCount`, `showNavigationButtons`,
      `allowSearch`, `allowCopy`, `animateBlockEntrance`, `markComplete`,
-     `enableVideoPlaybackSpeed`, `color`, `aiTutorConfig`). Remapped media keys
-     and typeface/l10n ids tokenize equal; empty shapes (`null`/`''`/`{}`) are
-     equivalent; a field holding a flagged key reports as *expected*. Kind:
-     `course-field-changed`, path `course.<field>`.
-     ⚠ KNOWN GAP made visible by this check: the importer does not yet MIGRATE
-     the settings scalars — a source with non-default settings (e.g.
-     `sidebarMode: "closed"`, `markComplete: true`) reports honest divergences.
+     `enableVideoPlaybackSpeed`, `color`, nested `settings` (including
+     `aiTutorEnabled` / `isAIConceptToCourse`), and `aiTutorConfig`). Remapped
+     media keys and typeface/l10n ids tokenize equal; empty shapes
+     (`null`/`''`/`{}`) are equivalent; a field holding an explicitly flagged
+     media key reports as *expected*. Kind: `course-field-changed`, path
+     `course.<field>`.
+     ⚠ KNOWN WRITE GAP made blocking by this check: the importer does not yet
+     MIGRATE the settings fields. A source/target settings difference is a real
+     parity failure and the course is `partial`, never `imported` or "Parity OK".
      The write is small (`UPDATE_COURSE_DEBOUNCE {id, settings:{…}}` /
      `UPDATE_COURSE` field writes — the settings envelope is captured in
      `capture1aug.mitm`, `aiTutorEnabled` toggle) — implement when prioritized.
@@ -349,8 +351,13 @@ Three read-backs per course, all against real `GET_COURSE` responses:
      HEAD-probes `{contentPrefix}/story.html` on the target plane's usercontent
      host (public read, outside pacing) — `copy_review_item`'s 200 proved only
      that the copy was accepted.
-   Parity divergences are REPORTED (log + report md/json), they do not change the
-   course status; foreign media keys and l10n-cell failures DO (→ `partial`).
+   Every blocking parity divergence changes the course status to `partial` and
+   is written to the per-course markdown/json and run CSV. If the final
+   `GET_COURSE` itself is unavailable, parity is unconfirmed and the course is
+   also `partial`; a successful write alone is never enough for `imported`.
+   Machine reports carry `readBackPolicyVersion`. A report produced by an older
+   policy is not accepted as a completed-course skip marker: its target ID map
+   is reused, but the course is run through the current final parity gate again.
 
 Non-course surfaces (v0.6.5, `core/import/readback.ts`):
 

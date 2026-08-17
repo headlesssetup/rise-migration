@@ -106,11 +106,21 @@ export function ImportView({
     [session],
   );
 
+  const unoverriddenVerdict = useMemo(
+    () => checkSourceNotTarget(source, target, false),
+    [source, target],
+  );
   const verdict = useMemo(
     () => checkSourceNotTarget(source, target, override),
     [source, target, override],
   );
-  const sameAccount = !verdict.ok && 'sameAccount' in verdict && verdict.sameAccount;
+  // Derive visibility from the verdict BEFORE override. Otherwise checking the
+  // override makes the verdict pass and immediately hides the checkbox, leaving
+  // an irreversible-looking "explicitly overridden" state in the UI.
+  const sameAccount =
+    !unoverriddenVerdict.ok &&
+    'sameAccount' in unoverriddenVerdict &&
+    unoverriddenVerdict.sameAccount;
 
   useEffect(() => {
     let alive = true;
@@ -167,7 +177,7 @@ export function ImportView({
         order: account settings → question banks → courses. Dry-run each first.
       </p>
 
-      {storage && !archiveInspection && <p className="hint">Validating archive…</p>}
+      {storage && !archiveInspection && <p className="hint">Checking archive file list…</p>}
       {archiveInspection && (
         <div
           style={{
@@ -576,7 +586,6 @@ function CoursesSection({
   setSelected: React.Dispatch<React.SetStateAction<Set<string>>>;
   archiveInspection: LocalArchiveInspection | null;
 }) {
-  const [courses, setCourses] = useState<ArchiveCourse[]>([]);
   const [filter, setFilter] = useState('');
   const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -614,21 +623,13 @@ function CoursesSection({
     };
   }, [storage, selected]);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!storage) {
-        setCourses([]);
-        return;
-      }
-      const inspected = await inspectLocalArchive(storage);
-      const list: ArchiveCourse[] = inspected.ready ? inspected.courses : [];
-      if (alive) setCourses(list);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [storage, archiveInspection]);
+  // ImportView already performs the strict archive inspection once. Re-running
+  // it here doubled all checksum reads (589 courses in the current archive) and
+  // left the picker showing a false "No courses" empty state while both scans
+  // were still in flight. The inspection result is the single source of truth.
+  const courses: ArchiveCourse[] = archiveInspection?.ready
+    ? archiveInspection.courses
+    : [];
 
   const shown = useMemo(
     () => filterByName(courses, (c) => c.title ?? c.id, filter),
@@ -667,7 +668,13 @@ function CoursesSection({
 
   return (
     <CollapsibleStep title="C · Courses">
-      {courses.length === 0 ? (
+      {!archiveInspection ? (
+        <p className="hint">Checking manifest and required files…</p>
+      ) : !archiveInspection.ready ? (
+        <p className="hint">
+          Courses are unavailable until the archive errors above are resolved.
+        </p>
+      ) : courses.length === 0 ? (
         <p className="hint">No courses in this archive folder. Export some first.</p>
       ) : (
         <>

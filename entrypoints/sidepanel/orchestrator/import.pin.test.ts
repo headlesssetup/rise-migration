@@ -47,7 +47,7 @@ const sink = (): { onEvent: (e: ProgressEvent) => void; logs: string[] } => {
 
 const sent = (): BackgroundRequest[] => rpcMock.mock.calls.map((c) => c[0]);
 
-function mockBackground(pinOk: boolean): void {
+function mockBackground(pinOk: boolean, readBackOk = true): void {
   rpcMock.mockImplementation(async (req: BackgroundRequest): Promise<BackgroundResponse> => {
     switch (req.type) {
       case 'PIN_RISE_TAB':
@@ -69,6 +69,12 @@ function mockBackground(pinOk: boolean): void {
         // Faithful read-back (title included): structural parity divergences
         // now downgrade a course to `partial`, so an unfaithful mock would
         // fail the status assertion — correctly.
+        if (!readBackOk) {
+          return {
+            type: 'COURSE_RESULT',
+            result: { ok: false, status: 503, error: 'read-back unavailable' },
+          };
+        }
         return {
           type: 'COURSE_RESULT',
           result: {
@@ -122,5 +128,59 @@ describe('runImport — run tab pin (C4)', () => {
     expect(res.outcomes).toEqual([]);
     expect(sent().filter((r) => r.type === 'RELAY_WRITE')).toEqual([]);
     expect(logs.some((l) => /^BLOCKED:/.test(l))).toBe(true);
+  });
+
+  it('marks a completed write partial when GET_COURSE parity cannot be confirmed', async () => {
+    mockBackground(true, false);
+    const { onEvent, logs } = sink();
+    const res = await runImport(
+      storage,
+      ['C1'],
+      TARGET,
+      { dryRun: false, pacing: NO_PACING },
+      onEvent,
+    );
+
+    expect(res.outcomes[0]).toMatchObject({
+      courseId: 'C1',
+      status: 'partial',
+      report: {
+        ok: false,
+        error: expect.stringContaining('Parity read-back UNAVAILABLE'),
+      },
+    });
+    expect(logs.some((l) => l.includes('could not GET_COURSE newC1'))).toBe(true);
+  });
+
+  it('does not trust a completed report from the older permissive parity policy', async () => {
+    mockBackground(true);
+    const oldReportStorage = {
+      ...storage,
+      readImportArtifact: async (name: string) =>
+        name === 'C1.report.json'
+          ? JSON.stringify({
+              ok: true,
+              dryRun: false,
+              stopped: false,
+              sourceCourseId: 'C1',
+              newCourseId: 'newC1',
+              idMap: { C1: 'newC1' },
+              // No readBackPolicyVersion: this is an old report.
+            })
+          : null,
+    } as unknown as Storage;
+    const { onEvent, logs } = sink();
+    const res = await runImport(
+      oldReportStorage,
+      ['C1'],
+      TARGET,
+      { dryRun: false, pacing: NO_PACING },
+      onEvent,
+    );
+
+    expect(res.outcomes[0]).toMatchObject({ courseId: 'C1', status: 'imported' });
+    expect(logs.some((l) => l.includes('predates read-back policy v2'))).toBe(true);
+    expect(sent().some((r) => r.type === 'RELAY_WRITE')).toBe(true);
+    expect(sent().some((r) => r.type === 'GET_COURSE')).toBe(true);
   });
 });
