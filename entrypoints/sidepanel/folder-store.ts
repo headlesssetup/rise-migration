@@ -7,6 +7,15 @@ const DB_NAME = 'rise-explorer';
 const STORE = 'handles';
 const KEY = 'destFolder';
 
+/**
+ * The Creator/Review pages keep their OWN folder handle under this key.
+ * They used to share `destFolder` with the side panel, so picking a Creator
+ * staging folder on the Creator page silently re-pointed the panel's archive —
+ * an active trap now that the Creator writer refuses rise-export folders and
+ * steers operators toward a dedicated Creator folder (v0.9.0).
+ */
+export const CREATOR_FOLDER_KEY = 'creatorFolder';
+
 type DirHandleWithPermissions = FileSystemDirectoryHandle & {
   queryPermission?(d: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
   requestPermission?(d: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
@@ -37,22 +46,25 @@ function tx<T>(
 
 export async function saveDirHandle(
   handle: FileSystemDirectoryHandle,
+  key: string = KEY,
 ): Promise<void> {
-  await tx('readwrite', (s) => s.put(handle, KEY));
+  await tx('readwrite', (s) => s.put(handle, key));
 }
 
-export async function loadDirHandle(): Promise<FileSystemDirectoryHandle | null> {
+export async function loadDirHandle(
+  key: string = KEY,
+): Promise<FileSystemDirectoryHandle | null> {
   try {
     return (await tx<FileSystemDirectoryHandle | undefined>('readonly', (s) =>
-      s.get(KEY),
+      s.get(key),
     )) ?? null;
   } catch {
     return null;
   }
 }
 
-export async function clearDirHandle(): Promise<void> {
-  await tx('readwrite', (s) => s.delete(KEY));
+export async function clearDirHandle(key: string = KEY): Promise<void> {
+  await tx('readwrite', (s) => s.delete(key));
 }
 
 /**

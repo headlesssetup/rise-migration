@@ -97,4 +97,80 @@ describe('writeBuiltCourse', () => {
     expect(files.priorBuildWarning).toMatch(/did not finish/);
     expect(fs.artifacts.has('build.lock')).toBe(false);
   });
+
+  it('MERGES into an existing creator-origin manifest: successive builds accumulate', async () => {
+    const fs = fakeStorage();
+    await writeBuiltCourse(fs.storage, BUILT, '2026-08-10T00:00:00Z', '0.9.0', 'a.pptx');
+    const second: BuiltCourse = {
+      ...BUILT,
+      courseId: 'sb-c2',
+      raw: '{"course":{"id":"sb-c2","title":"Otrais","type":null},"lessons":[]}',
+      manifestEntry: { id: 'sb-c2', title: 'Otrais' },
+      productionMd: null,
+    };
+    await writeBuiltCourse(fs.storage, second, '2026-08-11T00:00:00Z', '0.9.0', 'b.pptx');
+
+    const inspected = await inspectLocalArchive(fs.storage);
+    expect(inspected).toMatchObject({ kind: 'v1', ready: true, origin: 'creator' });
+    expect(inspected.courses.map((c) => c.id).sort()).toEqual(['sb-c1', 'sb-c2']);
+
+    // The latest build wins the manifest metadata; earlier courses stay listed.
+    const manifest = JSON.parse((await fs.storage.readManifest())!) as {
+      createdAt: string;
+      creatorSummary: { sourceFile: string };
+    };
+    expect(manifest.createdAt).toBe('2026-08-11T00:00:00Z');
+    expect(manifest.creatorSummary.sourceFile).toBe('b.pptx');
+  });
+
+  it('rebuilding the SAME course id refreshes its entry without duplicating it', async () => {
+    const fs = fakeStorage();
+    await writeBuiltCourse(fs.storage, BUILT, 't1', '0.9.0');
+    await writeBuiltCourse(
+      fs.storage,
+      {
+        ...BUILT,
+        raw: '{"course":{"id":"sb-c1","title":"Atjaunots","type":null},"lessons":[]}',
+        manifestEntry: { id: 'sb-c1', title: 'Atjaunots' },
+      },
+      't2',
+      '0.9.0',
+    );
+    const inspected = await inspectLocalArchive(fs.storage);
+    expect(inspected.courses).toEqual([{ id: 'sb-c1', title: 'Atjaunots', type: null }]);
+  });
+
+  it('REFUSES a rise-export folder before writing anything (the manifest-clobber guard)', async () => {
+    const fs = fakeStorage();
+    const exportManifest = {
+      format: 'rise-local-archive',
+      formatVersion: 1,
+      state: 'ready',
+      origin: 'rise-export',
+      createdAt: 'earlier',
+      toolVersion: '0.8.1',
+      courses: [{ id: 'real-1', title: 'Exported', file: 'courses/real-1.json', sha256: 'f'.repeat(64) }],
+      sourceAccount: { name: 'ACME US', sub: null, email: null, plane: 'us' },
+    };
+    await fs.storage.writeManifest(exportManifest);
+    const manifestBefore = await fs.storage.readManifest();
+
+    await expect(writeBuiltCourse(fs.storage, BUILT, 'now', '0.9.0')).rejects.toThrow(
+      /rise-export archive \(1 course\(s\), source: ACME US\).*dedicated Creator folder/s,
+    );
+    // NOTHING was written: no course file, no lock, manifest byte-identical.
+    expect(fs.courses.has('sb-c1')).toBe(false);
+    expect(fs.artifacts.size).toBe(0);
+    expect(await fs.storage.readManifest()).toBe(manifestBefore);
+  });
+
+  it('REFUSES a folder holding a non-v1/unknown manifest', async () => {
+    const fs = fakeStorage();
+    await fs.storage.writeManifest({ some: 'legacy index' });
+    await expect(writeBuiltCourse(fs.storage, BUILT, 'now', '0.9.0')).rejects.toThrow(
+      /not a rise-local-archive v1/,
+    );
+    expect(fs.courses.size).toBe(0);
+    expect(fs.artifacts.size).toBe(0);
+  });
 });

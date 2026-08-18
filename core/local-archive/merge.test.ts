@@ -4,7 +4,7 @@ import {
   parseIdRows,
   parseManifestCourses,
   type ManifestCourseEntry,
-} from './archive-merge';
+} from './merge';
 
 describe('mergeById', () => {
   it('unions successive batches: old rows kept, new ids appended', () => {
