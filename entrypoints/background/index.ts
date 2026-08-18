@@ -37,6 +37,22 @@ import {
   uploadStorylinePackage,
 } from '@/core/storyline/review-socket-client';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
+import { fetchInRiseTab, type InPageResult, type RelaySpec } from './rise-fetch';
+import {
+  findCourseEditorTab,
+  findRiseTab,
+  readAccountUserId,
+  resolveTarget,
+  waitForCreatedTabComplete,
+  waitForTabComplete,
+  type Plane,
+} from './tabs';
+import { createReauth } from './reauth';
+import {
+  handleStorylineExport,
+  handleStorylineUpload,
+  type StorylineHandlerDeps,
+} from './storyline-handlers';
 import { risePlaneFromUrl } from '@/shared/messaging';
 import { courseEditorUrl, editorCourseIdFromUrl } from '@/shared/rise-editor';
 import type {
@@ -51,85 +67,7 @@ import type {
 
 const TOKEN_KEY = 'riseTokens';
 
-type Plane = 'us' | 'eu';
 
-interface InPageResult {
-  ok: boolean;
-  status: number;
-  text?: string;
-  error?: string;
-  code?: 'AUTH_REQUIRED';
-}
-
-/** What relayFetch needs from a spec — RequestSpec (reads) or WriteSpec (writes).
- *  Write-only fields are optional so a read RequestSpec is assignable. */
-interface RelaySpec {
-  url: string;
-  method: string;
-  body?: string;
-  base64Body?: string;
-  contentType?: string;
-  headers?: Record<string, string>;
-  noAuth?: boolean;
-  omitBearer?: boolean;
-}
-
-// Executed INSIDE the Rise tab (isolated world) — a same-origin fetch that
-// rides the live session's first-party cookies, plus the bearer if we have it.
-// Must be self-contained (no closures): it is serialized by executeScript.
-//
-// Phase 3 adds write support: PUT/DELETE, a base64 binary body (presigned S3
-// upload — the same cross-origin PUT the real editor issues from the Rise page),
-// an explicit Content-Type, and `noAuth` (the presigned url carries its own
-// signature, so no bearer/cookies on the S3 PUT).
-async function fetchInRiseTab(
-  spec: {
-    url: string;
-    method: string;
-    body?: string;
-    base64Body?: string;
-    contentType?: string;
-    headers?: Record<string, string>;
-    noAuth?: boolean;
-    omitBearer?: boolean;
-  },
-  token: string | null,
-): Promise<InPageResult> {
-  try {
-    const headers: Record<string, string> = {};
-    // noAuth: no bearer + no cookies (presigned S3). omitBearer: no bearer but
-    // KEEP cookies (cookie-authed endpoints like build/raw, which 403 on a stale
-    // bearer). Default: bearer + cookies.
-    if (token && !spec.noAuth && !spec.omitBearer) headers.Authorization = `Bearer ${token}`;
-
-    let body: BodyInit | undefined;
-    if (spec.base64Body !== undefined) {
-      const bin = atob(spec.base64Body);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      body = new Blob([bytes], { type: spec.contentType || 'application/octet-stream' });
-      if (spec.contentType) headers['Content-Type'] = spec.contentType;
-    } else if (spec.body !== undefined) {
-      body = spec.body;
-      headers['Content-Type'] = spec.contentType || 'application/json';
-    }
-    // Explicit per-spec headers (e.g. Content-MD5 on a Review-360 upload PUT)
-    // override the defaults above.
-    if (spec.headers) Object.assign(headers, spec.headers);
-
-    const res = await fetch(spec.url, {
-      method: spec.method,
-      headers,
-      body,
-      // Presigned S3 PUT is cross-origin and must NOT send cookies; rise.* calls
-      // need first-party cookies. Gate credentials on noAuth.
-      credentials: spec.noAuth ? 'omit' : 'include',
-    });
-    return { ok: res.ok, status: res.status, text: await res.text() };
-  } catch (e) {
-    return { ok: false, status: 0, error: String(e) };
-  }
-}
 
 export default defineBackground(() => {
   interface PlaneAuth {
@@ -247,88 +185,8 @@ export default defineBackground(() => {
     console.error('webRequest token sniffer failed to register:', e);
   }
 
-  // Find the Rise tab to operate in — prefer the active/last-focused one (the
-  // plane the operator is looking at), else any open Rise tab (US or EU).
-  async function findRiseTab(): Promise<chrome.tabs.Tab | undefined> {
-    const active = await chrome.tabs.query({
-      url: RISE_TAB_GLOBS,
-      active: true,
-      lastFocusedWindow: true,
-    });
-    const hit = active.find((t) => typeof t.id === 'number');
-    if (hit) return hit;
-    const any = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
-    return any.find((t) => typeof t.id === 'number');
-  }
 
-  interface ResolvedTarget {
-    tabId: number;
-    plane: Plane;
-    url: string;
-    /** Pinned targets never fall back to another plane's bearer. */
-    pinned: boolean;
-  }
 
-  /**
-   * Resolve the tab a request runs in. With a pin: exactly that tab, and only
-   * while it is still on the expected plane — otherwise a LOUD error (never a
-   * silent re-resolution). Without a pin: the active/last-focused Rise tab.
-   */
-  async function resolveTarget(
-    pin?: TabPin,
-  ): Promise<{ ok: true; target: ResolvedTarget } | { ok: false; error: string }> {
-    if (pin) {
-      let tab: chrome.tabs.Tab | undefined;
-      try {
-        tab = await chrome.tabs.get(pin.pinnedTabId);
-      } catch {
-        tab = undefined;
-      }
-      const want = pin.expectedPlane.toUpperCase();
-      if (!tab || typeof tab.id !== 'number') {
-        return {
-          ok: false,
-          error: `Pinned target Rise tab (id ${pin.pinnedTabId}, ${want}) is gone — this run is pinned to that tab so its writes can never land in another account. Reopen the target Rise tab, then start the run again.`,
-        };
-      }
-      const plane = risePlaneFromUrl(tab.url);
-      if (plane !== pin.expectedPlane) {
-        return {
-          ok: false,
-          error: `Pinned target Rise tab (id ${pin.pinnedTabId}) is no longer on the ${want} plane (now ${plane ? plane.toUpperCase() : (tab.url ?? 'a non-Rise page')}) — refusing to write into a different account. Point that tab back at the target Rise account, then start the run again.`,
-        };
-      }
-      return { ok: true, target: { tabId: tab.id, plane, url: tab.url ?? '', pinned: true } };
-    }
-    const tab = await findRiseTab();
-    const plane = risePlaneFromUrl(tab?.url);
-    if (!tab || typeof tab.id !== 'number' || !plane) {
-      return {
-        ok: false,
-        error:
-          'No open Rise tab (US rise.articulate.com or EU rise.eu.articulate.com). Open and log into Rise, keep that tab open, then retry.',
-      };
-    }
-    return { ok: true, target: { tabId: tab.id, plane, url: tab.url ?? '', pinned: false } };
-  }
-
-  // A Rise COURSE EDITOR tab — URL path `/authoring/{id}`. Operator-confirmed:
-  // ONLY a course-editor boot rotates the bearer; reloading the dashboard /
-  // project list (`/manage`, `/`) does NOT. So token refresh must target one of
-  // these, never the dashboard. Prefer the active/last-focused editor, and — when
-  // a plane is known (a pinned run) — only an editor ON THAT PLANE: reloading the
-  // source editor rotates the source bearer and leaves the target's stale.
-  async function findCourseEditorTab(plane?: Plane | null): Promise<chrome.tabs.Tab | undefined> {
-    const isEditor = (t: chrome.tabs.Tab): boolean =>
-      typeof t.id === 'number' &&
-      /\/authoring\/[^/]+/.test(t.url ?? '') &&
-      (!plane || risePlaneFromUrl(t.url) === plane);
-    const active = await chrome.tabs.query({ url: RISE_TAB_GLOBS, active: true, lastFocusedWindow: true });
-    const hit = active.find(isEditor);
-    if (hit) return hit;
-    const any = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
-    return any.find(isEditor);
-  }
 
   // Read the bearer straight from the `_articulate_rise_` cookie — its value IS
   // the access token Rise sends as `Authorization: Bearer`. This needs no course
@@ -360,21 +218,6 @@ export default defineBackground(() => {
     return r.ok ? grabTokenForUrl(r.target.url) : false;
   }
 
-  // The account-local Rise user id (`_articulate_user_id` cookie) — the valid
-  // principal for folder ownership. May be URL-encoded (`auth0%7C…`). Read from
-  // the pinned/active target tab, so it is the TARGET account's principal.
-  async function readAccountUserId(pin?: TabPin): Promise<string | null> {
-    const r = await resolveTarget(pin);
-    if (!r.ok) return null;
-    try {
-      const c = await browser.cookies.get({ url: r.target.url, name: '_articulate_user_id' });
-      const raw = c?.value?.trim();
-      if (!raw) return null;
-      return decodeURIComponent(raw);
-    } catch {
-      return null;
-    }
-  }
 
   // Locate the Rise tab (pinned or active) and run the fetch inside it —
   // first-party cookies plus THAT plane's bearer.
@@ -504,232 +347,13 @@ export default defineBackground(() => {
     return { ok: r.ok, status: r.status, text: r.text ?? '', error: r.error ?? authHint };
   }
 
-  // Token refresh strategy — reload the Rise tab and let the SPA do it.
-  //
-  // We tried replicating Rise's own Okta silent re-auth headlessly (a hidden
-  // `/authorize?prompt=none` iframe + `okta_post_message`, capture-confirmed in
-  // docs §2). It never rotated the bearer at runtime — the injected iframe path
-  // fails silently (third-party SSO cookie / postMessage / CSP) where the SPA's
-  // own first-party flow succeeds. Rather than reverse-engineer that further, we
-  // piggyback on Rise's battle-tested refresh: reload the tab, the SPA boots and
-  // writes a rotated `_articulate_rise_` cookie, and we re-read it.
-  //
-  // TODO(refresh): revisit a silent (no-reload) refresh for a smoother operator
-  // experience — a working in-tab Okta silent re-auth, or driving the SPA's own
-  // token service. A reload is robust but visibly disruptive on a long import.
+  // Token refresh (strategy comment + TODO(refresh) live in ./reauth).
+  const { reauthAllowed, reauth, tokenExpiringSoon } = createReauth({
+    auth,
+    slotFor,
+    grabTokenForUrl,
+  });
 
-  // Resolve when a tab finishes loading a NEW document (or a timeout elapses).
-  // Used after a reload so we don't re-read the cookie before the SPA has booted.
-  // Only a 'complete' that FOLLOWS this reload's 'loading' counts: the tab is
-  // already 'complete' when the reload is issued, so accepting the first
-  // 'complete' resolved immediately and we then read the PRE-reload cookie. If no
-  // 'loading' arrives within the grace window (the reload landed before the
-  // listener attached), an already-'complete' tab is accepted.
-  function waitForTabComplete(tabId: number, timeoutMs: number, graceMs = 1_500): Promise<void> {
-    return new Promise((resolve) => {
-      let settled = false;
-      let sawLoading = false;
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        try {
-          chrome.tabs.onUpdated.removeListener(listener);
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      };
-      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo): void => {
-        if (id !== tabId) return;
-        if (info.status === 'loading') {
-          sawLoading = true;
-          return;
-        }
-        if (info.status === 'complete' && sawLoading) finish();
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-      setTimeout(() => {
-        if (settled || sawLoading) return;
-        chrome.tabs
-          .get(tabId)
-          .then((t) => {
-            if (!sawLoading && t.status === 'complete') finish();
-          })
-          .catch(() => {});
-      }, graceMs);
-      setTimeout(finish, timeoutMs);
-    });
-  }
-
-  /** A newly-created tab may already be in `loading` before its id is returned,
-   *  so unlike the reload waiter, any later `complete` is sufficient. */
-  function waitForCreatedTabComplete(tabId: number, timeoutMs: number): Promise<void> {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        try {
-          chrome.tabs.onUpdated.removeListener(listener);
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      };
-      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo): void => {
-        if (id === tabId && info.status === 'complete') finish();
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-      chrome.tabs
-        .get(tabId)
-        .then((tab) => void (tab.status === 'complete' && finish()))
-        .catch(() => finish());
-      setTimeout(finish, timeoutMs);
-    });
-  }
-
-  async function waitForTokenAdvance(
-    tabId: number,
-    fallbackUrl: string | undefined,
-    plane: Plane,
-    before: number,
-  ): Promise<boolean> {
-    const deadline = Date.now() + 12_000;
-    while (Date.now() < deadline) {
-      const live = await chrome.tabs.get(tabId).catch(() => undefined);
-      await grabTokenForUrl(live?.url ?? fallbackUrl);
-      if ((auth[plane].identity?.expiresAt ?? 0) > before) return true;
-      await new Promise((r) => setTimeout(r, 750));
-    }
-    return false;
-  }
-
-  // Fallback refresh: reload a Rise COURSE EDITOR tab so the SPA runs its OWN
-  // (native) Okta silent re-auth on boot and writes a rotated `_articulate_rise_`
-  // cookie, then poll THAT TAB's cookie until its `exp` advances. This piggybacks
-  // on Rise's own, battle-tested refresh instead of replicating the Okta flow
-  // ourselves — far more robust than the injected iframe, at the cost of a visible
-  // reload. Safe mid-import: reauth only runs BETWEEN paced writes (proactive
-  // heartbeat) or AFTER a write already returned 403, so no write is in flight.
-  // IMPORTANT: only a COURSE EDITOR boot rotates the bearer — reloading the
-  // dashboard does NOT (operator-confirmed 2026-06-23). For a GET_COURSE export,
-  // we already have a capture-confirmed course id: if no editor is open, boot that
-  // course in a temporary inactive tab, capture the rotated cookie, then close it.
-  // This is the automated equivalent of the manual dashboard click that used to
-  // be required every ~15 minutes during a long export.
-  async function refreshRiseEditorToken(
-    plane: Plane | null,
-    bootstrap?: { courseId: string; targetUrl: string },
-  ): Promise<'tab-reload' | 'editor-bootstrap' | 'none'> {
-    // ONLY reload a course-editor tab — reloading the dashboard/project list is
-    // useless (it never rotates the bearer) and disruptive, so we never do it.
-    const tab = await findCourseEditorTab(plane);
-    if (tab && typeof tab.id === 'number') {
-      const tabId = tab.id;
-      // Poll the RELOADED TAB's own plane/cookie — never the active tab's, which
-      // may belong to a different account entirely.
-      const tabPlane = risePlaneFromUrl(tab.url);
-      if (!tabPlane) return 'none';
-      const before = auth[tabPlane].identity?.expiresAt ?? 0;
-      // Listen BEFORE reloading so the reload's own 'loading' can't be missed.
-      const loaded = waitForTabComplete(tabId, 20_000);
-      try {
-        await chrome.tabs.reload(tabId);
-      } catch {
-        return 'none';
-      }
-      await loaded;
-      return (await waitForTokenAdvance(tabId, tab.url, tabPlane, before))
-        ? 'tab-reload'
-        : 'none';
-    }
-
-    if (!plane || !bootstrap) return 'none';
-    const url = courseEditorUrl(bootstrap.targetUrl, bootstrap.courseId);
-    if (!url || risePlaneFromUrl(url) !== plane) return 'none';
-    const before = auth[plane].identity?.expiresAt ?? 0;
-    let created: chrome.tabs.Tab | undefined;
-    try {
-      created = await chrome.tabs.create({ url, active: false });
-      if (typeof created.id !== 'number') return 'none';
-      await waitForCreatedTabComplete(created.id, 20_000);
-      return (await waitForTokenAdvance(created.id, url, plane, before))
-        ? 'editor-bootstrap'
-        : 'none';
-    } catch {
-      return 'none';
-    } finally {
-      if (typeof created?.id === 'number') {
-        await chrome.tabs.remove(created.id).catch(() => {});
-      }
-    }
-  }
-
-  // Re-establish a fresh bearer mid-import.
-  //   1. Re-read the cookie of the pinned/active tab — the editor may have already
-  //      rotated it (the operator opened/refreshed a course, or its own token
-  //      service fired). During an import there's no page traffic for the
-  //      webRequest observer to catch, so we must pull the rotated cookie.
-  //   2. If that didn't advance AND the token actually needs refreshing
-  //      (expiring/expired), reload a course-editor tab ON THAT PLANE so the Rise
-  //      SPA refreshes natively (the only refresh that works in practice).
-  // Reports honestly:
-  //   - `advanced`: true ONLY when `exp` actually moved forward (a real
-  //     rotation). A "refresh" that doesn't advance `exp` is a no-op, and
-  //     retrying a write with it just 403s again.
-  //   - `valid`: we currently hold a non-expired token (rotated or not).
-  //   - `via`: how the bearer was (re)obtained — for honest logging.
-  // The automatic callers gate on reauthAllowed() so a doomed session can't spam
-  // tab reloads; an explicit REAUTH message is operator/run-driven and bypasses it.
-  let lastReauthMs = 0;
-  const REAUTH_THROTTLE_MS = 30_000;
-  function reauthAllowed(): boolean {
-    return Date.now() - lastReauthMs > REAUTH_THROTTLE_MS;
-  }
-
-  async function reauth(pin?: TabPin, refreshCourseId?: string): Promise<{
-    advanced: boolean;
-    valid: boolean;
-    via: 'tab-reload' | 'editor-bootstrap' | 'cookie' | 'none';
-  }> {
-    lastReauthMs = Date.now();
-    const resolved = await resolveTarget(pin);
-    const plane = resolved.ok ? resolved.target.plane : null;
-    const before = slotFor(plane)?.identity?.expiresAt ?? 0;
-    const expiryNow = (): number => slotFor(plane)?.identity?.expiresAt ?? 0;
-
-    const rotatedByCookie = resolved.ok ? await grabTokenForUrl(resolved.target.url) : false;
-    let via: 'tab-reload' | 'editor-bootstrap' | 'cookie' | 'none' =
-      expiryNow() > before && rotatedByCookie ? 'cookie' : 'none';
-
-    // Cookie re-read didn't rotate. If the token genuinely needs refreshing, let
-    // the Rise SPA do it via a tab reload. When the token is still healthy we
-    // skip the reload — no point disrupting the tab.
-    // A reactive GET_COURSE authorization failure is itself authoritative even
-    // if the JWT's local `exp` still looks healthy (server revocation/clock skew).
-    if (expiryNow() <= before && (tokenExpiringSoon(plane) || !!refreshCourseId)) {
-      via = await refreshRiseEditorToken(
-        plane,
-        resolved.ok && refreshCourseId
-          ? { courseId: refreshCourseId, targetUrl: resolved.target.url }
-          : undefined,
-      );
-    }
-
-    const after = expiryNow();
-    return { advanced: after > before, valid: after > Date.now(), via };
-  }
-
-  // The held bearer is short-lived (~15 min). On a long import it expires
-  // mid-run; Rise answers an expired token on the authoring endpoints with 403
-  // (not 401) — e.g. GET_YURL "Forbidden" — so we must treat 403 as re-auth too.
-  // Holding NO token counts as expiring, or the proactive bootstrap before the
-  // first write of a cold service worker never fires.
-  function tokenExpiringSoon(plane: Plane | null, skewMs = 60_000): boolean {
-    const slot = slotFor(plane);
-    if (!slot?.token || slot.identity?.expiresAt === undefined) return true;
-    return slot.identity.expiresAt - skewMs <= Date.now();
-  }
 
   // MV3 reaps an idle service worker after ~30s of quiet — which kills a pending
   // sendResponse. The storyline sockets wait minutes with no extension-API
@@ -774,6 +398,17 @@ export default defineBackground(() => {
       };
     }
   }
+
+  // Closure-backed deps for the extracted Storyline handlers (./storyline-handlers).
+  const storylineDeps: StorylineHandlerDeps = {
+    tokenFor,
+    tokenExpiringSoon,
+    reauthAllowed,
+    reauth,
+    grabTokenForUrl,
+    relayWrite,
+    startKeepalive,
+  };
 
   async function handle(
     msg: BackgroundRequest,
@@ -995,153 +630,11 @@ export default defineBackground(() => {
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec, pin) };
 
       case 'STORYLINE_EXPORT': {
-        // Trigger the web/raw export and await its zip URL on the ws socket. The
-        // socket runs here so the bearer never leaves the background; the
-        // build/raw POST is sent only AFTER `identify` so we can't miss the
-        // completion notify. One course at a time (the panel paces the loop), so
-        // the first package:success is ours.
-        //
-        // The completion socket is PLANE-SPECIFIC: a US export's package:success
-        // is pushed to wss://ws.articulate.com, an EU export's to ws.eu. Listen on
-        // the plane of the tab the export actually runs in, else we wait forever
-        // on the wrong host.
-        const resolved = await resolveTarget(pin);
-        if (!resolved.ok) {
-          return { type: 'STORYLINE_EXPORT_RESULT', result: { ok: false, error: resolved.error } };
-        }
-        const { plane, url: tabUrl } = resolved.target;
-        // Keep the bearer fresh PER COURSE: the ws `identify` is token-authed and
-        // fails silently (socket opens, no identify result) on a stale token —
-        // the dominant failure on a long run. Re-read the rotated cookie cheaply;
-        // reauth (tab reload) only when actually near expiry.
-        if (tokenExpiringSoon(plane) && reauthAllowed()) await reauth(pin, msg.courseId);
-        else await grabTokenForUrl(tabUrl);
-        const token = tokenFor(plane);
-        if (!token) {
-          return {
-            type: 'STORYLINE_EXPORT_RESULT',
-            result: { ok: false, error: noTokenForPlaneMessage(plane) },
-          };
-        }
-        const wsUrl = wsExportUrlForPlane(plane);
-        const trace: string[] = [`plane=${plane}`, `ws=${wsUrl}`];
-        // The waits below are minutes long with no extension-API traffic — keep
-        // the worker (and this pending response) alive.
-        const stopKeepalive = startKeepalive();
-        try {
-          const loc = await awaitExportLocation({
-            token,
-            url: wsUrl,
-            connect: (url) => new WebSocket(url) as unknown as WsLike,
-            // Fail fast if identify never lands (stale token); allow big-course
-            // server builds plenty of time once identified.
-            identifyTimeoutMs: 30_000,
-            timeoutMs: 240_000,
-            onOpen: () => trace.push('open'),
-            // The sessionId is SERVER-ASSIGNED: it comes back on the `identify`
-            // result and MUST be echoed as build/raw's websocketSessionId, or the
-            // server never routes the package:success notify to our socket
-            // (capture-confirmed: identify→{sessionId} == build/raw websocketSessionId).
-            onIdentified: async (serverSessionId) => {
-              trace.push(`identified(${serverSessionId.slice(0, 8)})`);
-              const { spec } = buildRawExportRequest({
-                courseId: msg.courseId,
-                title: msg.title,
-                websocketSessionId: serverSessionId,
-              });
-              const r = await relayWrite(spec, pin);
-              trace.push(`build HTTP ${r.status}`);
-              if (!r.ok) {
-                throw new Error(`build/raw HTTP ${r.status}: ${(r.text ?? '').slice(0, 150)}`);
-              }
-              trace.push(`jobId ${parseBuildAck(r.text).jobId}`);
-            },
-          });
-          return {
-            type: 'STORYLINE_EXPORT_RESULT',
-            result: { ok: true, status: 200, data: loc },
-          };
-        } catch (e) {
-          return {
-            type: 'STORYLINE_EXPORT_RESULT',
-            result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
-          };
-        } finally {
-          stopKeepalive();
-        }
+        return handleStorylineExport(msg, pin, storylineDeps);
       }
 
       case 'STORYLINE_UPLOAD': {
-        // Upload one repackaged storyline zip to the TARGET Review 360 over
-        // socket.io, then resolve its published contentPrefix. The review-sockets
-        // host follows the plane of the tab this runs in (pinned when the caller
-        // pinned the run).
-        const resolved = await resolveTarget(pin);
-        if (!resolved.ok) {
-          return { type: 'STORYLINE_UPLOAD_RESULT', result: { ok: false, error: resolved.error } };
-        }
-        const { plane } = resolved.target;
-        const token = tokenFor(plane);
-        if (!token) {
-          return {
-            type: 'STORYLINE_UPLOAD_RESULT',
-            result: { ok: false, error: noTokenForPlaneMessage(plane) },
-          };
-        }
-        const userId = await readAccountUserId(pin);
-        if (!userId) {
-          return {
-            type: 'STORYLINE_UPLOAD_RESULT',
-            result: { ok: false, error: 'No target account user id (open a logged-in Rise/360 tab).' },
-          };
-        }
-        const base = reviewSocketBaseForPlane(plane);
-        const trace: string[] = [`base=${base}`, `user=${userId.slice(0, 12)}`];
-        let socket: Awaited<ReturnType<typeof connectReviewSocket>> | null = null;
-        // Minutes of socket wait with no extension-API traffic — keep the worker
-        // (and this pending response) alive.
-        const stopKeepalive = startKeepalive();
-        try {
-          socket = await connectReviewSocket({ userId, token, base });
-          trace.push('connected');
-          const zipBytes = Uint8Array.from(atob(msg.zipB64), (c) => c.charCodeAt(0));
-          const { itemId, key } = await uploadStorylinePackage({
-            socket,
-            userId,
-            fileName: msg.fileName,
-            zipBytes,
-            md5Base64: msg.md5Base64,
-            md5Hex: msg.md5Hex,
-            // Cross-origin presigned PUT with Content-MD5 (reuse the same base64
-            // bytes/md5 the panel computed; bytes arg is identical).
-            putBytes: async (url) => {
-              const r = await relayWrite(
-                s3PutReview({ url, base64Body: msg.zipB64, contentMd5Base64: msg.md5Base64 }),
-                pin,
-              );
-              if (!r.ok) throw new Error(`S3 PUT HTTP ${r.status}: ${(r.text ?? '').slice(0, 120)}`);
-            },
-          });
-          trace.push(`item ${itemId.slice(0, 8)}`, `key ${key.split('/').pop()}`);
-          const contentPrefix = await awaitContentPrefix(socket, itemId, { timeoutMs: 180_000 });
-          trace.push(`prefix ${contentPrefix}`);
-          return {
-            type: 'STORYLINE_UPLOAD_RESULT',
-            result: { ok: true, status: 200, data: { itemId, contentPrefix, key } },
-          };
-        } catch (e) {
-          return {
-            type: 'STORYLINE_UPLOAD_RESULT',
-            result: { ok: false, error: `${(e as Error).message} [${trace.join(' → ')}]` },
-          };
-        } finally {
-          stopKeepalive();
-          try {
-            socket?.disconnect();
-          } catch {
-            /* ignore */
-          }
-        }
+        return handleStorylineUpload(msg, pin, storylineDeps);
       }
 
       case 'REAUTH': {
