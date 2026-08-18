@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BuiltCourse } from '@/core/storyboard';
+import type { BuiltCourse } from '@/core/creator/compiler';
 import type { Storage } from '@/core/storage/storage';
 import { inspectLocalArchive } from '@/core/local-archive';
 import { readCreatorBuildWarning, writeBuiltCourse } from './write';
@@ -73,6 +73,18 @@ describe('writeBuiltCourse', () => {
     expect(inspected.courses).toEqual([
       { id: 'sb-c1', title: 'Testa kurss', type: null },
     ]);
+  });
+
+  it('skips the production file entirely when there is no narration', async () => {
+    const fs = fakeStorage();
+    const files = await writeBuiltCourse(
+      fs.storage,
+      { ...BUILT, productionMd: null },
+      '2026-08-10T00:00:00Z',
+      '0.8.0',
+    );
+    expect(fs.artifacts.has('sb-c1.production.md')).toBe(false);
+    expect(files.productionFile).toBeUndefined();
   });
 
   it('warns but does not block when a previous interrupted-build lock exists', async () => {

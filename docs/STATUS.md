@@ -1,6 +1,60 @@
 # Project Status
 
-_Last updated: 2026-08-16 (v0.8.0 live import certification in progress). Keep this current at each phase boundary._
+_Last updated: 2026-08-18 (v0.8.1: rebuild + Creator AI-paste branches merged; live certification still in progress). Keep this current at each phase boundary._
+
+## Creator AI-paste flow — BUILT (2026-08-16, merged to main 2026-08-18)
+
+This branch supersedes the "General AI conversion is deferred" line below: the
+CHAT-PASTE mode of `docs/creator-ai-design.md` is implemented and field-tested
+(one external model run on a real client deck produced immediately-valid JSON
+after prompt round 1). The API mode remains deferred.
+
+What the branch contains (version `0.8.0-ai`; manifest `version` stays numeric
+`0.8.0`, `version_name` carries the suffix):
+
+- **Rise Creator page rebuilt** as the AI-paste flow (`entrypoints/creator/`,
+  RENAMED from `entrypoints/storyboard/`): copy prompt pack → external AI chat
+  with the source deck → paste Course Blueprint JSON → strict closed-schema
+  validation (`core/creator/blueprint/validate.ts`, path-addressed errors,
+  copy-back error report, fence-stripping, truncation detection) → pseudo-Rise
+  preview (pair tables for flashcards/timeline/sorting, stacked
+  accordion/tabs/process, green correct KC options, `origin: suggested` badge,
+  slide coverage, unresolved ack gate) → `compileCourseBlueprint` → standard
+  Import package.
+- **Blueprint v1 extended**: `origin?: 'source' | 'suggested'` on blocks.
+- **Prompt pack** (`core/creator/prompt.ts`): closed vocabulary, directive
+  alias table (Rise UI names), neutral speaker-notes stance (operator
+  decision: notes are directive / narration / missing content / irrelevant —
+  never assumed guidance), comment + contradiction + title + rephrasing rules,
+  worked example validated by `prompt.test.ts` against our own validator.
+- **SD-docx → Rise parser DROPPED** (operator decision 2026-08-16: client
+  docx too unreliable as deterministic input without an AI cleanup stage).
+  `map.ts` stays (compiler's donor mapper); `docx.ts`/`xml.ts` stay (SBDOC
+  writer round-trip test oracle); export direction (course → docx) untouched.
+- Production report: English scaffolding, file skipped when no narration.
+- `StoryboardError` moved to `core/creator/errors.ts`; direct compiler tests
+  with a golden all-kinds fixture (`core/creator/golden-blueprint.fixture.ts`).
+
+### Merge notes (for combining with the other v0.8.0 branch)
+
+- This branch **deletes** `core/storyboard/parse.ts`, `to-blueprint.ts`,
+  `archive.ts`, `types.ts` (+ their tests, + `real-docx.integration.test.ts`)
+  and **renames** `entrypoints/storyboard/` → `entrypoints/creator/`. If the
+  other branch touches those files, expect modify/delete and rename conflicts —
+  resolve in favor of the deletions/renames here.
+- `core/storyboard/index.ts` barrel now exports only `./render`.
+- `StoryboardError` import path changed: `@/core/creator/errors` (the old
+  `@/core/storyboard/types` is gone).
+- `BuiltCourse.productionMd` is now `string | null`; `WrittenFiles.productionFile`
+  is optional.
+- `package.json` version is `0.8.0-ai` — if the other branch also bumps the
+  version, pick one deliberately.
+- After merging, run the full suite: `prompt.test.ts` (prompt ⇄ schema sync)
+  and `core/creator/compiler.test.ts` (golden fixture, includes the
+  `buildPlan` integration check) catch drift; the import characterization
+  fixture must stay green.
+- Still pending from this branch: the live pilot (real deck → chat → paste →
+  import into the test account → eyeball in the Rise editor).
 
 ## v0.8.0 format foundation — BUILT, certification pending
 

@@ -80,10 +80,10 @@ export function TaskHome({
 
       <TaskCard
         title="Launch Rise Creator"
-        subtitle="Review a source document and build a ready-to-import package"
+        subtitle="Turn a source document into a course via an AI chat and a reviewed blueprint"
         onClick={() =>
           void browser.tabs.create({
-            url: browser.runtime.getURL('/storyboard.html'),
+            url: browser.runtime.getURL('/creator.html'),
           })
         }
         external

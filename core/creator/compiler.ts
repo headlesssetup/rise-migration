@@ -19,7 +19,7 @@ import {
   type MappedBlockRecord,
   type Mints,
 } from '@/core/storyboard/map';
-import { StoryboardError } from '@/core/storyboard/types';
+import { StoryboardError } from '@/core/creator/errors';
 import type { GetCourseDocument, Lesson } from '@/shared/types/rise';
 
 export interface BuiltCourse {
@@ -28,7 +28,8 @@ export interface BuiltCourse {
   raw: string;
   manifestEntry: { id: string; title: string };
   planJson: string;
-  productionMd: string;
+  /** Narration companion (markdown), or null when there is none to report. */
+  productionMd: string | null;
   lessonCount: number;
   blockCount: number;
   notes: string[];
@@ -70,12 +71,16 @@ export function assertCleanDocument(doc: GetCourseDocument): void {
   }
 }
 
-function productionReport(blueprint: CourseBlueprint): string {
+/** Narration companion report; null when the blueprint carries no narration
+ *  (the writer then skips the file entirely). Content stays in the source
+ *  language — only the report scaffolding is English. */
+function productionReport(blueprint: CourseBlueprint): string | null {
+  if (blueprint.production.length === 0) return null;
   const lines: string[] = [
-    `# Producēšanas materiāls — ${blueprint.title}`,
+    `# Production material — ${blueprint.title}`,
     '',
-    'Audio teksts (filmēšanas skripts) pa nodarbībām. Šis teksts NAV kursā —',
-    'tas ir ekspertiem/producentiem video ierakstīšanai.',
+    'Narration / voice-over scripts per lesson. This text is NOT course',
+    'content — it is for the experts and producers recording the media.',
     '',
   ];
   let lesson = '';
@@ -85,12 +90,11 @@ function productionReport(blueprint: CourseBlueprint): string {
       lines.push(`## ${lesson}`, '');
     }
     const slide = item.sourceRef.slideNo != null
-      ? `Slaids ${item.sourceRef.slideNo}`
+      ? `Slide ${item.sourceRef.slideNo}`
       : item.sourceRef.label;
     const experience = item.sourceRef.excerpt?.replace(/\s+/g, ' ').trim();
     lines.push(`### ${slide}${experience ? ` — ${experience}` : ''}`, '', item.text, '');
   }
-  if (blueprint.production.length === 0) lines.push('_(nav audio tekstu)_', '');
   return lines.join('\n');
 }
 

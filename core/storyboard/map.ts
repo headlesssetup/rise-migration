@@ -1,4 +1,5 @@
-// Storyboard phase 2 — map PlannedCourse block INTENTS to real Rise block JSON.
+// Map Course Blueprint block INTENTS to real Rise block JSON (the Creator
+// compiler's mapper — core/creator/compiler.ts is the only production caller).
 //
 // Shapes come from DONORS, never from guesswork: the editor's own CREATE_BLOCKS
 // payloads (capture_creation4aug — a fresh block ships exactly
@@ -293,6 +294,11 @@ export function mapIntent(intent: BlockIntent, mint: Mints): MappedRow {
 
     case 'knowledge-check': {
       const blocks = leadIn(mint, intent.heading, intent.intro);
+      if (intent.questions.some((q) => q.options.some((o) => o.feedback))) {
+        notes.push(
+          'per-answer feedback has no donor-backed Rise slot yet — kept in the plan artifact, NOT imported',
+        );
+      }
       for (const q of intent.questions) {
         const multi = q.options.filter((o) => o.correct).length > 1;
         blocks.push({

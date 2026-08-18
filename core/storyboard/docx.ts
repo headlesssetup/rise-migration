@@ -1,5 +1,10 @@
-// Storyboard phase 1 — read an SD `.docx` into a formatting-aware document
-// model. A docx is a zip of XML parts; we need three:
+// Formatting-aware `.docx` READER. Retained solely as the round-trip TEST
+// ORACLE for the storyboard docx writer (render/render.test.ts parses every
+// SBDOC we emit back through parseSdDocx) and as the future edited-SBDOC
+// reader. It has NO production callers — the SD-docx → Rise conversion was
+// dropped 2026-08-16 in favor of the Creator AI-paste flow (core/creator/).
+//
+// A docx is a zip of XML parts; we need three:
 //   word/document.xml            body: paragraphs + tables
 //   word/numbering.xml           numId → numFmt (the auto-numbered `Slaida nr.`
 //                                column stores NO text — numbers are computed)
