@@ -3,7 +3,7 @@
 // navigation. The panel's lifetime is the job's lifetime (CLAUDE.md).
 import { useCallback, useEffect, useState } from 'react';
 import { ArchiveView } from './components/ArchiveView';
-import { ExportDocxPanel } from './components/ExportDocxPanel';
+import { DocxView } from './components/DocxView';
 import { FolderControls } from './components/FolderControls';
 import { ImportView } from './components/ImportView';
 import { LogCard, type RunStatus } from './components/LogCard';
@@ -24,6 +24,10 @@ export function App() {
   const [importRunning, setImportRunning] = useState(false);
   // Live import status for the log-header countdown (set via ImportView).
   const [importStatus, setImportStatus] = useState<RunStatus | null>(null);
+  // A live docx fetch (account/current-tab source). Lifted HERE for the same
+  // reason as importRunning: back-navigation must stay gated during the paced
+  // read, or the run is orphaned in an unmounted view (plan W3).
+  const [docxBusy, setDocxBusy] = useState(false);
   const [, forceTick] = useState(0);
 
   const {
@@ -79,7 +83,7 @@ export function App() {
 
   // `busy` gates EVERY mode tab + export action. A live import counts: leaving
   // it out let one click detach the run and start a second paced job alongside it.
-  const busy = runs.exporting || importRunning;
+  const busy = runs.exporting || importRunning || docxBusy;
 
   // Setup gate: a Rise tab, a destination folder, and a captured token.
   const ready = !!session?.risePresent && !!storage && !!session?.hasToken;
@@ -148,6 +152,12 @@ export function App() {
               monitor or stop it.
             </p>
           )}
+          {docxBusy && view !== 'docx' && (
+            <p className="hint" style={{ color: '#c00' }}>
+              A document fetch is running — go back to <b>Rise to Docx</b> to
+              watch it.
+            </p>
+          )}
         </>
       )}
 
@@ -201,9 +211,16 @@ export function App() {
         />
       )}
 
-      {/* Rise to Docx view */}
-      {view === 'docx' && storage && (
-        <ExportDocxPanel storage={storage} addLog={addLog} />
+      {/* Rise to Docx view — live sources work without a folder */}
+      {view === 'docx' && (
+        <DocxView
+          storage={storage}
+          session={session}
+          addLog={addLog}
+          logBreak={logBreak}
+          busy={busy}
+          setBusy={setDocxBusy}
+        />
       )}
 
       {/* Log — always visible */}

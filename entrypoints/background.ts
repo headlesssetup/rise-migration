@@ -38,7 +38,7 @@ import {
 } from '@/core/storyline/review-socket-client';
 import { RISE_TAB_GLOBS } from '@/shared/hosts';
 import { risePlaneFromUrl } from '@/shared/messaging';
-import { courseEditorUrl } from '@/shared/rise-editor';
+import { courseEditorUrl, editorCourseIdFromUrl } from '@/shared/rise-editor';
 import type {
   BackgroundRequest,
   BackgroundResponse,
@@ -790,12 +790,23 @@ export default defineBackground(() => {
         // actually go to — the Source ≠ Target guard depends on it.
         let present = risePresent;
         let plane: Plane | null = null;
+        let editorCourseId: string | null = null;
         try {
           const all = await chrome.tabs.query({ url: RISE_TAB_GLOBS });
           present = all.some((t) => typeof t.id === 'number');
           const writeTab = await findRiseTab();
           const url = writeTab?.url ?? all.find((t) => typeof t.url === 'string')?.url;
           plane = risePlaneFromUrl(url);
+          // The course open in the editor: prefer the write tab; else, if the
+          // profile has exactly ONE editor tab open, use that (an ambiguous
+          // multi-editor setup stays null rather than guessing).
+          editorCourseId = editorCourseIdFromUrl(writeTab?.url);
+          if (!editorCourseId) {
+            const editors = all
+              .map((t) => editorCourseIdFromUrl(t.url))
+              .filter((id): id is string => id !== null);
+            if (editors.length === 1) editorCourseId = editors[0] ?? null;
+          }
         } catch {
           /* keep the ping-based value */
         }
@@ -821,6 +832,7 @@ export default defineBackground(() => {
             accountName,
             plane,
             userId,
+            editorCourseId,
           },
         };
       }
