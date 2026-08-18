@@ -71,10 +71,16 @@ export {
   type ExecResult,
 } from './executor-types';
 
-export async function executePlan(
-  steps: PlanStep[],
-  deps: ExecutorDeps,
-): Promise<ExecResult> {
+/**
+ * Per-run executor context (v0.9.0 restructure, phase A of the anticipated
+ * "v0.9.0 refactor"): ALL run state + the shared plumbing (send/uploadOne/…),
+ * created once per executePlan call. The bodies below are verbatim moves; the
+ * mutable primitives are exposed as get/set properties so step handlers and
+ * the loop mutate the SAME internal state the closures read (pfx ↔ stepIdx,
+ * uploadOne ↔ newCourseId, …). The characterization test freezes the exact
+ * envelope order this produces.
+ */
+function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   const mint = deps.mintId ?? newId;
   const ids = deps.ids ?? new IdMap(mint);
   const pace = deps.pace ?? (async () => {});
@@ -305,6 +311,85 @@ export async function executePlan(
     keyMap.set(sourceKey, newKey);
   }
 
+
+  return {
+    deps,
+    mint,
+    ids,
+    pace,
+    log,
+    dryRun,
+    author,
+    result,
+    shellLessons,
+    blockMeta,
+    keyMap,
+    bankQuestionIds,
+    stack,
+    srcTables,
+    srcDefaultLocale,
+    stackRefMap,
+    matDoc,
+    srcLessons,
+    srcBlocks,
+    unmatchedCourseRefs,
+    total,
+    pfx,
+    send,
+    reportOrphanShell,
+    uploadOne,
+    buildCellChange,
+    noteBuiltins,
+    get newCourseId() { return newCourseId; },
+    set newCourseId(v: string) { newCourseId = v; },
+    get materialized() { return materialized; },
+    set materialized(v: boolean) { materialized = v; },
+    get targetStackDoc() { return targetStackDoc; },
+    set targetStackDoc(v: GetCourseDocument | null) { targetStackDoc = v; },
+    get stepIdx() { return stepIdx; },
+    set stepIdx(v: number) { stepIdx = v; },
+  };
+}
+
+/** The executor's run context — everything step handlers may touch. */
+export type ExecCtx = ReturnType<typeof makeExecCtx>;
+
+export async function executePlan(
+  steps: PlanStep[],
+  deps: ExecutorDeps,
+): Promise<ExecResult> {
+  const ctx = makeExecCtx(steps, deps);
+  // Stable references (objects/functions) — identical bindings to the ctx's own;
+  // only the mutable primitives go through ctx.* below.
+  const {
+    ids,
+    pace,
+    log,
+    dryRun,
+    author,
+    result,
+    shellLessons,
+    blockMeta,
+    keyMap,
+    bankQuestionIds,
+    stack,
+    srcTables,
+    srcDefaultLocale,
+    stackRefMap,
+    matDoc,
+    srcLessons,
+    srcBlocks,
+    unmatchedCourseRefs,
+    total,
+    pfx,
+    send,
+    reportOrphanShell,
+    uploadOne,
+    buildCellChange,
+    noteBuiltins,
+  } = ctx;
+  const mint = ctx.mint;
+
   try {
     let done = 0;
     for (const step of steps) {
@@ -319,12 +404,12 @@ export async function executePlan(
         // keeps its clean title and is identified via the run report/summary,
         // which lists its id for manual cleanup before a re-import.
         log(
-          `Stopped before step ${stepIdx + 1}/${total} — partial course ${newCourseId || '(none)'} kept ` +
+          `Stopped before step ${ctx.stepIdx + 1}/${total} — partial course ${ctx.newCourseId || '(none)'} kept ` +
             '(no title marker; see the run report for cleanup)',
         );
         return result;
       }
-      stepIdx++;
+      ctx.stepIdx++;
       switch (step.kind) {
         case 'create-bank': {
           const bank = deps.input.banksById.get(step.sourceBankId);
@@ -386,10 +471,10 @@ export async function executePlan(
             env.createCourseShell(deps.input.targetFolderId ?? 'all', step.courseType),
             step.kind,
           );
-          newCourseId = dryRun ? ids.remap(step.sourceCourseId) : String(resp.id ?? '');
-          if (!newCourseId) throw new WriteError('Course create returned no id', step.kind, JSON.stringify(resp));
-          ids.set(step.sourceCourseId, newCourseId);
-          result.newCourseId = newCourseId;
+          ctx.newCourseId = dryRun ? ids.remap(step.sourceCourseId) : String(resp.id ?? '');
+          if (!ctx.newCourseId) throw new WriteError('Course create returned no id', step.kind, JSON.stringify(resp));
+          ids.set(step.sourceCourseId, ctx.newCourseId);
+          result.newCourseId = ctx.newCourseId;
           // INVARIANT — materialization handshake (mirror the editor): a real
           // GET_COURSE on the new id BEFORE any write. Rise's editor always reads the
           // course on open; `POST /content` returns a fully-materialized course
@@ -403,14 +488,14 @@ export async function executePlan(
             let confirmed = false;
             for (let attempt = 1; attempt <= tries && !confirmed; attempt++) {
               await pace(); // ≥ one paced gap after POST before reading back
-              const spec = env.getCourse(newCourseId);
+              const spec = env.getCourse(ctx.newCourseId);
               result.envelopes.push({ step: step.kind, label: spec.label });
               const r = await deps.relay(spec);
               const rb = r.ok ? payloadOf(parseJson(r.text)) : {};
               if (r.ok && rb.course && typeof rb.course === 'object') {
                 log(`${pfx()} OK   GET_COURSE handshake — course ready (attempt ${attempt}/${tries})`);
                 confirmed = true;
-                materialized = true;
+                ctx.materialized = true;
                 // F2: record any PRE-CREATED shell lessons (onePage ships one:
                 // title "", type "blocks", no items) for adoption below. Only
                 // genuinely EMPTY lessons qualify — anything else is unexpected
@@ -440,7 +525,7 @@ export async function executePlan(
             }
             if (!confirmed) {
               throw new WriteError(
-                'Post-create GET_COURSE never confirmed the course materialized',
+                'Post-create GET_COURSE never confirmed the course ctx.materialized',
                 step.kind,
               );
             }
@@ -464,7 +549,7 @@ export async function executePlan(
             const applied = applyTypefaceIds(course, theme, idMap);
             await send(
               env.updateCourseThemeAndTypefaces({
-                courseId: newCourseId,
+                courseId: ctx.newCourseId,
                 theme: applied.theme,
                 headingTypefaceId: applied.headingTypefaceId,
                 bodyTypefaceId: applied.bodyTypefaceId,
@@ -473,7 +558,7 @@ export async function executePlan(
               step.kind,
             );
           } else {
-            await send(env.updateCourseTheme(newCourseId, theme), step.kind);
+            await send(env.updateCourseTheme(ctx.newCourseId, theme), step.kind);
           }
           break;
         }
@@ -540,7 +625,7 @@ export async function executePlan(
             lessonHeaderImage !== undefined
           ) {
             await send(
-              env.setCourseImages({ courseId: newCourseId, coverImage, cardImage, media, lessonHeaderImage }),
+              env.setCourseImages({ courseId: ctx.newCourseId, coverImage, cardImage, media, lessonHeaderImage }),
               step.kind,
             );
           }
@@ -550,13 +635,13 @@ export async function executePlan(
           // Best-effort: never abort a whole course import over a cosmetic
           // title/description (confirmed envelope, but flag if it doesn't take).
           try {
-            await send(env.updateCourseTitle(newCourseId, step.title), step.kind);
+            await send(env.updateCourseTitle(ctx.newCourseId, step.title), step.kind);
             // The monolingual description rides the (single) `final` title
             // write; a stack's description is its own pre-conversion step.
             const desc = deps.input.course.course?.description;
             if (step.final && typeof desc === 'string' && desc) {
               await send(
-                env.updateCourseFieldThrottle(newCourseId, 'description', desc),
+                env.updateCourseFieldThrottle(ctx.newCourseId, 'description', desc),
                 step.kind,
               );
             }
@@ -592,7 +677,7 @@ export async function executePlan(
           const resp = await send(
             env.createLesson({
               author,
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               position: step.position,
               title: step.title,
               type: step.lessonType,
@@ -620,12 +705,12 @@ export async function executePlan(
           // source key is never written to the target lesson.
           const safeExtra = blankForeignMediaKeys(
             remapMediaKeys(extra, keyMap),
-            new Set(newCourseId ? [newCourseId] : []),
+            new Set(ctx.newCourseId ? [ctx.newCourseId] : []),
           ) as Record<string, unknown>;
           await send(
             env.updateLesson({
               id: newLessonId,
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               type: step.lessonType,
               icon: step.icon,
               extra: safeExtra,
@@ -637,7 +722,7 @@ export async function executePlan(
         case 'lock-lesson': {
           // Best-effort: never abort the import on a lock failure.
           try {
-            await send(env.putLock(ids.get(step.sourceLessonId)!, newCourseId), step.kind);
+            await send(env.putLock(ids.get(step.sourceLessonId)!, ctx.newCourseId), step.kind);
           } catch (e) {
             log(`WARN lock failed (continuing): ${(e as Error).message}`);
           }
@@ -645,7 +730,7 @@ export async function executePlan(
         }
         case 'unlock-lesson': {
           try {
-            await send(env.delLock(ids.get(step.sourceLessonId)!, newCourseId), step.kind);
+            await send(env.delLock(ids.get(step.sourceLessonId)!, ctx.newCourseId), step.kind);
           } catch (e) {
             log(`WARN unlock failed (ignored): ${(e as Error).message}`);
           }
@@ -685,7 +770,7 @@ export async function executePlan(
           // inline translationChanges. The conversion l10n-ifies them itself.
           const resp = await send(
             env.createBlocks({
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               lessonId: newLessonId,
               previousBlockId: null,
               blocks: built,
@@ -747,7 +832,7 @@ export async function executePlan(
           const questionList = bound?.questionIds ?? bankQuestionIds.get(step.sourceBankId) ?? [];
           await send(
             env.insertQuestionBankQuestions({
-              lesson: { id: newLessonId, courseId: newCourseId },
+              lesson: { id: newLessonId, courseId: ctx.newCourseId },
               blockOrItemId: meta.newId,
               pendingItemId,
               mode: 'knowledgeCheck',
@@ -755,7 +840,7 @@ export async function executePlan(
               questionDrawType: step.questionDrawType,
               questionBankId: newBankId,
               questionList,
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
             }),
             step.kind,
           );
@@ -784,7 +869,7 @@ export async function executePlan(
           await send(
             env.updateBlockDebounce({
               id: meta.newId,
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               lessonId: newLessonId,
               item: patched,
             }),
@@ -805,14 +890,14 @@ export async function executePlan(
 
           await send(
             env.copyReviewItem({
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               reviewPrefix: step.reviewPrefix,
               blockId: meta.newId,
             }),
             step.kind,
           );
 
-          const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
+          const contentPrefix = `rise/courses/${ctx.newCourseId}/${leaf}`;
           const item = remapIds(entry.block, ids) as Record<string, unknown>;
           const items = Array.isArray(item.items) ? item.items : [];
           const first = items[0];
@@ -826,7 +911,7 @@ export async function executePlan(
           await send(
             env.updateBlockDebounce({
               id: meta.newId,
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               lessonId: newLessonId,
               item,
             }),
@@ -908,7 +993,7 @@ export async function executePlan(
           // the read-back, not as a course failure.
           try {
             await send(
-              env.updateCourseFieldThrottle(newCourseId, 'description', step.value),
+              env.updateCourseFieldThrottle(ctx.newCourseId, 'description', step.value),
               step.kind,
             );
           } catch (e) {
@@ -918,7 +1003,7 @@ export async function executePlan(
         }
         case 'convert-stack': {
           await send(
-            env.createTranslations(newCourseId, {
+            env.createTranslations(ctx.newCourseId, {
               sourceLanguage: step.sourceLanguage,
               targetLanguages: step.targetLanguages,
               formality: step.formality,
@@ -935,7 +1020,7 @@ export async function executePlan(
             // The default ceiling is sized for a FULL-COURSE conversion
             // (idea 2) — minimal conversions ran 15-70 s/language, a real
             // course's duration is unmeasured (R1), so allow ~30 min.
-            const spec = env.getTranslations(newCourseId);
+            const spec = env.getTranslations(ctx.newCourseId);
             result.envelopes.push({ step: step.kind, label: spec.label });
             const tries = Math.max(1, deps.stackAwaitTries ?? 900);
             const expected = new Set(step.expectedLocales);
@@ -981,7 +1066,7 @@ export async function executePlan(
             // via the minted client ids — core/l10n/pair.ts). This map is the
             // ONLY way a cell write addresses the target; no source l10nId
             // ever ships under idea 2.
-            const rb = await send(env.getCourse(newCourseId), step.kind);
+            const rb = await send(env.getCourse(ctx.newCourseId), step.kind);
             const targetDoc = payloadOf(rb) as GetCourseDocument;
             if (!isLocalizedStack(targetDoc)) {
               throw new WriteError(
@@ -990,7 +1075,7 @@ export async function executePlan(
                 JSON.stringify(targetDoc.course ?? {}).slice(0, 300),
               );
             }
-            targetStackDoc = targetDoc;
+            ctx.targetStackDoc = targetDoc;
             const pairing = pairL10nRefs(deps.input.course, targetDoc, {
               lessonId: (l) => ids.get(l),
               blockId: (l, b) => blockMeta.get(blockKey(l, b))?.newId,
@@ -1048,7 +1133,7 @@ export async function executePlan(
             );
             break;
           }
-          await send(env.updateL10nBatch(newCourseId, changes), step.kind);
+          await send(env.updateL10nBatch(ctx.newCourseId, changes), step.kind);
           log(
             `${pfx()} [${step.batchIndex}/${step.batchTotal} l10n batches] OK ${changes.length} cell(s) [${step.locale}]` +
               (skipped ? ` (${skipped} skipped — unpaired/flagged)` : ''),
@@ -1083,7 +1168,7 @@ export async function executePlan(
           }
           await send(
             env.updateLocale({
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               locale: step.locale,
               labelSetId: targetSetId,
             }),
@@ -1120,7 +1205,7 @@ export async function executePlan(
               });
             }
             if (changes.length > 0) {
-              await send(env.updateL10nBatch(newCourseId, changes), step.kind);
+              await send(env.updateL10nBatch(ctx.newCourseId, changes), step.kind);
             }
           }
           break;
@@ -1154,13 +1239,13 @@ export async function executePlan(
           const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
           await send(
             env.copyReviewItem({
-              courseId: newCourseId,
+              courseId: ctx.newCourseId,
               reviewPrefix: step.reviewPrefix,
               blockId: meta.newId,
             }),
             step.kind,
           );
-          const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
+          const contentPrefix = `rise/courses/${ctx.newCourseId}/${leaf}`;
           const value = env.buildStorylineMedia({
             contentPrefix,
             meta: step.meta,
@@ -1171,7 +1256,7 @@ export async function executePlan(
           // capture-proven shape for the 2nd language on an existing cell
           // (capture2aug §4.3b).
           await send(
-            env.updateL10nBatch(newCourseId, [
+            env.updateL10nBatch(ctx.newCourseId, [
               { action: 'update', l10nId: cellId, locale: step.locale, value },
             ]),
             step.kind,
@@ -1225,7 +1310,7 @@ export async function executePlan(
     // already confirmed the shell with a 200 GET_COURSE, so this normally never
     // fires. If somehow a course id exists without that confirmation, treat the
     // shell as suspect and roll it back rather than report a hollow success.
-    if (!dryRun && newCourseId && !materialized) {
+    if (!dryRun && ctx.newCourseId && !ctx.materialized) {
       reportOrphanShell('course never confirmed by the GET_COURSE handshake');
       result.ok = false;
       result.error =
@@ -1250,7 +1335,7 @@ export async function executePlan(
     // keyMap, so a hit here is a real failure — including in a dry run, whose
     // prediction must not be silently discarded.
     const targetOwners = new Set<string>();
-    if (newCourseId) targetOwners.add(newCourseId);
+    if (ctx.newCourseId) targetOwners.add(ctx.newCourseId);
     for (const bankId of deps.input.banksById.keys()) {
       const nb = ids.get(bankId);
       if (nb) targetOwners.add(nb);
@@ -1275,7 +1360,7 @@ export async function executePlan(
     // bare titleless/lessonless shell is a VALID Rise course — capture-confirmed),
     // so a later failure leaves a real, resumable course we keep. An unconfirmed
     // shell is the suspect state → report it (left in place; no auto-delete).
-    if (!materialized) reportOrphanShell('import failed before the course was confirmed');
+    if (!ctx.materialized) reportOrphanShell('import failed before the course was confirmed');
     if (e instanceof WriteError) {
       // Surface a snippet of the server's response body — a 4xx/5xx body usually
       // says exactly what it rejected (the live diagnostic).
@@ -1310,7 +1395,7 @@ export async function executePlan(
       for (const f of tf.fonts) {
         const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
         const yurl = payloadOf(
-          await send(env.getYurl({ courseId: newCourseId, filename, assetPath: 'fonts/' }), 'set-theme'),
+          await send(env.getYurl({ courseId: ctx.newCourseId, filename, assetPath: 'fonts/' }), 'set-theme'),
         );
         const newKey = dryRun ? `rise/fonts/${mint()}.woff` : String(yurl.key ?? '');
         const url = String(yurl.url ?? '');
@@ -1375,8 +1460,8 @@ export async function executePlan(
       }
     }
     const filename = sourceKey.split('/').pop() ?? 'image.jpg';
-    const yurl = payloadOf(await send(env.getYurl({ courseId: newCourseId, filename }), 'set-course-images'));
-    const newKey = dryRun ? `rise/courses/${newCourseId}/${mint()}.jpg` : String(yurl.key ?? '');
+    const yurl = payloadOf(await send(env.getYurl({ courseId: ctx.newCourseId, filename }), 'set-course-images'));
+    const newKey = dryRun ? `rise/courses/${ctx.newCourseId}/${mint()}.jpg` : String(yurl.key ?? '');
     const url = String(yurl.url ?? '');
     const ctype = String(yurl.type ?? 'image/jpeg');
     if (!dryRun && bytes) {
