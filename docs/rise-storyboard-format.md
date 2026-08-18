@@ -8,7 +8,8 @@ tool from an archived course**, so it can be strict where SDs are ambiguous:
 every row carries stable Rise identity, and every convention below is a
 contract, not a habit.
 
-**Direction today (stage 2):** export only — archive `courses/<id>.json` →
+**Direction today (stage 2):** export only — a course document (archive
+`courses/<id>.json`, or a transient live GET_COURSE in the v0.9.0 docx view) →
 SBDOC docx (`core/storyboard/render/`). **Direction later (stage 3+):** an
 edited SBDOC is parsed back and diffed against the base archive to build a
 reviewed update plan. Everything marked *(round-trip)* below is the forward
@@ -20,11 +21,15 @@ produced now remain updatable later.
 - **Title** (`Heading1`) — course title.
 - **Guard note** — one short paragraph telling editors what they may touch
   (content cells) and what they must not (ID column, `⟦…⟧` tokens, shaded
-  rows, table structure).
+  rows, table structure). Verbatim (`docx-write.ts` `GUARD_TEXT`; round-trip
+  depends on it, curly quotes included):
+  > Edit only the “Content” column in white rows. Do not modify: the “ID”
+  > column, gray ⟦…⟧ tokens, shaded (read-only) rows, or the table structure.
+  > Deleting a row = requesting block deletion.
 - **Meta table** (2 columns, key–value). Keys, verbatim:
-  `Formāts` (= `SBDOC 1`), `Kursa ID`, `Ģenerēts` (ISO timestamp),
-  `Rīka versija`, `Valoda` (stack default locale, or `—` monolingual),
-  `Nodarbības`, `Bloki`. *(round-trip: `Formāts` + `Kursa ID` are how the
+  `Format` (= `SBDOC 1`), `Course ID`, `Generated` (ISO timestamp),
+  `Tool version`, `Language` (stack default locale, or `—` monolingual),
+  `Lessons`, `Blocks`. *(round-trip: `Format` + `Course ID` are how the
   parser recognizes an SBDOC and which base archive to diff against.)*
 - **Per lesson**: a `Heading2` — `<n>. <lesson title>` — followed by a small
   gray token paragraph `⟦L:<lessonId> type:<blocks|section|quiz|…>⟧`, then
@@ -35,17 +40,18 @@ produced now remain updatable later.
 
 Five columns, fixed header row (parser anchor, verbatim):
 
-| Nr. | Bloks | Saturs | Piezīmes | ID |
+| No. | Block | Content | Notes | ID |
 |---|---|---|---|---|
 
-- **Nr.** — literal text ordinal of the block within the lesson (1-based).
+- **No.** — literal text ordinal of the block within the lesson (1-based).
   Never Word auto-numbering (the SD's auto-number column is a proven source
   of off-by-N reads).
-- **Bloks** — human label + the exact `family/variant` on a second line in
-  gray (e.g. `Akordeons` / `interactive/accordion`).
-- **Saturs** — the block's content per the conventions below.
-- **Piezīmes** — exporter notes: media chips summary, flags, "skatīšanai"
-  reasons. Free-form; the parser never reads meaning from it.
+- **Block** — human label + the exact `family/variant` on a second line in
+  gray (e.g. `Accordion` / `interactive/accordion`).
+- **Content** — the block's content per the conventions below.
+- **Notes** — exporter notes: media chips summary, flags, read-only reasons
+  ("Unexpected block shape / Unknown block family — rendered read-only.").
+  Free-form; the parser never reads meaning from it.
 - **ID** — the identity token, gray 7 pt:
   `⟦B:<blockId> R:<rev> <edit|ro>⟧`
   - `blockId` — the block's client id from the archive, verbatim.
@@ -59,13 +65,14 @@ the duplicate-client-id invariant). A row whose ID token is missing,
 duplicated, or malformed is a NEW/CONFLICT row for the parser — surfaced
 loudly, never guessed. Deleting a row = requesting that block's deletion;
 reordering rows = requesting reorder. `ro` rows must come back byte-identical
-in the ID/Bloks columns; any edit to their content is a conflict, not a
+in the ID/Block columns; any edit to their content is a conflict, not a
 change request.
 
 ## Fidelity classes
 
-- **`edit`** — families the storyboard pipeline can rebuild (the same set the
-  SD→Rise mapper supports): `text/*`, `impact/note`, `list/*`,
+- **`edit`** — families the storyboard pipeline can rebuild (anchored by
+  `core/storyboard/map.ts`, now the Creator compiler's donor mapper):
+  `text/*`, `impact/note`, `list/*`,
   `interactive/accordion|tabs`, `flashcard/flashcard`,
   `interactive-fullscreen/process|timeline|sorting`,
   `knowledgeCheck/multiple choice|multiple response|matching`,
@@ -82,7 +89,7 @@ change request.
   families without breaking v1 documents.
 
 Media INSIDE an `edit` block (e.g. an accordion panel image) is preserved by
-reference: the Piezīmes cell lists chips `⟦media:<image|video|audio|other>
+reference: the Notes cell lists chips `⟦media:<image|video|audio|other>
 #<6-hex>⟧`, one per referenced key. Chips are informational in v1;
 *(round-trip)* they are position markers — content edits around them never
 touch the media, and chip deletion is (future) a remove request.
@@ -96,10 +103,10 @@ Shared with the SD parser's vocabulary so authors feel at home:
   follow, until the next bold paragraph.
 - **List paragraphs** (real Word bullets/numbering) = list items or KC
   options. `list/numbered` renders as Word decimal numbering, `bulleted` and
-  `checkboxes` as bullets (`checkboxes` noted in Piezīmes).
+  `checkboxes` as bullets (`checkboxes` noted in Notes).
 - **Knowledge check**: bold stem → options as a bullet list — **correct
   options colored `00B050`** (the official green) → optional italic paragraph
-  `Atgriezeniskā saite: …` = question feedback; an italic `↳ …` paragraph
+  `Feedback: …` = question feedback; an italic `↳ …` paragraph
   directly after an option = that answer's feedback. Multiple green = multiple
   response. `matching` renders pairs as bullets `left ⇄ right`.
 - **Timeline**: per event a bold `date: title` paragraph (date = text before
@@ -122,15 +129,28 @@ Shared with the SD parser's vocabulary so authors feel at home:
 
 An SBDOC renders ONE language. A stack is materialized in its **default
 locale** (locale→default→any fallback, `core/l10n/materialize`) and the meta
-table's `Valoda` names it; the guard note warns that edits apply to that
+table's `Language` names it; the guard note warns that edits apply to that
 language only. *(round-trip: stack merge is out of scope until the update
 pipeline exists; the parser will refuse a stack SBDOC against a stack course
 until then.)*
+
+## The prose flavor (not SBDOC)
+
+The docx view offers BOTH flavors for every source (archive / live account
+search / current editor tab). The **prose** `.docx`
+(`core/storyboard/render/docx-write-prose.ts`) is the second one: A4 portrait,
+flowing document that reads like the course itself — headings, body text,
+embedded raster images (from the archive, or downloaded in-memory from the
+public CDN for live-fetched courses), lime-highlighted correct answers, small
+gray identity tokens between blocks. It is for proofreading and is **NOT
+round-trippable** — no lesson tables, no fixed anchors; SBDOC remains the
+strict format this contract describes.
 
 ## What an SBDOC is not
 
 Not an export of theme/settings/cover (course-level surface is absent by
 design and a future merge must not touch it); not a media transport (binaries
-stay in the archive); not the SD format (an SD is client-authored and parsed
-by the conventions ENGINE with `unparsed[]` demotion; an SBDOC is
-tool-authored and strict — a malformed SBDOC is an error, not a demotion).
+stay in the archive); not the SD format (an SD was client-authored and parsed
+by the conventions ENGINE with `unparsed[]` demotion — that parser was deleted
+2026-08-16 with the SD-docx → Rise drop; an SBDOC is tool-authored and strict —
+a malformed SBDOC is an error, not a demotion).

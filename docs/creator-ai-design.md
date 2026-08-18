@@ -13,6 +13,13 @@
 > governs it. The SD-docx → Rise parser was DROPPED the same day (client docx
 > is too unreliable as deterministic input without an AI cleanup stage), so
 > this pipeline is the only doc → Rise route.
+>
+> **v0.9.0: the flow is now TWO pages.** `creator.html` (prompt pack + paste +
+> validate) hands off to `review.html` (re-validate + preview + unresolved ack
+> + package write) via a `chrome.storage.session` slot holding the RAW pasted
+> text (`shared/creator-handoff.ts`). The review page RE-validates — storage is
+> never trusted; a consumed/expired slot dead-ends with a pointer back to the
+> Creator page.
 
 This document records the agreed boundary for general conversion.
 
@@ -127,7 +134,11 @@ adapter must:
 ## Repair and preview
 
 Schema/semantic failures may be returned to the provider in a bounded repair
-pass. Repair still targets Course Blueprint only.
+pass. Repair still targets Course Blueprint only. In the shipped chat-paste
+mode this is the operator loop — copy the error report, paste it back into the
+chat, paste the corrected JSON — and it happens on the ENTRY page
+(`creator.html`); the review page is a dead end for invalid JSON, never a
+repair surface.
 
 The operator preview exposes lesson/block order, proposed content, source refs,
 assets, unsupported items, registry status, confidence/warnings, and unresolved
