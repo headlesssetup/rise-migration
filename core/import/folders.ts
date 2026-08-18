@@ -62,9 +62,33 @@ export function rootIdsByType(folders: Map<string, SourceFolder>): {
   return roots;
 }
 
+/** Ancestor closure of the given folder ids: each seed folder plus every
+ *  ancestor up to (excluding) a root. Unknown seed ids (a course sitting in a
+ *  root, or a folder missing from the capture) contribute nothing. Used to
+ *  scope creation to just the folders the selected courses live in. */
+export function folderScope(
+  folders: Map<string, SourceFolder>,
+  seedIds: Iterable<string>,
+): Set<string> {
+  const scope = new Set<string>();
+  for (const seed of seedIds) {
+    let cur = folders.get(seed);
+    while (cur && !cur.isRoot && !scope.has(cur.id)) {
+      scope.add(cur.id);
+      cur = cur.parentFolderId ? folders.get(cur.parentFolderId) : undefined;
+    }
+  }
+  return scope;
+}
+
 /** Non-root, non-deleted folders ordered PARENT-FIRST (so each create can
- *  resolve its parent's new id). Depth = chain length to a root/absent parent. */
-export function orderForCreation(folders: Map<string, SourceFolder>): SourceFolder[] {
+ *  resolve its parent's new id). Depth = chain length to a root/absent parent.
+ *  With `only`, restricted to that id set (pass a `folderScope` closure so the
+ *  parents needed for placement are included). */
+export function orderForCreation(
+  folders: Map<string, SourceFolder>,
+  only?: ReadonlySet<string>,
+): SourceFolder[] {
   const depth = (f: SourceFolder, seen = new Set<string>()): number => {
     let d = 0;
     let cur: SourceFolder | undefined = f;
@@ -78,7 +102,7 @@ export function orderForCreation(folders: Map<string, SourceFolder>): SourceFold
     return d;
   };
   return [...folders.values()]
-    .filter((f) => !f.isRoot && !f.deleted)
+    .filter((f) => !f.isRoot && !f.deleted && (!only || only.has(f.id)))
     .sort((a, b) => depth(a) - depth(b));
 }
 

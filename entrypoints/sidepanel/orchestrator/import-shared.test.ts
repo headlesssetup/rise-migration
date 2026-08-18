@@ -179,6 +179,34 @@ describe('the run pin (C4) on the shared helpers', () => {
     for (const r of sent()) expect(r.pin).toBeUndefined();
   });
 
+  it('setupFolders scoped to seed folder ids creates ONLY those chains', async () => {
+    mockFolderBackground();
+    const src = JSON.stringify([
+      { id: 'sRoot', name: 'Shared', isRoot: true, folderType: 'shared' },
+      { id: 'sf1', name: 'Marketing', parentFolderId: 'sRoot', folderType: 'shared' },
+      { id: 'sf2', name: 'Sales', parentFolderId: 'sRoot', folderType: 'shared' },
+    ]);
+    const st = { readFolders: async () => src } as unknown as Storage;
+    const { onEvent } = sink();
+    const map = await setupFolders(st, { userId: 'u1' }, false, noPacing, onEvent, undefined, [
+      'sf1',
+    ]);
+    expect(map.get('sf1')).toBe('newF1');
+    expect(map.has('sf2')).toBe(false); // Sales holds no selected course → untouched
+    const creates = sent().filter((r) => r.type === 'RELAY_WRITE' && r.spec.method === 'POST');
+    expect(creates).toHaveLength(1);
+  });
+
+  it('setupFolders with an all-root/unknown scope creates nothing and skips the target read', async () => {
+    mockFolderBackground();
+    const { onEvent } = sink();
+    const map = await setupFolders(storageWithFolders, { userId: 'u1' }, false, noPacing, onEvent, undefined, [
+      'sRoot',
+    ]);
+    expect(map.size).toBe(0);
+    expect(sent()).toHaveLength(0); // early-out before any relay traffic
+  });
+
   it('fetchTargetTypefaces pins the course probe AND the typeface read', async () => {
     rpcMock.mockImplementation(async (req: BackgroundRequest): Promise<BackgroundResponse> => {
       if (req.type === 'SEARCH_COURSES') {

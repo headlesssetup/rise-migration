@@ -799,13 +799,18 @@ its own dry-run + live run. They share state through small id-map artifacts unde
   questions, copy-faithful with regenerated ids). Persists
   `_import/banks.idmap.json` = `{ srcBankId: { newBankId, questionIds:[…new ids…] } }`
   (merged across runs). Bank-question media stays flagged (not re-uploaded).
-- **C — Courses:** the per-course sequence in §1, but it **consumes** A's maps
-  (place into the mapped folder; apply the pre-resolved typeface ids — no
-  per-course font upload) and B's map (**auto-bind** each draw-from-bank block to
-  its imported bank via `INSERT_QUESTION_BANK_QUESTIONS` with the persisted
-  `questionList`). A draw-from-bank block whose bank wasn't imported in B stays an
-  unbound placeholder. If A wasn't run, C falls back to creating folders inline +
-  resolving fonts per course (back-compat).
+- **C — Courses:** the per-course sequence in §1, but it **consumes** A's
+  typeface map (apply the pre-resolved typeface ids — no per-course font upload)
+  and B's map (**auto-bind** each draw-from-bank block to its imported bank via
+  `INSERT_QUESTION_BANK_QUESTIONS` with the persisted `questionList`). A
+  draw-from-bank block whose bank wasn't imported in B stays an unbound
+  placeholder. **Folder placement is a C-side checkbox ("Re-create folders"),
+  not A's persisted map** (a persisted folder id can go stale): ON → recreate
+  just the SELECTED courses' folder chains (ancestors included), deduped by
+  name+parent against a fresh target listing — so folders A created (or a prior
+  run created) are reused by name, never duplicated — then move each course in;
+  OFF (default) → no folder writes, courses stay in the root. If A wasn't run,
+  C still resolves fonts per course (back-compat).
 
 ## 10e. Capture additions (2026-06 — `9e532fc5`)
 

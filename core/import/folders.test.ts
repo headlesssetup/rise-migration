@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseFolders,
   rootIdsByType,
+  folderScope,
   orderForCreation,
   ownerPermissions,
 } from './folders';
@@ -44,6 +45,35 @@ describe('orderForCreation', () => {
     expect(ordered.indexOf('a')).toBeLessThan(ordered.indexOf('b'));
     expect(ordered.indexOf('b')).toBeLessThan(ordered.indexOf('c'));
     expect(ordered).toContain('p');
+  });
+});
+
+describe('folderScope', () => {
+  it('includes each seed and every ancestor up to (excluding) the root', () => {
+    const scope = folderScope(parseFolders(DOC), ['c']);
+    expect([...scope].sort()).toEqual(['a', 'b', 'c']);
+  });
+  it('ignores root and unknown seed ids (courses sitting in a root)', () => {
+    expect(folderScope(parseFolders(DOC), ['rootS', 'nope']).size).toBe(0);
+  });
+  it('merges chains from multiple seeds without duplicates', () => {
+    const scope = folderScope(parseFolders(DOC), ['b', 'c', 'p']);
+    expect([...scope].sort()).toEqual(['a', 'b', 'c', 'p']);
+  });
+});
+
+describe('orderForCreation (scoped)', () => {
+  it('restricts to the scope, keeping parent-first order', () => {
+    const m = parseFolders(DOC);
+    const ordered = orderForCreation(m, folderScope(m, ['c'])).map((f) => f.id);
+    expect(ordered).toEqual(['a', 'b', 'c']); // no p, no roots
+  });
+  it('still drops deleted folders even when scoped in', () => {
+    const m = parseFolders(DOC);
+    expect(orderForCreation(m, new Set(['gone', 'a'])).map((f) => f.id)).toEqual(['a']);
+  });
+  it('an empty scope creates nothing', () => {
+    expect(orderForCreation(parseFolders(DOC), new Set())).toEqual([]);
   });
 });
 

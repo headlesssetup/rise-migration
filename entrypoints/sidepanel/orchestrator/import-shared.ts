@@ -11,6 +11,7 @@ import {
   parseTypefaces,
   parseFolders,
   rootIdsByType,
+  folderScope,
   orderForCreation,
   ownerPermissions,
   createFolder,
@@ -341,13 +342,18 @@ export async function setupFolders(
    *  run must pass it or the creates can follow window focus into the source
    *  account. Omitted ⇒ unpinned (active-tab) behavior. */
   pin?: TabPin,
+  /** Source folder ids to scope creation to (the folders the selected courses
+   *  live in) — expanded here to their ancestor chains so parents exist for
+   *  placement. Omitted ⇒ recreate the whole tree (account-settings step). */
+  scopeSeedIds?: Iterable<string>,
 ): Promise<Map<string, string>> {
   const relay = makePinnedRelay(pin);
   const map = new Map<string, string>();
   const raw = await storage.readFolders();
   if (!raw) return map;
   const source = parseFolders(safeJson(raw));
-  const toCreate = orderForCreation(source);
+  const scope = scopeSeedIds ? folderScope(source, scopeSeedIds) : undefined;
+  const toCreate = orderForCreation(source, scope);
   if (!toCreate.length) return map;
 
   const owner = ownerPermissions(target ?? {});
