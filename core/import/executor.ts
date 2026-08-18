@@ -8,55 +8,53 @@
 // All I/O is injected so the whole executor is unit-testable without a browser
 // or a live Rise account.
 
-import { IdMap, newId } from './ids';
-import {
-  defaultLocaleOf,
-  isL10nRef,
-  isLocalizedStack,
-  materializeLocale,
-  pairL10nRefs,
-  writableLocaleCodes,
-  type L10nChange,
-} from '@/core/l10n';
-import {
-  freshClientIds,
-  remapIds,
-  blankUploadedMediaKeys,
-  blankForeignMediaKeys,
-  remapMediaKeys,
-  findForeignMediaKeys,
-  findLocalAssetRefs,
-} from './remap';
-import { collectBuiltinRefs, hasBuiltinRef, probeBuiltinRefs } from './builtin-assets';
-import * as env from './envelopes';
-import type { WriteSpec } from './envelopes';
-import {
-  findBankRef,
-  MAX_UPLOAD_BASE64,
-  type PlanStep,
-  type PlanInput,
-  type SourceBank,
-} from './plan';
-import {
-  targetByName,
-  usedTypefaceIds,
-  resolveTypefaces,
-  buildCreateTypefaceFonts,
-  applyTypefaceIds,
-  type Typeface,
-} from './typefaces';
-import {
-  WriteError,
-  parseJson,
-  payloadOf,
-  indexSource,
-  blockKey,
-  authorProfile,
-} from './executor-types';
-import { legacyStorylinePlaceholderBlock } from '@/core/storyline/compatibility';
-import type { ExecutorDeps, ExecResult, AssetBytes } from './executor-types';
-import type { GetCourseDocument } from '@/shared/types/rise';
+import { remapMediaKeys, findForeignMediaKeys, findLocalAssetRefs } from './remap';
+import type { PlanStep } from './plan';
+import { WriteError } from './executor-types';
+import type { ExecutorDeps, ExecResult } from './executor-types';
 import { makeExecCtx } from './executor-run-state';
+import {
+  handleCreateBank,
+  handlePutBank,
+  handleBindDrawFromBank,
+  handleFlagDrawFromBank,
+} from './executor-steps-banks';
+import {
+  handleCreateCourse,
+  handleSetTheme,
+  handleSetTitle,
+  handleCreateLesson,
+  handleUpdateLesson,
+  handleLockLesson,
+  handleUnlockLesson,
+  handleCreateBlocks,
+} from './executor-steps-lifecycle';
+import {
+  handleSetCourseImages,
+  handleUploadAsset,
+  handleUploadLessonMedia,
+  handlePatchBlockMedia,
+  handleFlagOrphanMedia,
+  handleDropOptionalMedia,
+  handleFlagUnsupportedMedia,
+} from './executor-steps-media';
+import {
+  handleAttachStoryline,
+  handleFlagStoryline,
+  handleAttachStorylineL10n,
+  handleFlagL10nStoryline,
+} from './executor-steps-storyline';
+import {
+  handleSetCourseDescription,
+  handleConvertStack,
+  handleAwaitStack,
+  handleUploadL10nAsset,
+  handleWriteL10n,
+  handleSetLocaleLabelset,
+  handleSetStackTitles,
+  handleFlagL10nLocale,
+  handleFlagLocaleSelector,
+} from './executor-steps-l10n';
 export type { ExecCtx } from './executor-run-state';
 
 // Re-export the executor contracts/types so `@/core/import` keeps the same
@@ -132,893 +130,133 @@ export async function executePlan(
       ctx.stepIdx++;
       switch (step.kind) {
         case 'create-bank': {
-          const bank = deps.input.banksById.get(step.sourceBankId);
-          const resp = await send(
-            // Banks live in their OWN folder namespace — NOT the course-content
-            // `all` sentinel (which 500s here). Until bank-folder mapping exists
-            // (protocol §5), create at the bank root with folderId: null.
-            env.postBank({ folderId: null, title: step.title }),
-            step.kind,
-          );
-          const newBankId = dryRun ? ids.remap(step.sourceBankId) : String(resp.id ?? '');
-          if (!newBankId) throw new WriteError('Bank create returned no id', step.kind, JSON.stringify(resp));
-          ids.set(step.sourceBankId, newBankId);
-          // Pre-remap the bank's questions so their new ids are known for binding.
-          const remapped = remapIds(bank?.questions ?? [], ids) as Array<{ id?: string }>;
-          bankQuestionIds.set(
-            step.sourceBankId,
-            remapped.map((q) => String(q.id ?? '')).filter(Boolean),
-          );
+          await handleCreateBank(ctx, step);
           break;
         }
         case 'put-bank': {
-          const bank = deps.input.banksById.get(step.sourceBankId) as SourceBank | undefined;
-          const newBankId = ids.get(step.sourceBankId);
-          if (!newBankId) throw new WriteError('put-bank before create-bank', step.kind);
-          const questions = remapIds(bank?.questions ?? [], ids);
-          let resp: Record<string, unknown>;
-          try {
-            resp = await send(
-              env.putBank({
-                bankId: newBankId,
-                questions: questions as unknown[],
-                session: mint(),
-                lockData: authorProfile(author),
-              }),
-              step.kind,
-            );
-          } catch (e) {
-            // The bank shell was created (create-bank) but the questions write
-            // failed → an empty bank is left on the target. Record it (no delete)
-            // so the report lists it for manual cleanup, then fail the course.
-            result.flags.push({
-              kind: 'orphan-bank',
-              detail: `Empty question bank ${newBankId} left on target (question write failed) — delete manually if needed`,
-            });
-            throw e;
-          }
-          if (!dryRun && resp.version === undefined && resp.questions === undefined) {
-            result.flags.push({
-              kind: 'orphan-bank',
-              detail: `Question bank ${newBankId} may be incomplete (PUT did not echo a saved bank) — verify/delete manually`,
-            });
-            throw new WriteError('Bank PUT did not echo a saved bank', step.kind, JSON.stringify(resp));
-          }
+          await handlePutBank(ctx, step);
           break;
         }
         case 'create-course': {
-          const resp = await send(
-            env.createCourseShell(deps.input.targetFolderId ?? 'all', step.courseType),
-            step.kind,
-          );
-          ctx.newCourseId = dryRun ? ids.remap(step.sourceCourseId) : String(resp.id ?? '');
-          if (!ctx.newCourseId) throw new WriteError('Course create returned no id', step.kind, JSON.stringify(resp));
-          ids.set(step.sourceCourseId, ctx.newCourseId);
-          result.newCourseId = ctx.newCourseId;
-          // INVARIANT — materialization handshake (mirror the editor): a real
-          // GET_COURSE on the new id BEFORE any write. Rise's editor always reads the
-          // course on open; `POST /content` returns a fully-materialized course
-          // (capture-confirmed: GET_COURSE 200 immediately). We pace before each
-          // attempt and RETRY a few times — a couple seconds of slack absorbs any
-          // replication lag and matches the editor's own create→open delay. If the
-          // course never confirms, the shell is broken → fail now (rollback) rather
-          // than build on a course that 404s GET_COURSE yet 500s the dashboard.
-          if (!dryRun) {
-            const tries = Math.max(1, deps.courseHandshakeTries ?? 3);
-            let confirmed = false;
-            for (let attempt = 1; attempt <= tries && !confirmed; attempt++) {
-              await pace(); // ≥ one paced gap after POST before reading back
-              const spec = env.getCourse(ctx.newCourseId);
-              result.envelopes.push({ step: step.kind, label: spec.label });
-              const r = await deps.relay(spec);
-              const rb = r.ok ? payloadOf(parseJson(r.text)) : {};
-              if (r.ok && rb.course && typeof rb.course === 'object') {
-                log(`${pfx()} OK   GET_COURSE handshake — course ready (attempt ${attempt}/${tries})`);
-                confirmed = true;
-                ctx.materialized = true;
-                // F2: record any PRE-CREATED shell lessons (onePage ships one:
-                // title "", type "blocks", no items) for adoption below. Only
-                // genuinely EMPTY lessons qualify — anything else is unexpected
-                // and left alone (the read-back would surface it loudly).
-                const shell = Array.isArray(rb.lessons)
-                  ? (rb.lessons as Record<string, unknown>[])
-                  : [];
-                for (const l of shell) {
-                  const emptyTitle = l.title === '' || l.title === null || l.title === undefined;
-                  const noItems = !Array.isArray(l.items) || l.items.length === 0;
-                  if (typeof l.id === 'string' && l.id && emptyTitle && noItems) {
-                    shellLessons.push({ id: l.id });
-                  } else if (typeof l.id === 'string') {
-                    log(
-                      `${pfx()} ⚠ shell lesson ${l.id} is not empty (title/items present) — not adopting it`,
-                    );
-                  }
-                }
-                if (shellLessons.length) {
-                  log(
-                    `${pfx()} NOTE shell ships ${shellLessons.length} pre-created lesson(s) (onePage) — lesson 1 will ADOPT it, not duplicate it`,
-                  );
-                }
-              } else {
-                log(`${pfx()} …    GET_COURSE not ready yet (attempt ${attempt}/${tries}, HTTP ${r.status})`);
-              }
-            }
-            if (!confirmed) {
-              throw new WriteError(
-                'Post-create GET_COURSE never confirmed the course ctx.materialized',
-                step.kind,
-              );
-            }
-          }
+          await handleCreateCourse(ctx, step);
           break;
         }
         case 'set-theme': {
-          const course = (deps.input.course.course ?? {}) as Record<string, unknown>;
-          // Theme round-trips verbatim EXCEPT any user-uploaded cover/header key
-          // (rise/courses/<srcId>/…) which would be a dead source key on target —
-          // blank those (flagged as unsupported-media); built-in cdn/asset theme
-          // images are kept as-is.
-          const theme = blankUploadedMediaKeys(course.theme ?? {}) as Record<string, unknown>;
-
-          // Typography: typeface ids are account-specific, so match the source's
-          // fonts to the TARGET account by name and recreate any custom font it
-          // lacks — otherwise the course renders with the wrong (default) font.
-          const src = deps.sourceTypefaces;
-          if ((src && src.size) || (deps.typefaceIdMap && deps.typefaceIdMap.size)) {
-            const idMap = await resolveAndRecreateTypefaces(course, src ?? new Map());
-            const applied = applyTypefaceIds(course, theme, idMap);
-            await send(
-              env.updateCourseThemeAndTypefaces({
-                courseId: ctx.newCourseId,
-                theme: applied.theme,
-                headingTypefaceId: applied.headingTypefaceId,
-                bodyTypefaceId: applied.bodyTypefaceId,
-                uiTypefaceId: applied.uiTypefaceId,
-              }),
-              step.kind,
-            );
-          } else {
-            await send(env.updateCourseTheme(ctx.newCourseId, theme), step.kind);
-          }
+          await handleSetTheme(ctx, step);
           break;
         }
         case 'set-course-images': {
-          // Stack: the raw course fields are {l10nId} refs — the image OBJECTS
-          // live in the tables. Use the materialized default locale (this step
-          // runs PRE-conversion on a stack; the conversion re-extracts the plain
-          // objects into refs + cells itself).
-          const course = ((stack ? matDoc.course : deps.input.course.course) ??
-            {}) as Record<string, unknown>;
-          // Faithful round-trip of any course-level image object (coverImage/
-          // cardImage `{media:{image}}`, the `media` logo `{image}`, or
-          // lessonHeaderImage which may nest an uncropped `originalImage`). Upload
-          // EVERY course/bank key found anywhere in the object — key, crushedKey,
-          // originalImage.* — so none survives as a source key, then remap.
-          const build = async (img: unknown, where: string): Promise<unknown | undefined> => {
-            const keys = new Set<string>();
-            const walk = (o: unknown): void => {
-              if (typeof o === 'string') {
-                if (/^rise\/(?:courses|questionBanks)\//.test(o)) keys.add(o);
-              } else if (Array.isArray(o)) {
-                o.forEach(walk);
-              } else if (o && typeof o === 'object') {
-                Object.values(o).forEach(walk);
-              }
-            };
-            walk(img);
-            if (keys.size === 0) {
-              // No account media — but a BUILT-IN (library/CDN) reference is
-              // copyable as-is: ship the object verbatim. Nothing to upload; a
-              // library asset has no per-account copy, and inventing one for a
-              // possibly region-restricted asset is not ours to decide.
-              if (hasBuiltinRef(img)) {
-                await noteBuiltins(img, where);
-                return img;
-              }
-              return undefined;
-            }
-            const km = new Map<string, string>();
-            for (const k of keys) {
-              // null = no archived bytes → flagged + blanked (keyMap → '') by
-              // uploadImageAsset, so the payload strips the dead source key.
-              km.set(k, (await uploadImageAsset(k)) ?? '');
-            }
-            // Every key orphaned → ship the course without this image entirely
-            // (flagged), not an image object full of empty keys.
-            if (![...km.values()].some(Boolean)) return undefined;
-            return remapMediaKeys(img, km);
-          };
-          const coverImage = step.hasCover
-            ? await build(course.coverImage, 'course cover image')
-            : undefined;
-          const cardImage = step.hasCard
-            ? await build(course.cardImage, 'course card image')
-            : undefined;
-          const media = step.hasMedia ? await build(course.media, 'course logo') : undefined;
-          const lessonHeaderImage = step.hasLessonHeader
-            ? await build(course.lessonHeaderImage, 'course lesson-header image')
-            : undefined;
-          if (
-            coverImage !== undefined ||
-            cardImage !== undefined ||
-            media !== undefined ||
-            lessonHeaderImage !== undefined
-          ) {
-            await send(
-              env.setCourseImages({ courseId: ctx.newCourseId, coverImage, cardImage, media, lessonHeaderImage }),
-              step.kind,
-            );
-          }
+          await handleSetCourseImages(ctx, step);
           break;
         }
         case 'set-title': {
-          // Best-effort: never abort a whole course import over a cosmetic
-          // title/description (confirmed envelope, but flag if it doesn't take).
-          try {
-            await send(env.updateCourseTitle(ctx.newCourseId, step.title), step.kind);
-            // The monolingual description rides the (single) `final` title
-            // write; a stack's description is its own pre-conversion step.
-            const desc = deps.input.course.course?.description;
-            if (step.final && typeof desc === 'string' && desc) {
-              await send(
-                env.updateCourseFieldThrottle(ctx.newCourseId, 'description', desc),
-                step.kind,
-              );
-            }
-          } catch (e) {
-            log(`WARN title/description not set (continuing): ${(e as Error).message}`);
-            result.flags.push({
-              kind: 'title',
-              detail: `Course title "${step.title}" could not be set automatically — rename manually`,
-            });
-          }
+          await handleSetTitle(ctx, step);
           break;
         }
         case 'create-lesson': {
-          // F2 ADOPTION: a onePage shell already holds ONE empty lesson (title
-          // "", type blocks, no items — capture-proven) which the editor writes
-          // straight into; creating our own would leave a phantom extra lesson.
-          // Adopt an unclaimed shell lesson instead of CREATE_LESSON — but only
-          // when this step's intended title is ALSO empty (a microlearning
-          // lesson has no title by design, so empty IS the faithful state; no
-          // captured envelope renames a lesson, so a titled lesson 1 must be
-          // created normally and the read-back will surface the extra lesson).
-          if (!dryRun && shellLessons.length > 0 && step.title === '') {
-            const adopted = shellLessons.shift()!;
-            ids.set(step.sourceLessonId, adopted.id);
-            log(
-              `${pfx()} OK   adopted the shell's pre-created lesson ${adopted.id} as "${step.sourceLessonId}" (no CREATE_LESSON)`,
-            );
-            break;
-          }
-          // Always a PLAIN title: a stack's lessons are built in the default
-          // language (materialized) and the conversion extracts titles into
-          // cells itself — idea 2 ships no l10n refs and no inline cells.
-          const resp = await send(
-            env.createLesson({
-              author,
-              courseId: ctx.newCourseId,
-              position: step.position,
-              title: step.title,
-              type: step.lessonType,
-            }),
-            step.kind,
-          );
-          const lesson = payloadOf(resp).lesson as Record<string, unknown> | undefined;
-          const newLessonId = dryRun
-            ? ids.remap(step.sourceLessonId)
-            : String(lesson?.id ?? '');
-          if (!newLessonId) throw new WriteError('CREATE_LESSON returned no lesson id', step.kind, JSON.stringify(resp));
-          ids.set(step.sourceLessonId, newLessonId);
+          await handleCreateLesson(ctx, step);
           break;
         }
         case 'update-lesson': {
-          const newLessonId = ids.get(step.sourceLessonId)!;
-          const src = srcLessons.get(step.sourceLessonId);
-          const extra: Record<string, unknown> = {};
-          for (const k of ['headerImage', 'description', 'settings', 'media', 'piles']) {
-            if (src && k in src) extra[k] = (src as Record<string, unknown>)[k];
-          }
-          // Lesson media (header image / media) uploaded by the preceding
-          // `upload-lesson-media` steps is in keyMap → remap it to the new target
-          // key; anything NOT uploaded (oversize/orphan/none) is blanked so a dead
-          // source key is never written to the target lesson.
-          const safeExtra = blankForeignMediaKeys(
-            remapMediaKeys(extra, keyMap),
-            new Set(ctx.newCourseId ? [ctx.newCourseId] : []),
-          ) as Record<string, unknown>;
-          await send(
-            env.updateLesson({
-              id: newLessonId,
-              courseId: ctx.newCourseId,
-              type: step.lessonType,
-              icon: step.icon,
-              extra: safeExtra,
-            }),
-            step.kind,
-          );
+          await handleUpdateLesson(ctx, step);
           break;
         }
         case 'lock-lesson': {
-          // Best-effort: never abort the import on a lock failure.
-          try {
-            await send(env.putLock(ids.get(step.sourceLessonId)!, ctx.newCourseId), step.kind);
-          } catch (e) {
-            log(`WARN lock failed (continuing): ${(e as Error).message}`);
-          }
+          await handleLockLesson(ctx, step);
           break;
         }
         case 'unlock-lesson': {
-          try {
-            await send(env.delLock(ids.get(step.sourceLessonId)!, ctx.newCourseId), step.kind);
-          } catch (e) {
-            log(`WARN unlock failed (ignored): ${(e as Error).message}`);
-          }
+          await handleUnlockLesson(ctx, step);
           break;
         }
         case 'create-blocks': {
-          const newLessonId = ids.get(step.sourceLessonId)!;
-          // Build ALL of the lesson's blocks in source order, copy-faithful:
-          // regenerate ids + strip server fields, then blank uploaded media keys
-          // (filled by the patch step after re-upload). One ordered insert keeps
-          // block order deterministic.
-          const newIdToSource = new Map<string, string>();
-          const built: Record<string, unknown>[] = [];
-          for (const ref of step.blocks) {
-            const entry = srcBlocks.get(blockKey(step.sourceLessonId, ref.sourceBlockId));
-            if (!entry) throw new WriteError(`Source block ${ref.sourceBlockId} not found`, step.kind);
-            // freshClientIds FIRST: block/item ids that are not cuid-shaped (Rise's
-            // sample courses number them "1","2","3"… in EVERY lesson) get a fresh
-            // per-block id, so two lessons never claim the same block id. Then the
-            // usual IdMap pass handles cuid-shaped ids + refs globally.
-            const normalized = freshClientIds(entry.block, mint);
-            const remappedSource = blankUploadedMediaKeys(
-              remapIds(normalized, ids),
-            ) as Record<string, unknown>;
-            const remapped =
-              ref.replacement === 'legacy-storyline'
-                ? legacyStorylinePlaceholderBlock(remappedSource, mint)
-                : remappedSource;
-            const newBlockId = String(remapped.id ?? '');
-            newIdToSource.set(newBlockId, ref.sourceBlockId);
-            built.push(remapped);
-            // Provisional mapping (confirmed below in a live run).
-            blockMeta.set(blockKey(step.sourceLessonId, ref.sourceBlockId), { newId: newBlockId });
-          }
-          // Idea 2: stack blocks ship MATERIALIZED (srcBlocks indexes the
-          // materialized doc) — plain default-language values, no refs, no
-          // inline translationChanges. The conversion l10n-ifies them itself.
-          const resp = await send(
-            env.createBlocks({
-              courseId: ctx.newCourseId,
-              lessonId: newLessonId,
-              previousBlockId: null,
-              blocks: built,
-            }),
-            step.kind,
-          );
-          if (!dryRun) {
-            const p = payloadOf(resp);
-            const metas = Array.isArray(p.blockMetadata)
-              ? (p.blockMetadata as Record<string, unknown>[])
-              : [];
-            if (p.success !== true || metas.length !== built.length) {
-              throw new WriteError(
-                `CREATE_BLOCKS did not confirm all ${built.length} block(s)`,
-                step.kind,
-                JSON.stringify(resp),
-              );
-            }
-            for (const meta of metas) {
-              const newBlockId = String(meta.id ?? '');
-              const src = newIdToSource.get(newBlockId);
-              if (!src) {
-                throw new WriteError(
-                  `CREATE_BLOCKS returned an unexpected block id ${newBlockId}`,
-                  step.kind,
-                  JSON.stringify(resp),
-                );
-              }
-              blockMeta.set(blockKey(step.sourceLessonId, src), {
-                newId: newBlockId,
-                globalBlockId:
-                  typeof meta.globalBlockId === 'string' ? meta.globalBlockId : undefined,
-              });
-            }
-          }
+          await handleCreateBlocks(ctx, step);
           break;
         }
         case 'bind-draw-from-bank': {
-          if (!step.sourceBankId) {
-            result.flags.push({
-              kind: 'missing-bank-ref',
-              sourceBlockId: step.sourceBlockId,
-              sourceLessonId: step.sourceLessonId,
-              detail: 'draw-from-bank block has no resolvable source bank id',
-            });
-            throw new WriteError('draw-from-bank block missing a bank reference', step.kind);
-          }
-          // Bank may have been imported in step B (boundBanks) or created in this
-          // same run (ids/bankQuestionIds). Prefer the pre-imported one.
-          const bound = deps.input.boundBanks?.get(step.sourceBankId);
-          const newBankId = bound?.newBankId ?? ids.get(step.sourceBankId);
-          if (!newBankId) throw new WriteError('bind before bank create', step.kind);
-          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          // Same loud-fail as patch/attach: shipping an empty blockOrItemId
-          // would silently bind the draw to nothing on the server.
-          if (!meta) throw new WriteError('bind before block create', step.kind);
-          const newLessonId = ids.get(step.sourceLessonId)!;
-          const pendingItemId = mint();
-          const questionList = bound?.questionIds ?? bankQuestionIds.get(step.sourceBankId) ?? [];
-          await send(
-            env.insertQuestionBankQuestions({
-              lesson: { id: newLessonId, courseId: ctx.newCourseId },
-              blockOrItemId: meta.newId,
-              pendingItemId,
-              mode: 'knowledgeCheck',
-              drawCount: step.drawCount,
-              questionDrawType: step.questionDrawType,
-              questionBankId: newBankId,
-              questionList,
-              courseId: ctx.newCourseId,
-            }),
-            step.kind,
-          );
+          await handleBindDrawFromBank(ctx, step);
           break;
         }
         case 'upload-asset': {
-          // Dedup + size-guard + faithful upload (shared with lesson media). The
-          // plan emits an upload step per (block, key), so the SAME source key can
-          // recur — uploadOne reuses an already-uploaded key (upload once).
-          await uploadOne(step.sourceKey, step.filename, step.kind);
+          await handleUploadAsset(ctx, step);
           break;
         }
         case 'upload-lesson-media': {
-          // Lesson header / media — uploaded BEFORE this lesson's UPDATE_LESSON so
-          // the lesson payload (built in update-lesson) carries the remapped key.
-          await uploadOne(step.sourceKey, step.filename, step.kind);
+          await handleUploadLessonMedia(ctx, step);
           break;
         }
         case 'patch-block-media': {
-          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!entry || !meta) throw new WriteError('patch before block create', step.kind);
-          const newLessonId = ids.get(step.sourceLessonId)!;
-          // Build the patched block: remap ids, then swap source keys → new keys.
-          const patched = remapMediaKeys(remapIds(entry.block, ids), keyMap);
-          await send(
-            env.updateBlockDebounce({
-              id: meta.newId,
-              courseId: ctx.newCourseId,
-              lessonId: newLessonId,
-              item: patched,
-            }),
-            step.kind,
-          );
+          await handlePatchBlockMedia(ctx, step);
           break;
         }
         case 'attach-storyline': {
-          // Mirror the editor's "add from Review 360": copy the uploaded review
-          // item's bundle into the course, then patch the (empty) block's
-          // media.storyline to point at the copied bundle. The copy preserves the
-          // review item's leaf, so contentPrefix = rise/courses/{courseId}/{leaf}.
-          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!entry || !meta) throw new WriteError('attach before block create', step.kind);
-          const newLessonId = ids.get(step.sourceLessonId)!;
-          const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
-
-          await send(
-            env.copyReviewItem({
-              courseId: ctx.newCourseId,
-              reviewPrefix: step.reviewPrefix,
-              blockId: meta.newId,
-            }),
-            step.kind,
-          );
-
-          const contentPrefix = `rise/courses/${ctx.newCourseId}/${leaf}`;
-          const item = remapIds(entry.block, ids) as Record<string, unknown>;
-          const items = Array.isArray(item.items) ? item.items : [];
-          const first = items[0];
-          if (first && typeof first === 'object') {
-            (first as Record<string, unknown>).media = env.buildStorylineMedia({
-              contentPrefix,
-              meta: step.meta,
-              title: step.title,
-            });
-          }
-          await send(
-            env.updateBlockDebounce({
-              id: meta.newId,
-              courseId: ctx.newCourseId,
-              lessonId: newLessonId,
-              item,
-            }),
-            step.kind,
-          );
-          result.storylineAttached = (result.storylineAttached ?? 0) + 1;
-          (result.storylinePrefixes ??= []).push(contentPrefix);
-          log(`${pfx()} ✓ attached storyline → ${contentPrefix}`);
+          await handleAttachStoryline(ctx, step);
           break;
         }
         case 'flag-storyline': {
-          const legacy = step.reason === 'legacy';
-          result.flags.push({
-            kind: 'storyline',
-            sourceBlockId: step.sourceBlockId,
-            sourceLessonId: step.sourceLessonId,
-            ...(legacy ? { expectedReplacement: 'legacy-storyline' as const } : {}),
-            detail: legacy
-              ? 'Legacy Storyline package is incompatible with Review 360 — a visible placeholder was imported; republish the original .story project in current Storyline, upload it to Review 360, and attach it manually'
-              : 'Storyline/Mighty block — attach manually via a reachable Review 360 item',
-          });
-          log(
-            legacy
-              ? `${pfx()} ⚠ FLAG legacy storyline — block ${step.sourceBlockId} replaced with a manual-review placeholder`
-              : `${pfx()} ⚠ FLAG storyline — block ${step.sourceBlockId} needs manual Review 360 attach`,
-          );
+          await handleFlagStoryline(ctx, step);
           break;
         }
         case 'flag-draw-from-bank': {
-          result.flags.push({
-            kind: 'draw-from-bank',
-            sourceBlockId: step.sourceBlockId,
-            sourceLessonId: step.sourceLessonId,
-            detail:
-              'Draw-from-bank block created as an unbound placeholder — attach a question bank manually (bank recreation is off)',
-          });
-          log(`${pfx()} ⚠ FLAG draw-from-bank — block ${step.sourceBlockId} (attach a bank manually)`);
+          await handleFlagDrawFromBank(ctx, step);
           break;
         }
         case 'flag-orphan-media': {
-          result.flags.push({
-            kind: 'orphan-media',
-            sourceBlockId: step.sourceBlockId,
-            sourceLessonId: step.sourceLessonId,
-            sourceKey: step.sourceKey,
-            detail: 'Media is 403/deleted at source — imported with the media slot blanked',
-          });
-          // Blank the key so every later payload built via remapMediaKeys (block
-          // patch / lesson update / course images / the final rebuild assertion)
-          // strips the dead source key instead of shipping it verbatim.
-          keyMap.set(step.sourceKey, '');
-          log(`${pfx()} ⚠ FLAG orphan-media — ${step.sourceKey} (deleted at source)`);
+          await handleFlagOrphanMedia(ctx, step);
           break;
         }
         case 'drop-optional-media': {
-          // Capture-confirmed non-rendering provenance (pre-transcode inputs,
-          // temp media, original crop sources, inactive image variants). It is
-          // safe to omit, but the source key must never leak into target JSON.
-          keyMap.set(step.sourceKey, '');
-          log(`${pfx()} Drop optional ${step.reason} — ${step.sourceKey}`);
+          await handleDropOptionalMedia(ctx, step);
           break;
         }
         case 'flag-unsupported-media': {
-          result.flags.push({
-            kind: 'unsupported-media',
-            sourceKey: step.sourceKey,
-            detail: `Media at ${step.location} has no captured write path — attach manually (not written as a source key)`,
-          });
-          // Blank the key so any later remap (block patch / lesson payload / final
-          // rebuild) writes empty media, never a dead source key.
-          keyMap.set(step.sourceKey, '');
-          log(`${pfx()} ⚠ FLAG unsupported-media — ${step.sourceKey} (${step.location})`);
+          await handleFlagUnsupportedMedia(ctx, step);
           break;
         }
 
         // ---- Multi-language stacks (docs/rise-multilang.md) ----
         case 'set-course-description': {
-          // Best-effort like set-title — a missing description ref surfaces in
-          // the read-back, not as a course failure.
-          try {
-            await send(
-              env.updateCourseFieldThrottle(ctx.newCourseId, 'description', step.value),
-              step.kind,
-            );
-          } catch (e) {
-            log(`WARN course description not set (continuing): ${(e as Error).message}`);
-          }
+          await handleSetCourseDescription(ctx, step);
           break;
         }
         case 'convert-stack': {
-          await send(
-            env.createTranslations(ctx.newCourseId, {
-              sourceLanguage: step.sourceLanguage,
-              targetLanguages: step.targetLanguages,
-              formality: step.formality,
-            }),
-            step.kind,
-          );
+          await handleConvertStack(ctx, step);
           break;
         }
         case 'await-stack': {
-          if (!dryRun) {
-            // Poll the stack state until every expected language is `complete`.
-            // Paced like every authoring read; one recorded envelope, per-poll
-            // progress in the log ([i/N] stays visibly alive during the wait).
-            // The default ceiling is sized for a FULL-COURSE conversion
-            // (idea 2) — minimal conversions ran 15-70 s/language, a real
-            // course's duration is unmeasured (R1), so allow ~30 min.
-            const spec = env.getTranslations(ctx.newCourseId);
-            result.envelopes.push({ step: step.kind, label: spec.label });
-            const tries = Math.max(1, deps.stackAwaitTries ?? 900);
-            const expected = new Set(step.expectedLocales);
-            let ready = false;
-            for (let attempt = 1; attempt <= tries && !ready; attempt++) {
-              await pace();
-              const r = await deps.relay(spec);
-              if (!r.ok) {
-                throw new WriteError(
-                  `GET translations failed while waiting for the stack (HTTP ${r.status})`,
-                  step.kind,
-                  r.text,
-                );
-              }
-              const body = parseJson(r.text);
-              const items = Array.isArray(body.stackItems)
-                ? (body.stackItems as Record<string, unknown>[])
-                : [];
-              const live = items.filter((it) => !it.deletedAt);
-              const completed = new Set(
-                live
-                  .filter((it) => it.status === 'complete')
-                  .map((it) => String(it.locale ?? '')),
-              );
-              ready = [...expected].every((code) => completed.has(code));
-              if (!ready && attempt % 5 === 0) {
-                const pending = [...expected].filter((c) => !completed.has(c));
-                log(
-                  `${pfx()} …    stack conversion in progress — waiting on ${pending.join(', ')} (poll ${attempt}/${tries})`,
-                );
-              }
-            }
-            if (!ready) {
-              throw new WriteError(
-                `Stack conversion did not complete within ${tries} polls (languages: ${step.expectedLocales.join(', ')})`,
-                step.kind,
-              );
-            }
-            log(`${pfx()} OK   stack shape ready (${step.expectedLocales.join(', ')})`);
-
-            // PAIR every source ref to the ref the target's own conversion
-            // minted (course fields by path, lessons via the id map, blocks
-            // via the minted client ids — core/l10n/pair.ts). This map is the
-            // ONLY way a cell write addresses the target; no source l10nId
-            // ever ships under idea 2.
-            const rb = await send(env.getCourse(ctx.newCourseId), step.kind);
-            const targetDoc = payloadOf(rb) as GetCourseDocument;
-            if (!isLocalizedStack(targetDoc)) {
-              throw new WriteError(
-                'Target course is not l10n-ified after the conversion completed',
-                step.kind,
-                JSON.stringify(targetDoc.course ?? {}).slice(0, 300),
-              );
-            }
-            ctx.targetStackDoc = targetDoc;
-            const pairing = pairL10nRefs(deps.input.course, targetDoc, {
-              lessonId: (l) => ids.get(l),
-              blockId: (l, b) => blockMeta.get(blockKey(l, b))?.newId,
-            });
-            for (const [s, t] of pairing.map) stackRefMap.set(s, t);
-            result.l10nRefMap = Object.fromEntries(stackRefMap);
-            // Target-only refs over DEEP-EMPTY source slots are conversion
-            // artifacts (the empty-logo class) — recorded so read-back parity
-            // treats their cells as EXPECTED, never as divergences.
-            result.l10nExpectedExtra = pairing.targetOnlyEmpty.map((r) => r.l10nId);
-            for (const u of pairing.unmatched) {
-              unmatchedCourseRefs.add(u.l10nId);
-              result.flags.push({
-                kind: 'l10n-ref',
-                detail: `Localized value at ${u.path} has no counterpart on the target (its Rise does not localize that field) — set it manually per language`,
-              });
-              log(`${pfx()} ⚠ FLAG l10n-ref — ${u.path} unmatched on target`);
-            }
-            for (const u of pairing.targetOnly) {
-              result.flags.push({
-                kind: 'l10n-ref',
-                detail: `Target localized ${u.path}, which the source held as plain text — the conversion's AI text shows in non-default languages there; review it`,
-              });
-              log(`${pfx()} ⚠ FLAG l10n-ref — ${u.path} localized only on the target (AI text)`);
-            }
-            log(
-              `${pfx()} OK   paired ${pairing.map.size} ref(s)` +
-                (pairing.unmatched.length ? `, ${pairing.unmatched.length} unmatched` : '') +
-                (pairing.targetOnlyEmpty.length
-                  ? `, ${pairing.targetOnlyEmpty.length} empty-slot target ref(s) (expected)`
-                  : ''),
-            );
-          } else {
-            result.envelopes.push({
-              step: step.kind,
-              label: `poll ${env.getTranslations('(new course)').label} until complete`,
-            });
-            log(`${pfx()} DRY  await stack conversion (${step.expectedLocales.join(', ')})`);
-          }
+          await handleAwaitStack(ctx, step);
           break;
         }
         case 'upload-l10n-asset': {
-          await uploadOne(step.sourceKey, step.filename, step.kind);
+          await handleUploadL10nAsset(ctx, step);
           break;
         }
         case 'write-l10n': {
-          const changes = step.l10nIds
-            .map((id) => buildCellChange(id, step.locale))
-            .filter((c): c is L10nChange => c !== null);
-          const skipped = step.l10nIds.length - changes.length;
-          if (changes.length === 0) {
-            log(
-              `${pfx()} skip write-l10n [${step.locale}] — no cells resolved` +
-                (skipped ? ` (${skipped} unpaired/flagged)` : ''),
-            );
-            break;
-          }
-          await send(env.updateL10nBatch(ctx.newCourseId, changes), step.kind);
-          log(
-            `${pfx()} [${step.batchIndex}/${step.batchTotal} l10n batches] OK ${changes.length} cell(s) [${step.locale}]` +
-              (skipped ? ` (${skipped} skipped — unpaired/flagged)` : ''),
-          );
+          await handleWriteL10n(ctx, step);
           break;
         }
         case 'set-locale-labelset': {
-          // Account-scoped: reuse a set another course of this run already
-          // recreated (deps.labelSetCache, keyed by SOURCE label-set id).
-          const cache = deps.labelSetCache;
-          let targetSetId = cache?.get(step.sourceLabelSetId);
-          if (!targetSetId) {
-            const created = payloadOf(
-              await send(
-                env.createLabelSet({ iso639Code: step.iso639Code, name: step.name }),
-                step.kind,
-              ),
-            );
-            targetSetId = dryRun ? mint() : String(created.id ?? '');
-            if (!targetSetId) {
-              throw new WriteError('CREATE_LABEL_SET returned no id', step.kind, JSON.stringify(created));
-            }
-            if (Object.keys(step.labels).length > 0) {
-              await send(
-                env.updateLabels({ id: targetSetId, labels: step.labels }),
-                step.kind,
-              );
-            }
-            cache?.set(step.sourceLabelSetId, targetSetId);
-          } else {
-            log(`${pfx()} reuse label set "${step.name}" (already recreated this run)`);
-          }
-          await send(
-            env.updateLocale({
-              courseId: ctx.newCourseId,
-              locale: step.locale,
-              labelSetId: targetSetId,
-            }),
-            step.kind,
-          );
+          await handleSetLocaleLabelset(ctx, step);
           break;
         }
         case 'set-stack-titles': {
-          // Title + description cells for every writable NON-DEFAULT locale,
-          // FALLBACK-RESOLVED (D2): a locale the source serves by
-          // default-language fallback gets the default value — the target then
-          // displays exactly what the source displays there. The default
-          // locale is NEVER written (its cells came from the conversion of the
-          // clean pre-conversion title/description; a default write would
-          // re-pend the cell in every locale).
-          const course = deps.input.course.course ?? {};
-          const refs = [course.title, course.description].filter(isL10nRef);
-          const writable = writableLocaleCodes(deps.input.course);
-          const locales = Object.keys(srcTables).filter(
-            (c) => c !== srcDefaultLocale && writable.has(c),
-          );
-          for (const locale of locales) {
-            const changes: L10nChange[] = [];
-            for (const ref of refs) {
-              const value =
-                srcTables[locale]?.[ref.l10nId] ?? srcTables[srcDefaultLocale]?.[ref.l10nId];
-              const target = stackRefMap.get(ref.l10nId);
-              if (value === undefined || (!dryRun && !target)) continue;
-              changes.push({
-                action: 'update',
-                l10nId: target ?? ref.l10nId,
-                locale,
-                value: remapMediaKeys(value as never, keyMap) as typeof value,
-              });
-            }
-            if (changes.length > 0) {
-              await send(env.updateL10nBatch(ctx.newCourseId, changes), step.kind);
-            }
-          }
+          await handleSetStackTitles(ctx, step);
           break;
         }
         case 'attach-storyline-l10n': {
-          // STACK per-language attach, idea-2 form (docs/rise-multilang.md
-          // §4.3b): the DEFAULT language's package was patched onto the block
-          // pre-conversion; each further language copies ITS uploaded package
-          // and writes the storyline CELL for that locale — addressed through
-          // the pairing map. If the conversion did NOT l10n-ify the block's
-          // storyline media (no paired ref), a per-language package is
-          // impossible on this course: flag it, write nothing (R3).
-          const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!meta) throw new WriteError('attach before block create', step.kind);
-          const cellId = dryRun
-            ? (stackRefMap.get(step.l10nId) ?? step.l10nId)
-            : stackRefMap.get(step.l10nId);
-          if (!cellId) {
-            result.flags.push({
-              kind: 'l10n-storyline',
-              detail:
-                `${step.title ? `"${step.title}" — ` : ''}the conversion did not localize this ` +
-                `block's Storyline slot, so a per-language package cannot be attached for ` +
-                `"${step.locale}" — every language shares the default package; attach manually if needed`,
-            });
-            log(
-              `${pfx()} ⚠ FLAG storyline [${step.locale}] — block's storyline slot not l10n-ified on target (no per-language attach possible)`,
-            );
-            break;
-          }
-          const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
-          await send(
-            env.copyReviewItem({
-              courseId: ctx.newCourseId,
-              reviewPrefix: step.reviewPrefix,
-              blockId: meta.newId,
-            }),
-            step.kind,
-          );
-          const contentPrefix = `rise/courses/${ctx.newCourseId}/${leaf}`;
-          const value = env.buildStorylineMedia({
-            contentPrefix,
-            meta: step.meta,
-            title: step.title,
-          });
-          // The cell EXISTS post-conversion (the default package was extracted
-          // into it), so a further language is a bare `update` — the
-          // capture-proven shape for the 2nd language on an existing cell
-          // (capture2aug §4.3b).
-          await send(
-            env.updateL10nBatch(ctx.newCourseId, [
-              { action: 'update', l10nId: cellId, locale: step.locale, value },
-            ]),
-            step.kind,
-          );
-          result.storylineAttached = (result.storylineAttached ?? 0) + 1;
-          (result.storylinePrefixes ??= []).push(contentPrefix);
-          log(`${pfx()} ✓ attached storyline [${step.locale}] → ${contentPrefix}`);
+          await handleAttachStorylineL10n(ctx, step);
           break;
         }
         case 'flag-l10n-storyline': {
-          // The source cell's storyline contentPrefix belongs to the SOURCE
-          // course and storyline keys bypass the foreign-key invariant, so the
-          // cell is deliberately NOT written (docs/rise-multilang.md §4.3b).
-          result.flags.push({
-            kind: 'l10n-storyline',
-            detail: `${step.title ? `"${step.title}" — ` : ''}attach the Storyline package manually for: ${step.locales.join(', ')}`,
-          });
-          log(
-            `${pfx()} ⚠ FLAG storyline in stack — cell ${step.l10nId} not copied; attach per language (${step.locales.join(', ')})`,
-          );
+          await handleFlagL10nStoryline(ctx, step);
           break;
         }
         case 'flag-l10n-locale': {
-          // Skipped table for an archived/row-less locale (see plan): the data
-          // stays in the archive; the operator restores the language at the
-          // source and re-exports if they want it migrated.
-          result.flags.push({
-            kind: 'l10n-locale',
-            detail: `${step.cells} cell(s) for locale "${step.locale}" not migrated (${step.reason})`,
-          });
-          log(
-            `${pfx()} ⚠ FLAG locale "${step.locale}" (${step.reason}) — ${step.cells} cell(s) stay in the archive`,
-          );
+          await handleFlagL10nLocale(ctx, step);
           break;
         }
         case 'flag-locale-selector': {
-          result.flags.push({
-            kind: 'locale-selector',
-            detail:
-              'The source stack shows the learner language selector — enable it manually on the target (the toggle envelope is not capture-proven yet)',
-          });
-          log(`${pfx()} ⚠ FLAG locale-selector — enable the language selector manually`);
+          await handleFlagLocaleSelector(ctx, step);
           break;
         }
       }
@@ -1092,107 +330,5 @@ export async function executePlan(
     return result;
   }
 
-  // Match the course's typefaces to the TARGET account by name (FETCH_TYPEFACES)
-  // and recreate any custom font it lacks (upload .woff files → CREATE_TYPEFACE).
-  // Returns source typeface id → target typeface id.
-  async function resolveAndRecreateTypefaces(
-    course: Record<string, unknown>,
-    source: Map<string, Typeface>,
-  ): Promise<Map<string, string>> {
-    // Target typefaces are pre-fetched by the orchestrator against a live
-    // existing course — FETCH_TYPEFACES 404s on a just-created course id.
-    const target = deps.targetTypefaces ?? new Map<string, Typeface>();
-    // Seed from the account-settings step (A): ids it already resolved/created
-    // are reused as-is; only ids it didn't cover go through resolve/recreate.
-    const seed = deps.typefaceIdMap ?? new Map<string, string>();
-    const used = usedTypefaceIds(course);
-    const unseeded = used.filter((id) => !seed.has(id));
-    const { idMap, toRecreate, unresolved } = resolveTypefaces(unseeded, source, targetByName(target));
-    for (const [k, v] of seed) idMap.set(k, v);
 
-    for (const tf of toRecreate) {
-      const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();
-      for (const f of tf.fonts) {
-        const filename = f.original ?? f.key.split('/').pop() ?? 'font.woff';
-        const yurl = payloadOf(
-          await send(env.getYurl({ courseId: ctx.newCourseId, filename, assetPath: 'fonts/' }), 'set-theme'),
-        );
-        const newKey = dryRun ? `rise/fonts/${mint()}.woff` : String(yurl.key ?? '');
-        const url = String(yurl.url ?? '');
-        const type = String(yurl.type ?? 'font/woff');
-        if (!dryRun) {
-          const bytes = await deps.readFontBytes?.(f.key);
-          if (!bytes) {
-            log(`WARN missing archived font bytes for ${f.key} (skipping)`);
-            continue;
-          }
-          const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: type }));
-          result.envelopes.push({ step: 'set-theme', label: 'S3 PUT (font)' });
-          if (!put.ok) throw new WriteError(`Font S3 PUT failed (HTTP ${put.status})`, 'set-theme', put.text);
-        } else {
-          result.envelopes.push({ step: 'set-theme', label: 'S3 PUT (font)' });
-        }
-        uploaded.set(f.key, { key: newKey, url, type, filename: String(yurl.filename ?? filename) });
-      }
-      if (uploaded.size === 0) {
-        result.flags.push({ kind: 'typeface', detail: `Custom font "${tf.name}" has no archived bytes — provision it manually on the target` });
-        continue;
-      }
-      const cresp = payloadOf(
-        await send(env.createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }), 'set-theme'),
-      );
-      const newId = dryRun ? mint() : String(cresp.id ?? '');
-      if (newId) idMap.set(tf.id, newId);
-      else result.flags.push({ kind: 'typeface', detail: `CREATE_TYPEFACE returned no id for "${tf.name}"` });
-    }
-    for (const u of unresolved) {
-      result.flags.push({ kind: 'typeface', detail: `Typeface ${u} not found on the target — set the font manually` });
-    }
-    return idMap;
-  }
-
-  // Faithful upload of a single course-image key — cover/card/logo/lesson-header
-  // (GET_YURL → S3 PUT of the exact exported bytes). No CRUSH — the source
-  // already carries both `key` and `crushedKey`, and each is uploaded + remapped
-  // on its own, verbatim. Dedups through the global keyMap (a key shared by
-  // coverImage and cardImage uploads once). Missing archived bytes are handled
-  // like block media: flag + blank (keyMap → ''), so UPDATE_COURSE ships without
-  // the image and the course succeeds with a flag instead of hard-failing the
-  // final assertion after all writes.
-  async function uploadImageAsset(sourceKey: string): Promise<string | null> {
-    const cached = keyMap.get(sourceKey);
-    if (cached !== undefined) {
-      log(`${pfx()} reuse ${sourceKey} (already ${cached ? 'uploaded' : 'blanked'})`);
-      return cached || null;
-    }
-    let bytes: AssetBytes | null = null;
-    if (!dryRun) {
-      bytes = await deps.readAsset(sourceKey);
-      if (!bytes) {
-        log(`${pfx()} WARN missing archived bytes for course image ${sourceKey} — flagged, image blanked`);
-        result.flags.push({
-          kind: 'orphan-media',
-          sourceKey,
-          detail: 'Course image has no archived bytes (deleted at source) — imported with the image blanked',
-        });
-        keyMap.set(sourceKey, '');
-        return null;
-      }
-    }
-    const filename = sourceKey.split('/').pop() ?? 'image.jpg';
-    const yurl = payloadOf(await send(env.getYurl({ courseId: ctx.newCourseId, filename }), 'set-course-images'));
-    const newKey = dryRun ? `rise/courses/${ctx.newCourseId}/${mint()}.jpg` : String(yurl.key ?? '');
-    const url = String(yurl.url ?? '');
-    const ctype = String(yurl.type ?? 'image/jpeg');
-    if (!dryRun && bytes) {
-      if (!newKey || !url) throw new WriteError('GET_YURL returned no key/url (cover)', 'set-course-images', JSON.stringify(yurl));
-      const put = await deps.relay(env.s3Put({ url, base64Body: bytes.base64, contentType: ctype }));
-      result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
-      if (!put.ok) throw new WriteError(`Cover S3 PUT failed (HTTP ${put.status})`, 'set-course-images', put.text);
-    } else {
-      result.envelopes.push({ step: 'set-course-images', label: 'S3 PUT (cover)' });
-    }
-    keyMap.set(sourceKey, newKey);
-    return newKey;
-  }
 }
