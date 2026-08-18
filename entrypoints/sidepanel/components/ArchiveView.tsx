@@ -35,6 +35,7 @@ export function ArchiveView({
     toggle,
     toggleAll,
     list,
+    saveInventory,
     runExport,
     runBanks,
     runAssets,
@@ -158,6 +159,17 @@ export function ArchiveView({
                 </li>
               ))}
             </ul>
+            <button onClick={saveInventory} disabled={busy || !hasStorage}>
+              {phase === 'exporting'
+                ? 'Working…'
+                : 'Save visible course list (inventory)'}
+            </button>
+            <p className="hint">
+              Writes _metadata/inventory.csv/json (fetches the folder tree for
+              the location column, one paced read). Merged with the inventory
+              already on disk. Import uses it for folder placement; the
+              Storyline stage (D) records legacy flags into it.
+            </p>
           </>
         )}
       </section>

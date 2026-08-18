@@ -132,6 +132,9 @@ export function useExportRuns({
     [addLog],
   );
 
+  // Listing is a PURE paced search + display (v0.9.0). The inventory used to be
+  // written here as a hidden side effect (plus a paced folder-tree refetch per
+  // listing) — it is now the operator's explicit `saveInventory` click below.
   const list = useCallback(
     () =>
       guarded('List courses', async () => {
@@ -149,59 +152,64 @@ export function useExportRuns({
         setSelected(new Set(result.map((c) => c.id)));
         setPhase('listed');
         addLog(`Found ${result.length} courses.`);
+      }),
+    [guarded, onEvent, addLog, logBreak, listLimit, searchTerm],
+  );
 
-        // List-level inventory: a customer-ready catalog, no GET_COURSE needed.
-        if (storage) {
-          // The `location` column: resolve each course's folderId to a name-path.
-          // The listing only carries the id, so we need the folder tree — and we
-          // REFETCH it every listing (one paced read). A saved folders.json goes
-          // stale the moment the operator adds a folder in Rise, and trusting it
-          // left every course in a new folder permanently location-less, with a
-          // re-list unable to fix it.
-          addLog('Fetching the folder tree (for the inventory location column)…');
-          await fetchFolders(storage, onEvent);
-          const pathByFolderId = new Map<string, string>();
-          for (const f of await buildFolders(storage)) {
-            if (f.source === 'course') pathByFolderId.set(f.id, f.path);
-          }
-          if (!pathByFolderId.size) {
-            addLog('No folder tree available — inventory location will be blank.');
-          }
-          const unresolved = new Set(
-            result
-              .map((c) => String(c.folderId ?? ''))
-              .filter((id) => id && !pathByFolderId.has(id)),
-          );
-          if (unresolved.size) {
-            addLog(
-              `⚠ ${unresolved.size} folder id(s) are absent from the folder tree — those courses get a blank location (ids: ${[...unresolved].join(', ')}).`,
-            );
-          }
-          const rows = buildInventory(result, pathByFolderId);
-          // MERGE with what's on disk: this listing may be a partial page range,
-          // and the import side reads inventory.json for folder placement of
-          // EVERY archived course — overwriting it hid earlier batches. Paths are
-          // backfilled across the whole merged set, so rows from an earlier
-          // listing (possibly written before any folder export) get a location too.
-          const merged = withFolderPaths(
-            mergeById(parseIdRows<InventoryRow>(await storage.readInventory()), rows),
-            pathByFolderId,
-          );
-          await storage.writeInventory(
-            inventoryToJson(merged),
-            inventoryToCsv(merged),
-          );
+  // "Save visible course list": the explicit inventory write. Import reads
+  // inventory.json for folder placement; the Storyline stage (D) records
+  // legacy flags into it.
+  const saveInventory = useCallback(
+    () =>
+      guarded('Save course list', async () => {
+        if (!storage || courses.length === 0) return;
+        logBreak('Save course list');
+        setPhase('exporting');
+        // The `location` column: resolve each course's folderId to a name-path.
+        // The listing only carries the id, so we need the folder tree — and we
+        // REFETCH it on every save (one paced read). A saved folders.json goes
+        // stale the moment the operator adds a folder in Rise, and trusting it
+        // left every course in a new folder permanently location-less, with a
+        // re-save unable to fix it.
+        addLog('Fetching the folder tree (for the inventory location column)…');
+        await fetchFolders(storage, onEvent);
+        const pathByFolderId = new Map<string, string>();
+        for (const f of await buildFolders(storage)) {
+          if (f.source === 'course') pathByFolderId.set(f.id, f.path);
+        }
+        if (!pathByFolderId.size) {
+          addLog('No folder tree available — inventory location will be blank.');
+        }
+        const unresolved = new Set(
+          courses
+            .map((c) => String(c.folderId ?? ''))
+            .filter((id) => id && !pathByFolderId.has(id)),
+        );
+        if (unresolved.size) {
           addLog(
-            `Inventory written (${merged.length} rows total, ${rows.length} from this listing) → inventory.csv/json.`,
-          );
-        } else {
-          const rows = buildInventory(result);
-          addLog(
-            `Inventory built (${rows.length} rows) — connect a folder to save it.`,
+            `⚠ ${unresolved.size} folder id(s) are absent from the folder tree — those courses get a blank location (ids: ${[...unresolved].join(', ')}).`,
           );
         }
+        const rows = buildInventory(courses, pathByFolderId);
+        // MERGE with what's on disk: this listing may be a partial page range,
+        // and the import side reads inventory.json for folder placement of
+        // EVERY archived course — overwriting it hid earlier batches. Paths are
+        // backfilled across the whole merged set, so rows from an earlier
+        // listing (possibly written before any folder export) get a location too.
+        const merged = withFolderPaths(
+          mergeById(parseIdRows<InventoryRow>(await storage.readInventory()), rows),
+          pathByFolderId,
+        );
+        await storage.writeInventory(
+          inventoryToJson(merged),
+          inventoryToCsv(merged),
+        );
+        setPhase('done');
+        addLog(
+          `Inventory written (${merged.length} rows total, ${rows.length} from this listing) → inventory.csv/json.`,
+        );
       }),
-    [guarded, onEvent, addLog, logBreak, listLimit, searchTerm, storage],
+    [guarded, onEvent, addLog, logBreak, courses, storage],
   );
 
   const toggle = useCallback((id: string) => {
@@ -532,6 +540,7 @@ export function useExportRuns({
     toggle,
     toggleAll,
     list,
+    saveInventory,
     runExport,
     runBanks,
     runAssets,

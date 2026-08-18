@@ -154,7 +154,17 @@ export async function updateStorylineImportability(
     typeof storage.writeInventory !== 'function'
   ) return;
   const raw = await storage.readInventory();
-  if (!raw) return;
+  // Inventory writes are operator-explicit since v0.9.0 — a missing inventory
+  // is a real possibility, and a silent no-op here would drop the legacy
+  // flags without a trace.
+  if (!raw) {
+    onEvent({
+      kind: 'log',
+      message:
+        'No saved inventory — legacy-Storyline flags not recorded. Save the course list (Export Data → C) and re-run D to record them.',
+    });
+    return;
+  }
   const rows = inventoryRows(raw);
   if (!rows.length) return;
   const existingById = new Map(rows.map((row) => [row.id, row.importability ?? '']));

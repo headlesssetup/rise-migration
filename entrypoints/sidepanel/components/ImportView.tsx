@@ -228,7 +228,9 @@ export function ImportView({
       >
         {source
           ? `Source: ${source.name ?? source.sub ?? 'unknown'}${source.plane ? ` (${source.plane.toUpperCase()})` : ''} — ${verdict.reason}`
-          : 'Source identity not recorded in this archive — verify the target manually.'}
+          : archiveInspection?.origin === 'creator'
+            ? 'Creator package — built locally, no source account. Confirm the target account below.'
+            : 'Source identity not recorded in this archive — verify the target manually.'}
       </p>
       {sameAccount && (
         <label style={{ color: '#b00' }}>
