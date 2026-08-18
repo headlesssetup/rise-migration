@@ -1,7 +1,7 @@
 import type { SessionState } from '@/shared/messaging';
 import type { Storage } from '@/core/storage/storage';
 
-export type View = 'home' | 'archive' | 'import' | 'export-docx';
+export type View = 'home' | 'docx' | 'export' | 'import';
 
 interface TaskCardProps {
   title: string;
@@ -40,6 +40,66 @@ function TaskCard({
   );
 }
 
+/** Gates a card can be disabled on. `busy` is any live paced run. */
+interface CardGateCtx {
+  busy: boolean;
+  storage: Storage | null;
+}
+
+/**
+ * The home screen is a data-driven card list: adding a fifth tool is one
+ * entry here. `kind: 'view'` navigates inside the panel; `kind: 'page'`
+ * opens a full extension page in a new tab (rendered with a trailing ↗).
+ */
+interface HomeCard {
+  id: string;
+  title: string;
+  subtitle: string;
+  kind: 'view' | 'page';
+  view?: Exclude<View, 'home'>;
+  url?: string;
+  disabledWhen?: (ctx: CardGateCtx) => boolean;
+}
+
+const HOME_CARDS: HomeCard[] = [
+  {
+    id: 'docx',
+    title: 'Rise to Docx',
+    subtitle:
+      'Save a course as .docx — from the archive, the account, or the open editor tab',
+    kind: 'view',
+    view: 'docx',
+    // Live sources need no folder; the view gates per-source instead.
+    disabledWhen: ({ busy }) => busy,
+  },
+  {
+    id: 'creator',
+    title: 'Rise AI Creator',
+    subtitle:
+      'Turn source material into a validated course blueprint via an AI chat, then review and save it',
+    kind: 'page',
+    url: '/creator.html',
+  },
+  {
+    id: 'export',
+    title: 'Export Data',
+    subtitle:
+      'Save courses, question banks, assets, and account data to the archive folder',
+    kind: 'view',
+    view: 'export',
+    disabledWhen: ({ busy }) => busy,
+  },
+  {
+    id: 'import',
+    title: 'Import Data',
+    subtitle:
+      'Create courses in a Rise account from an export archive or a Creator package',
+    kind: 'view',
+    view: 'import',
+    disabledWhen: ({ busy, storage }) => busy || !storage,
+  },
+];
+
 interface Props {
   session: SessionState | null;
   storage: Storage | null;
@@ -55,39 +115,28 @@ export function TaskHome({
   busy,
   onNavigate,
 }: Props) {
+  const gateCtx: CardGateCtx = { busy, storage };
   return (
     <>
-      <TaskCard
-        title="Export from Rise"
-        subtitle="Save courses, banks, assets, and account data to a folder"
-        onClick={() => onNavigate('archive')}
-        disabled={busy}
-      />
-
-      <TaskCard
-        title="Import into Rise"
-        subtitle="Create courses from a validated local package"
-        onClick={() => onNavigate('import')}
-        disabled={busy || !storage}
-      />
-
-      <TaskCard
-        title="Save course to document"
-        subtitle="Create either prose or storyboard .docx from an exported course"
-        onClick={() => onNavigate('export-docx')}
-        disabled={busy || !storage}
-      />
-
-      <TaskCard
-        title="Launch Rise Creator"
-        subtitle="Turn a source document into a course via an AI chat and a reviewed blueprint"
-        onClick={() =>
-          void browser.tabs.create({
-            url: browser.runtime.getURL('/creator.html'),
-          })
-        }
-        external
-      />
+      {HOME_CARDS.map((card) => (
+        <TaskCard
+          key={card.id}
+          title={card.title}
+          subtitle={card.subtitle}
+          disabled={card.disabledWhen?.(gateCtx) ?? false}
+          external={card.kind === 'page'}
+          onClick={
+            card.kind === 'view'
+              ? () => onNavigate(card.view!)
+              : () =>
+                  void browser.tabs.create({
+                    url: browser.runtime.getURL(
+                      card.url! as '/creator.html',
+                    ),
+                  })
+          }
+        />
+      ))}
 
       <div className="context-bar">
         <div className="context-row">
