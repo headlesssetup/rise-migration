@@ -1,6 +1,33 @@
 # Project Status
 
-_Last updated: 2026-08-18 (v0.9.0: structural release on top of the merged v0.8.1; live certification still in progress). Keep this current at each phase boundary._
+_Last updated: 2026-08-20 (v0.9.1: consolidation release — v0.9.0 structural line + block-update fixes + folder checkbox merged to main). Keep this current at each phase boundary._
+
+## v0.9.1 consolidation (2026-08-20) — MERGED TO MAIN
+
+Everything pending consolidated onto main as v0.9.1:
+
+- **v0.9.0 structural line merged** (see the v0.9.0 section below — it was
+  previously only on its feature branch).
+- **Update-404 fix** (two live courses went PARTIAL on 2026-08-20 with
+  `UPDATE_BLOCK_DEBOUNCE` 404 "Block not found in lesson"): follow-up block
+  updates (media patch, storyline attach) used to rebuild their payloads from
+  the RAW source block, re-minting different ids for any block whose source id
+  is not cuid-shaped (a UUID, a Rise-server-style id) — the server resolves the
+  update from the item payload's own id. The executor now caches each block as
+  shipped to CREATE_BLOCKS (`normBlocks` in `executor-run-state.ts`) and
+  rebuilds every follow-up update from that, asserting payload id == created id.
+- **Id-less block fix** ("[create-blocks] Source block  not found"): plan keyed
+  a block with a missing/non-string id by `''` while `indexSource` skipped it.
+  One shared derivation — `sourceBlockIdOf` (positional `noid:<n>` fallback) in
+  `executor-types.ts` — now feeds plan, index, l10n pairing and the manual-work
+  block index; the executor mints a real client id for the created block.
+- **"Re-create folders" checkbox** (rescued WIP, ported onto the v0.9.0
+  layout): import-time C-side checkbox replaces step A's persisted folder map.
+  ON → create/reuse just the selected courses' folder chains (deduped by
+  name+parent against a fresh target listing); OFF (default) → courses land in
+  the root. UNVERIFIED live — needs one operator smoke run.
+- Editing-protocol capture `docs/captures/2026-08-12-editing-envelopes.jsonl`
+  committed.
 
 ## v0.9.0 structural release (2026-08-18) — BUILT
 
