@@ -55,7 +55,7 @@ import {
 } from './executor-types';
 import { legacyStorylinePlaceholderBlock } from '@/core/storyline/compatibility';
 import type { ExecutorDeps, ExecResult, AssetBytes } from './executor-types';
-import type { GetCourseDocument } from '@/shared/types/rise';
+import type { Block, GetCourseDocument } from '@/shared/types/rise';
 
 // Re-export the executor contracts/types so `@/core/import` keeps the same
 // surface after they moved to ./executor-types (see that file's header).
@@ -107,6 +107,14 @@ export async function executePlan(
   const shellLessons: { id: string }[] = [];
   // sourceBlockId → {newId, globalBlockId} (from CREATE_BLOCKS metadata).
   const blockMeta = new Map<string, { newId: string; globalBlockId?: string }>();
+  // blockKey → the normalized block CREATE_BLOCKS shipped (post-freshClientIds,
+  // pre-media-blanking). Follow-up UPDATE payloads (media patch, storyline
+  // attach) MUST rebuild from this, never from the raw source block: the
+  // freshClientIds mint map is local to its call, so a block whose source id is
+  // not cuid-shaped gets a DIFFERENT id on re-normalization — and the server
+  // resolves UPDATE_BLOCK_DEBOUNCE from the item payload's own id, so the
+  // mismatch 404s ("Block <sourceId> not found in lesson", observed 2026-08-20).
+  const normBlocks = new Map<string, Block>();
   // sourceKey → new target key (after upload) for media patches.
   const keyMap = new Map<string, string>();
   // sourceBankId → ordered new question ids (for INSERT_QUESTION_BANK_QUESTIONS).
@@ -661,12 +669,26 @@ export async function executePlan(
           const built: Record<string, unknown>[] = [];
           for (const ref of step.blocks) {
             const entry = srcBlocks.get(blockKey(step.sourceLessonId, ref.sourceBlockId));
-            if (!entry) throw new WriteError(`Source block ${ref.sourceBlockId} not found`, step.kind);
+            if (!entry) {
+              throw new WriteError(
+                `Source block ${ref.sourceBlockId} not found in lesson ${step.sourceLessonId}`,
+                step.kind,
+              );
+            }
+            // A block id is client-generated and ours to choose; a source block
+            // with a missing/non-string id ships under its positional `noid:<n>`
+            // key (sourceBlockIdOf) so freshClientIds mints it a real one below.
+            const src = entry.block as Record<string, unknown>;
+            const withId =
+              typeof src.id === 'string' && src.id !== ''
+                ? entry.block
+                : ({ ...src, id: ref.sourceBlockId } as Block);
             // freshClientIds FIRST: block/item ids that are not cuid-shaped (Rise's
             // sample courses number them "1","2","3"… in EVERY lesson) get a fresh
             // per-block id, so two lessons never claim the same block id. Then the
             // usual IdMap pass handles cuid-shaped ids + refs globally.
-            const normalized = freshClientIds(entry.block, mint);
+            const normalized = freshClientIds(withId, mint);
+            normBlocks.set(blockKey(step.sourceLessonId, ref.sourceBlockId), normalized);
             const remappedSource = blankUploadedMediaKeys(
               remapIds(normalized, ids),
             ) as Record<string, unknown>;
@@ -775,12 +797,21 @@ export async function executePlan(
           break;
         }
         case 'patch-block-media': {
-          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          const norm = normBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!entry || !meta) throw new WriteError('patch before block create', step.kind);
+          if (!norm || !meta) throw new WriteError('patch before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
-          // Build the patched block: remap ids, then swap source keys → new keys.
-          const patched = remapMediaKeys(remapIds(entry.block, ids), keyMap);
+          // Build the patched block FROM THE NORMALIZED (as-created) block:
+          // remap ids, then swap source keys → new keys. remapIds over the same
+          // normalized doc reproduces the created ids exactly (the shared IdMap
+          // answers the same for every id it minted at create time).
+          const patched = remapMediaKeys(remapIds(norm, ids), keyMap) as Record<string, unknown>;
+          if (String(patched.id ?? '') !== meta.newId) {
+            throw new WriteError(
+              `patch payload id ${String(patched.id ?? '(none)')} != created block id ${meta.newId} — id-mint drift (code fault)`,
+              step.kind,
+            );
+          }
           await send(
             env.updateBlockDebounce({
               id: meta.newId,
@@ -797,9 +828,9 @@ export async function executePlan(
           // item's bundle into the course, then patch the (empty) block's
           // media.storyline to point at the copied bundle. The copy preserves the
           // review item's leaf, so contentPrefix = rise/courses/{courseId}/{leaf}.
-          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          const norm = normBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!entry || !meta) throw new WriteError('attach before block create', step.kind);
+          if (!norm || !meta) throw new WriteError('attach before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
           const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
 
@@ -813,7 +844,16 @@ export async function executePlan(
           );
 
           const contentPrefix = `rise/courses/${newCourseId}/${leaf}`;
-          const item = remapIds(entry.block, ids) as Record<string, unknown>;
+          // Rebuild FROM THE NORMALIZED (as-created) block — see normBlocks:
+          // re-normalizing the raw source block would mint different ids and
+          // the server 404s the update ("Block not found in lesson").
+          const item = remapIds(norm, ids) as Record<string, unknown>;
+          if (String(item.id ?? '') !== meta.newId) {
+            throw new WriteError(
+              `attach payload id ${String(item.id ?? '(none)')} != created block id ${meta.newId} — id-mint drift (code fault)`,
+              step.kind,
+            );
+          }
           const items = Array.isArray(item.items) ? item.items : [];
           const first = items[0];
           if (first && typeof first === 'object') {

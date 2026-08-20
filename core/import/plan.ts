@@ -11,7 +11,7 @@ import {
 } from '@/core/assets/keys';
 import { courseImageKind } from './builtin-assets';
 // Type-only imports back from executor-types keep this cycle-free at runtime.
-import { blockKey } from './executor-types';
+import { blockKey, sourceBlockIdOf } from './executor-types';
 import {
   cellKey,
   collectCells,
@@ -575,11 +575,10 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   if (stack) {
     for (const lesson of input.course.lessons ?? []) {
       const lid = typeof lesson.id === 'string' ? lesson.id : '';
-      for (const b of (lesson.items ?? []) as Block[]) {
-        const bid = typeof b.id === 'string' ? b.id : '';
+      ((lesson.items ?? []) as Block[]).forEach((b, i) => {
         const cell = storylineCellId(b);
-        if (lid && bid && cell) rawStorylineCellByBlock.set(blockKey(lid, bid), cell);
-      }
+        if (lid && cell) rawStorylineCellByBlock.set(blockKey(lid, sourceBlockIdOf(b, i)), cell);
+      });
     }
   }
   if (stack) {
@@ -817,8 +816,8 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     steps.push({
       kind: 'create-blocks',
       sourceLessonId,
-      blocks: blocks.map((b) => ({
-        sourceBlockId: typeof b.id === 'string' ? b.id : '',
+      blocks: blocks.map((b, i) => ({
+        sourceBlockId: sourceBlockIdOf(b, i),
         family: String(b.family ?? ''),
         variant: String(b.variant ?? ''),
         ...(!stack && isStoryline(b) && isKnownLegacyStorylineBlock(b)
@@ -831,8 +830,8 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     // 2. Per-block follow-ups — run AFTER every block exists, addressed by id,
     //    so they never affect ordering: storyline/draw-from-bank flags + binds,
     //    media upload + patch, orphan flags.
-    for (const block of blocks) {
-      const sourceBlockId = typeof block.id === 'string' ? block.id : '';
+    for (const [blockIdx, block] of blocks.entries()) {
+      const sourceBlockId = sourceBlockIdOf(block, blockIdx);
       const family = String(block.family ?? '');
       const variant = String(block.variant ?? '');
 

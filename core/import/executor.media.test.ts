@@ -1110,3 +1110,79 @@ describe('duplicate block ids across lessons (Rise sample courses)', () => {
     expect(patches[0]!.lessonId).toBe('TL2');
   });
 });
+
+// Regression (observed 2026-08-20, two live courses went PARTIAL): a block whose
+// SOURCE id is not cuid-shaped (a UUID, a Rise-server-style id, "1"…) is
+// re-minted by freshClientIds at create time, but that mint map is local to the
+// call — the media patch used to re-derive the payload from the RAW source
+// block, shipping the source id inside `item`, and the server resolves
+// UPDATE_BLOCK_DEBOUNCE from the item payload's id → 404 "Block not found in
+// lesson". The patch must rebuild from the block AS CREATED.
+describe('executePlan — non-cuid source block id (update-404 class)', () => {
+  function capture() {
+    let createdId: string | undefined;
+    let update: { id?: string; item?: { id?: string } } | undefined;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      CREATE_BLOCKS: (body: unknown) => {
+        const blocks = (body as { payload: { blocks: { id: string }[] } }).payload.blocks;
+        createdId = blocks[0]!.id;
+        return { payload: { success: true, blockMetadata: [{ id: createdId, globalBlockId: 'g1' }] } };
+      },
+      UPDATE_BLOCK_DEBOUNCE: (body: unknown) => {
+        update = (body as { payload: typeof update }).payload;
+        return { payload: { success: true } };
+      },
+    });
+    return { relay, createdId: () => createdId, update: () => update };
+  }
+
+  it('media patch targets the CREATED id, not a re-mint of the source id (UUID)', async () => {
+    const input = imageCourse();
+    const sourceId = 'a7aee4ad-095d-443a-8cde-aedd7fb35e0f';
+    (input.course.lessons![0]!.items![0] as { id: string }).id = sourceId;
+    const cap = capture();
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: cap.relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+
+    expect(res.ok).toBe(true);
+    const createdId = cap.createdId();
+    const update = cap.update();
+    expect(createdId).toBeTruthy();
+    expect(update).toBeTruthy();
+    // Envelope id AND the item payload's own id both address the created block.
+    expect(update!.id).toBe(createdId);
+    expect(update!.item!.id).toBe(createdId);
+    // The source id never ships in any update payload.
+    expect(JSON.stringify(update)).not.toContain(sourceId);
+  });
+
+  it('imports a block with a MISSING id (plan and index agree on the positional key)', async () => {
+    const input = imageCourse();
+    delete (input.course.lessons![0]!.items![0] as { id?: string }).id;
+    const cap = capture();
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: cap.relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+
+    // Used to abort with "[create-blocks] Source block  not found" — the plan
+    // keyed the block by '' while indexSource skipped it.
+    expect(res.ok).toBe(true);
+    expect(res.error).toBeUndefined();
+    const createdId = cap.createdId();
+    const update = cap.update();
+    expect(createdId).toBeTruthy();
+    // The created block carries a real minted id, and the patch addresses it.
+    expect(createdId).toMatch(/^c/);
+    expect(update!.item!.id).toBe(createdId);
+  });
+});

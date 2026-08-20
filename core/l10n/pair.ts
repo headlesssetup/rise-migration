@@ -23,6 +23,9 @@
 
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
 import { isL10nRef } from './materialize';
+// Shared source-block addressing (positional fallback for missing ids) — must
+// match the executor's blockMeta keys or id-less blocks never pair.
+import { sourceBlockIdOf } from '@/core/import/executor-types';
 
 export interface PairRef {
   path: string;
@@ -141,17 +144,17 @@ export function pairL10nRefs(
     for (const b of (tl.items ?? []) as Block[]) {
       if (typeof b.id === 'string') tgtBlocks.set(b.id, b);
     }
-    for (const sb of (sItems ?? []) as Block[]) {
-      const srcBlockId = typeof sb.id === 'string' ? sb.id : '';
-      const newId = srcBlockId ? opts.blockId(srcLessonId, srcBlockId) : undefined;
+    ((sItems ?? []) as Block[]).forEach((sb, sbIdx) => {
+      const srcBlockId = sourceBlockIdOf(sb, sbIdx);
+      const newId = opts.blockId(srcLessonId, srcBlockId);
       const tb = newId ? tgtBlocks.get(newId) : undefined;
       const bPath = `${lPath}.block[${srcBlockId}]`;
       if (!tb) {
         collectSource(sb, bPath);
-        continue;
+        return;
       }
       walk(sb, tb, bPath);
-    }
+    });
   });
 
   return { map, unmatched, targetOnlyEmpty, targetOnly };
