@@ -100,6 +100,11 @@ function paraXml(
   if (opts.numId !== undefined) {
     pPr.push(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${opts.numId}"/></w:numPr>`);
   }
+  if (p.indent) {
+    // 720 twips (0.5") per level; list paras keep their hanging marker.
+    const left = p.indent * 720 + (opts.numId !== undefined ? 360 : 0);
+    pPr.push(`<w:ind w:left="${left}"${opts.numId !== undefined ? ' w:hanging="180"' : ''}/>`);
+  }
   if (opts.jc) pPr.push(`<w:jc w:val="${opts.jc}"/>`);
   const pre = pPr.length > 0 ? `<w:pPr>${pPr.join('')}</w:pPr>` : '';
 
@@ -134,17 +139,41 @@ function textPara(
   );
 }
 
-function tokenPara(text: string, state: DocState, spaceBefore = 240): string {
-  const run =
+function tokenRun(text: string, highlighted = false): string {
+  const style = highlighted
+    ? `<w:b/><w:color w:val="000000"/><w:highlight w:val="yellow"/>`
+    : `<w:color w:val="${GRAY}"/>`;
+  return (
     `<w:r><w:rPr>` +
     `<w:rFonts w:ascii="${TOKEN_FONT}" w:hAnsi="${TOKEN_FONT}" w:cs="${TOKEN_FONT}"/>` +
     `<w:sz w:val="${TOKEN_SZ}"/><w:szCs w:val="${TOKEN_SZ}"/>` +
-    `<w:color w:val="${GRAY}"/>` +
-    `</w:rPr><w:t xml:space="preserve">${esc(text)}</w:t></w:r>`;
+    style +
+    `</w:rPr><w:t xml:space="preserve">${esc(text)}</w:t></w:r>`
+  );
+}
+
+function tokenPara(text: string, state: DocState, spaceBefore = 240): string {
   const pPr = spaceBefore > 0
     ? `<w:pPr><w:spacing w:before="${spaceBefore}" w:after="40"/></w:pPr>`
     : '';
-  return `<w:p>${pPr}${run}</w:p>`;
+  return `<w:p>${pPr}${tokenRun(text)}</w:p>`;
+}
+
+/** Block identity token with the block-TYPE designator highlighted (yellow +
+ *  black + bold) so an SME can spot interactivity types while scanning. Text
+ *  blocks highlight only the word `text` — their variant is layout detail. */
+function blockTokenPara(row: SbRow, lessonNo: number): string {
+  const label = blockTypeLabel(row.family, row.variant);
+  const hl = row.family === 'text' ? 'text' : label;
+  const rest = label.slice(hl.length);
+  const pPr = `<w:pPr><w:spacing w:before="240" w:after="40"/></w:pPr>`;
+  return (
+    `<w:p>${pPr}` +
+    tokenRun(`⟦${lessonNo}.${row.no} `) +
+    tokenRun(hl, true) +
+    tokenRun(`${rest} B:${row.blockId} R:${row.rev}⟧`) +
+    `</w:p>`
+  );
 }
 
 // ------------------------------------------------------------------- images
@@ -226,11 +255,8 @@ function renderBlockProse(
 ): string {
   const parts: string[] = [];
 
-  // Identity token FIRST — number + block type + id + rev
-  parts.push(tokenPara(
-    `⟦${lessonNo}.${row.no} ${blockTypeLabel(row.family, row.variant)} B:${row.blockId} R:${row.rev}⟧`,
-    state,
-  ));
+  // Identity token FIRST — number + block type (highlighted) + id + rev
+  parts.push(blockTokenPara(row, lessonNo));
 
   // Image thumbnail (if resolved)
   if (row.image) {
@@ -316,6 +342,11 @@ function lessonXml(lesson: SbLesson, isFirst: boolean, state: DocState, images: 
 
   parts.push(tokenPara(`⟦L:${lesson.id} type:${lesson.type}⟧`, state, 0));
 
+  // Author-entered lesson description, straight under the heading.
+  if (lesson.description && lesson.description.length > 0) {
+    parts.push(contentParas(lesson.description, state));
+  }
+
   if (lesson.note) {
     parts.push(textPara(lesson.note, state, { italic: true, color: GRAY }));
   }
@@ -394,6 +425,10 @@ function documentXml(course: SbCourse, state: DocState, images: Map<string, Reso
   const body: string[] = [];
 
   body.push(textPara(course.title, state, { style: 'Heading1' }));
+  // The course cover "intro" text, straight under the title (as on the cover).
+  if (course.description && course.description.length > 0) {
+    body.push(contentParas(course.description, state));
+  }
   body.push(textPara(GUARD_TEXT, state, { italic: true, color: GRAY, sz: 18 }));
   body.push(metaTable(course, state));
   body.push('<w:p/>');

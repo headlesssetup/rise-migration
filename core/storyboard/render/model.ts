@@ -17,6 +17,9 @@ export interface SbPara {
   runs: SbRun[];
   /** Real Word list membership (bullet / decimal numbering). */
   list?: 'bullet' | 'number';
+  /** Indent level (720 twips per level) — item CONTENT under an item title in
+   *  accordion-style blocks, so title vs content reads at a glance. */
+  indent?: number;
 }
 
 /** `edit` = the storyboard pipeline can rebuild this family; `ro` = rendered
@@ -61,11 +64,15 @@ export interface SbLesson {
   rows: SbRow[];
   /** Lesson-level note (section marker, read-only lesson reason). */
   note?: string;
+  /** Author-entered lesson description (rich HTML in the source), if any. */
+  description?: SbPara[];
 }
 
 export interface SbCourse {
   courseId: string;
   title: string;
+  /** The course cover "intro" text (`course.description`, rich HTML), if any. */
+  description?: SbPara[];
   generatedAt: string;
   toolVersion: string;
   /** Materialized locale on a stack; null on a monolingual course. */

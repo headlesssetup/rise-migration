@@ -457,3 +457,31 @@ describe('renderCourseModel — lesson display order', () => {
     expect(m.lessons.map((l) => l.id)).toEqual(rawIds);
   });
 });
+
+describe('renderCourseModel — course/lesson descriptions', () => {
+  it('carries course.description and lesson.description into the model', () => {
+    const doc = fixtureDoc();
+    (doc.course as Record<string, unknown>).description =
+      '<p>Course intro with <strong>substance</strong>.</p>';
+    (doc.lessons![1] as Record<string, unknown>).description = '<p>Lesson intro.</p>';
+    const m = renderCourseModel(doc, OPTS);
+    expect(m.description).toBeDefined();
+    expect(m.description![0]!.runs.map((r) => r.text).join('')).toBe('Course intro with substance.');
+    const lesson = m.lessons.find((l) => l.id === 'les-1')!;
+    expect(lesson.description![0]!.runs[0]!.text).toBe('Lesson intro.');
+    // absent → omitted, not empty
+    const bare = renderCourseModel(fixtureDoc(), OPTS);
+    expect(bare.description).toBeUndefined();
+  });
+
+  it('indents accordion item content one level under the item title', () => {
+    const m = renderCourseModel(fixtureDoc(), OPTS);
+    const row = m.lessons
+      .flatMap((l) => l.rows)
+      .find((r) => r.blockId === 'blk-acc')!;
+    const title = row.content.find((p) => p.runs[0]?.text === 'Panelis A')!;
+    const body = row.content.find((p) => p.runs[0]?.text === 'A saturs')!;
+    expect(title.indent).toBeUndefined();
+    expect(body.indent).toBe(1);
+  });
+});

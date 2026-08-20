@@ -78,12 +78,18 @@ function renderList(b: Block): SbPara[] | null {
   return out.length > 0 ? out : null;
 }
 
+/** Item CONTENT is indented one level under its (bold, flush-left) item title
+ *  so accordion-style blocks read title-vs-content at a glance. */
+function indented(paras: SbPara[]): SbPara[] {
+  return paras.map((p) => ({ ...p, indent: (p.indent ?? 0) + 1 }));
+}
+
 function renderItemsTitled(b: Block): SbPara[] | null {
   const out: SbPara[] = [];
   for (const it of arr(b.items)) {
     const title = htmlToText(str(it.title));
     if (title) out.push(boldPara(title));
-    out.push(...htmlToParas(str(it.description)));
+    out.push(...indented(htmlToParas(str(it.description))));
   }
   return out.length > 0 ? out : null;
 }
@@ -99,9 +105,9 @@ function renderFlashcards(b: Block): SbPara[] | null {
     const back = side(it.back);
     const frontText = htmlToText(front.html);
     out.push(boldPara(frontText || (front.media ? '(media)' : '')));
-    const backParas = htmlToParas(back.html);
+    const backParas = indented(htmlToParas(back.html));
     if (backParas.length > 0) out.push(...backParas);
-    else if (back.media) out.push({ runs: [{ text: '(media)' }] });
+    else if (back.media) out.push({ runs: [{ text: '(media)' }], indent: 1 });
   }
   return out.some((p) => p.runs.some((r) => r.text.trim() !== '')) ? out : null;
 }
@@ -115,7 +121,7 @@ function renderProcess(b: Block): SbPara[] | null {
       out.push(...htmlToParas(str(it.description)));
     } else {
       out.push(boldPara(title || '(no title)'));
-      out.push(...htmlToParas(str(it.description)));
+      out.push(...indented(htmlToParas(str(it.description))));
     }
   }
   return out.length > 0 ? out : null;
@@ -127,7 +133,7 @@ function renderTimeline(b: Block): SbPara[] | null {
     const date = htmlToText(str(it.date));
     const title = htmlToText(str(it.title));
     out.push(boldPara(`${date}: ${title}`));
-    out.push(...htmlToParas(str(it.description)));
+    out.push(...indented(htmlToParas(str(it.description))));
   }
   return out.length > 0 ? out : null;
 }
@@ -464,6 +470,10 @@ export function renderCourseModel(
       ? doc.course.title
       : resolveStackTitle(raw) || '(untitled)';
   const courseId = str(doc.course?.id) || '(no id)';
+  // The cover "intro" text — author-entered rich HTML on the course object
+  // (a stack's ref is already materialized into `doc`).
+  const description = htmlToParas(str(doc.course?.description));
+  escapeTokens(description, flags, 'course description');
 
   const lessons: SbLesson[] = [];
   let blockCount = 0;
@@ -484,6 +494,13 @@ export function renderCourseModel(
       type,
       rows: [],
     };
+    // Author-entered lesson description (rich HTML; captured on quiz lessons
+    // too) — rendered under the lesson heading.
+    const lessonDesc = htmlToParas(str(l.description));
+    if (lessonDesc.length > 0) {
+      escapeTokens(lessonDesc, flags, `lesson ${base.id} description`);
+      base.description = lessonDesc;
+    }
     if (type === 'section') {
       lessons.push({ ...base, note: 'Section header — no content.' });
       continue;
@@ -501,6 +518,7 @@ export function renderCourseModel(
   return {
     courseId,
     title,
+    ...(description.length > 0 ? { description } : {}),
     generatedAt: opts.generatedAt,
     toolVersion: opts.toolVersion,
     locale,

@@ -1,6 +1,25 @@
 # Project Status
 
-_Last updated: 2026-08-20 (v0.9.2: docx lesson-order fix). Keep this current at each phase boundary._
+_Last updated: 2026-08-20 (v0.9.3: docx SME-review content + formatting). Keep this current at each phase boundary._
+
+## v0.9.3 patch (2026-08-20)
+
+Prose docx improvements for SME content review (driven by the Marlink GDPR
+audit; deferred items in `docs/rise-docx-todo.md`):
+
+- **Course description** (the cover intro text) renders under the course
+  title; **lesson descriptions** render under their lesson headings. New
+  optional `description` fields on `SbCourse`/`SbLesson` — prose writer only
+  (SBDOC table format unchanged, see the TODO).
+- **Block-type highlighting**: the `family/variant` designator in each block's
+  identity token is yellow-highlighted black bold, so interactivity types jump
+  out while scanning; `text` blocks highlight only the word `text` (the
+  variant is layout detail).
+- **Accordion-style indentation**: item CONTENT is indented one level under
+  its bold item title (accordion, tabs, process steps, timeline entries,
+  flashcard backs) — title vs content reads at a glance.
+- Operator-decided out of scope: `completeHint` (label territory), custom
+  label sets.
 
 ## v0.9.2 patch (2026-08-20)
 

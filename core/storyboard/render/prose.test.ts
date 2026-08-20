@@ -105,3 +105,68 @@ describe('prose docx writer', () => {
     },
   );
 });
+
+describe('prose docx — descriptions, highlighted type tokens, indentation', () => {
+  const { unzipSync } = require('fflate') as typeof import('fflate');
+  const docXml = (bytes: Uint8Array): string =>
+    new TextDecoder().decode(unzipSync(bytes)['word/document.xml']!);
+
+  it('emits course description under the title and highlights the block type', () => {
+    const model = renderCourseModel(
+      {
+        course: {
+          id: 'c1',
+          title: 'T',
+          description: '<p>The course intro paragraph.</p>',
+          lessons: ['l1'],
+        },
+        lessons: [
+          {
+            id: 'l1',
+            title: 'L1',
+            type: 'blocks',
+            items: [
+              {
+                id: 'b1',
+                family: 'text',
+                variant: 'heading paragraph',
+                items: [{ id: 'i1', heading: '<p>H</p>', paragraph: '<p>P</p>' }],
+              },
+              {
+                id: 'b2',
+                family: 'interactive',
+                variant: 'accordion',
+                items: [{ id: 'a1', title: 'Acc title', description: '<p>Acc body.</p>' }],
+              },
+            ],
+          },
+        ],
+      } as any,
+      { generatedAt: '2026-01-01T00:00:00Z', toolVersion: '0.0.test' },
+    );
+    const xml = docXml(writeStoryboardDocxProse(model));
+    expect(xml).toContain('The course intro paragraph.');
+    // block-type designator: yellow highlight + black + bold, inside the token line
+    expect(xml).toContain('<w:highlight w:val="yellow"/>');
+    expect(xml).toMatch(/<w:highlight w:val="yellow"\/>[^<]*<\/w:rPr><w:t xml:space="preserve">interactive\/accordion<\/w:t>/);
+    // text block: ONLY the word `text` highlighted; the variant stays plain
+    expect(xml).toMatch(/<w:highlight w:val="yellow"\/>[^<]*<\/w:rPr><w:t xml:space="preserve">text<\/w:t>/);
+    expect(xml).not.toMatch(/<w:highlight w:val="yellow"\/>[^<]*<\/w:rPr><w:t xml:space="preserve">text\/heading paragraph<\/w:t>/);
+    // accordion content is indented (720 twips), its title is not
+    expect(xml).toContain('<w:ind w:left="720"/>');
+  });
+
+  it('emits lesson description under the lesson heading', () => {
+    const model = renderCourseModel(
+      {
+        course: { id: 'c1', title: 'T', lessons: ['l1'] },
+        lessons: [
+          { id: 'l1', title: 'L1', type: 'blocks', description: '<p>Why this lesson matters.</p>', items: [] },
+        ],
+      } as any,
+      { generatedAt: '2026-01-01T00:00:00Z', toolVersion: '0.0.test' },
+    );
+    const xml = docXml(writeStoryboardDocxProse(model));
+    expect(xml).toContain('Why this lesson matters.');
+  });
+});
