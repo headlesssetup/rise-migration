@@ -1,6 +1,15 @@
 # Project Status
 
-_Last updated: 2026-08-20 (v0.9.3: docx SME-review content + formatting). Keep this current at each phase boundary._
+_Last updated: 2026-08-20 (v0.9.4: prose docx export cover page). Keep this current at each phase boundary._
+
+## v0.9.4 patch (2026-08-20)
+
+- **Prose docx cover page**: page 1 is now an "export cover" — course title,
+  guard note, metadata table, flags, and a table of contents (emitted for
+  single-lesson courses too), followed by a page break. Content starts on
+  page 2: course title again, course description, then all lessons/blocks
+  as before (first lesson flows under the description; later lessons keep
+  their page-per-lesson breaks).
 
 ## v0.9.3 patch (2026-08-20)
 

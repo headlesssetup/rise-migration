@@ -2,7 +2,7 @@
   "name": "rise-migration",
   "description": "Internal Articulate Rise export, import, document, and local course creation tool",
   "private": true,
-  "version": "0.9.3",
+  "version": "0.9.4",
   "type": "module",
   "scripts": {
     "dev": "wxt",

@@ -424,11 +424,8 @@ function tocXml(course: SbCourse, state: DocState): string {
 function documentXml(course: SbCourse, state: DocState, images: Map<string, ResolvedImage>): string {
   const body: string[] = [];
 
+  // --- Page 1: the export COVER — title, metadata, contents. No content. ---
   body.push(textPara(course.title, state, { style: 'Heading1' }));
-  // The course cover "intro" text, straight under the title (as on the cover).
-  if (course.description && course.description.length > 0) {
-    body.push(contentParas(course.description, state));
-  }
   body.push(textPara(GUARD_TEXT, state, { italic: true, color: GRAY, sz: 18 }));
   body.push(metaTable(course, state));
   body.push('<w:p/>');
@@ -437,12 +434,17 @@ function documentXml(course: SbCourse, state: DocState, images: Map<string, Reso
     body.push(textPara(`⚠ ${flag}`, state, { bold: true, color: WARN }));
   }
 
-  // TOC
-  if (course.lessons.length > 1) {
-    body.push(tocXml(course, state));
+  body.push(tocXml(course, state));
+  body.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+
+  // --- Page 2 onwards: the actual content — title again, the course
+  // description (cover intro), then every lesson exactly as before. ---
+  body.push(textPara(course.title, state, { style: 'Heading1' }));
+  if (course.description && course.description.length > 0) {
+    body.push(contentParas(course.description, state));
   }
 
-  // Lessons — each on its own page (first lesson stays on the TOC page)
+  // Lessons — each on its own page (the first stays under the description)
   for (let i = 0; i < course.lessons.length; i++) {
     body.push(lessonXml(course.lessons[i]!, i === 0, state, images));
   }

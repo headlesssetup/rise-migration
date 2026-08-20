@@ -170,3 +170,50 @@ describe('prose docx — descriptions, highlighted type tokens, indentation', ()
     expect(xml).toContain('Why this lesson matters.');
   });
 });
+
+describe('prose docx — export cover page', () => {
+  const { unzipSync } = require('fflate') as typeof import('fflate');
+  const docXml = (bytes: Uint8Array): string =>
+    new TextDecoder().decode(unzipSync(bytes)['word/document.xml']!);
+
+  it('page 1 = title + meta + TOC, page break, then title + description + content', () => {
+    const model = renderCourseModel(
+      {
+        course: {
+          id: 'c1',
+          title: 'Cover Course',
+          description: '<p>The intro.</p>',
+          lessons: ['l1'],
+        },
+        lessons: [
+          {
+            id: 'l1',
+            title: 'Only Lesson',
+            type: 'blocks',
+            items: [
+              { id: 'b1', family: 'text', variant: 'paragraph', items: [{ id: 'i1', paragraph: '<p>Body.</p>' }] },
+            ],
+          },
+        ],
+      } as any,
+      { generatedAt: '2026-01-01T00:00:00Z', toolVersion: '0.0.test' },
+    );
+    const xml = docXml(writeStoryboardDocxProse(model));
+
+    // The title heading appears twice: on the cover and atop the content.
+    const titles = xml.split('Cover Course').length - 1;
+    expect(titles).toBeGreaterThanOrEqual(2);
+    // Exactly one explicit page break separates cover from content.
+    const brk = xml.indexOf('<w:br w:type="page"/>');
+    expect(brk).toBeGreaterThan(-1);
+    // Cover: meta + TOC before the break; single-lesson courses get a TOC too.
+    expect(xml.indexOf('Course ID')).toBeLessThan(brk);
+    expect(xml.indexOf('Lessons')).toBeLessThan(brk);
+    expect(xml.indexOf('1. Only Lesson')).toBeLessThan(brk);
+    // Content: description and blocks only AFTER the break.
+    expect(xml.indexOf('The intro.')).toBeGreaterThan(brk);
+    expect(xml.indexOf('Body.')).toBeGreaterThan(brk);
+    // Second title heading is after the break too.
+    expect(xml.lastIndexOf('Cover Course')).toBeGreaterThan(brk);
+  });
+});
