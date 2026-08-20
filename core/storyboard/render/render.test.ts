@@ -432,3 +432,28 @@ describe('writeStoryboardDocx round-trip through parseSdDocx', () => {
     await writeFile(out, bytes);
   });
 });
+
+// Regression: the renderer used to iterate the raw `doc.lessons` array
+// verbatim, but a GET_COURSE lessons array is roughly CREATION order — the
+// authoritative display order is the course object's ordered lesson-id list
+// (`doc.course.lessons`), the same rule the import plan and parity verifier
+// follow. The exported docx showed a different lesson order than the course.
+describe('renderCourseModel — lesson display order', () => {
+  it('orders lessons by course.lessons (the ordered id list), not the raw array', () => {
+    const doc = fixtureDoc();
+    const rawIds = (doc.lessons ?? []).map((l) => l.id as string);
+    const display = [...rawIds].reverse();
+    (doc.course as Record<string, unknown>).lessons = display;
+    const m = renderCourseModel(doc, OPTS);
+    expect(m.lessons.map((l) => l.id)).toEqual(display);
+    // `no` numbering follows the DISPLAY order, not the raw array order.
+    expect(m.lessons.map((l) => l.no)).toEqual(display.map((_, i) => i + 1));
+  });
+
+  it('keeps the raw array order when the course has no ordered id list', () => {
+    const doc = fixtureDoc();
+    const rawIds = (doc.lessons ?? []).map((l) => l.id as string);
+    const m = renderCourseModel(doc, OPTS);
+    expect(m.lessons.map((l) => l.id)).toEqual(rawIds);
+  });
+});

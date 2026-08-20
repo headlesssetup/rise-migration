@@ -1,6 +1,17 @@
 # Project Status
 
-_Last updated: 2026-08-20 (v0.9.1: consolidation release — v0.9.0 structural line + block-update fixes + folder checkbox merged to main). Keep this current at each phase boundary._
+_Last updated: 2026-08-20 (v0.9.2: docx lesson-order fix). Keep this current at each phase boundary._
+
+## v0.9.2 patch (2026-08-20)
+
+- **Docx lesson order fix**: the storyboard/prose renderer
+  (`core/storyboard/render/from-course.ts`) iterated the raw `doc.lessons`
+  array (roughly creation order), so the exported docx could show a different
+  lesson order than the actual course. It now orders by the course object's
+  ordered lesson-id list via `orderLessons` — the same capture-proven rule the
+  import plan, parity verifier and manual-work report already follow (never
+  `position`, never the raw array). Both docx formats flow through
+  `renderCourseModel`, so one fix covers prose and SBDOC.
 
 ## v0.9.1 consolidation (2026-08-20) — MERGED TO MAIN
 

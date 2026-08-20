@@ -10,6 +10,7 @@
 // migration handles).
 
 import { collectAssetKeys } from '@/core/assets/keys';
+import { orderLessons } from '@/core/import/plan-helpers';
 import { isLocalizedStack, materializeLocale, resolveStackTitle } from '@/core/l10n';
 import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 import { htmlToParas, htmlToText } from './html';
@@ -466,7 +467,13 @@ export function renderCourseModel(
 
   const lessons: SbLesson[] = [];
   let blockCount = 0;
-  const source = Array.isArray(doc.lessons) ? doc.lessons : [];
+  // Display order = the course object's ordered lesson-id list, NOT the raw
+  // lessons array (roughly creation order) and NOT `position` (capture-proven
+  // to scramble a real course) — same rule as the import plan / parity verifier.
+  const source = orderLessons(
+    Array.isArray(doc.lessons) ? doc.lessons : [],
+    (doc.course as Record<string, unknown> | undefined)?.lessons,
+  );
   for (let i = 0; i < source.length; i++) {
     const l = source[i]!;
     const type = str(l.type) || '(no type)';
