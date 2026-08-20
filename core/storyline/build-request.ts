@@ -11,6 +11,14 @@
 // the `websocketSessionId` we send here. So the caller must open that socket and
 // `identify` with this same sessionId BEFORE (or around) issuing this request.
 //
+// Known non-2xx answers (operator-confirmed):
+//   404 NotFoundError — the logged-in user lacks PUBLISH rights on the course
+//       (owned by another seat; the Rise UI shows "owned by …" on publish).
+//       Reads still work, so only this stage fails. Re-run as the owner or
+//       after an ownership transfer (2026-08-20).
+//   500 — stack (multi-language) course on an account without an Articulate
+//       Localization subscription (docs/rise-multilang.md, 2026-08-02).
+//
 // Pure: returns a WriteSpec the background relays inside the live Rise tab (the
 // build is an authoring write → paced like every other ducks/manage call).
 
