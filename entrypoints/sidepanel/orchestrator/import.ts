@@ -105,8 +105,11 @@ export interface ImportOptions {
   /** Recreate referenced question banks + bind draw-from-bank blocks. Default
    *  OFF — draw-from-bank blocks become unbound placeholders (manual). */
   recreateBanks?: boolean;
-  /** Recreate the source folder tree on the target + place courses into it.
-   *  Default ON; deduped by name so re-runs don't spawn duplicate folders. */
+  /** "Re-create folders" checkbox. ON → create the folder chains of the
+   *  SELECTED courses on the target (deduped by name+parent against the live
+   *  target tree, so folders from the account-settings step or a prior run are
+   *  reused, never duplicated) and place each course into its folder. OFF
+   *  (default) → nothing is created or moved; courses land in the root. */
   recreateFolders?: boolean;
   /** Cooperative cancel for the Stop button. Polled between courses and (via the
    *  executor) between paced write steps — never mid-write. */
@@ -447,7 +450,8 @@ export async function runImport(
     });
 
     // Place the new course into its mapped folder (the course was created at
-    // root; folders are recreated account-level above). Best-effort + paced.
+    // root; with "Re-create folders" off the map is empty and it stays there).
+    // Best-effort + paced.
     if (res.ok && res.newCourseId) {
       const tgtFolder = folderIdMap.get(courseFolders.get(courseId) ?? '');
       if (tgtFolder) {

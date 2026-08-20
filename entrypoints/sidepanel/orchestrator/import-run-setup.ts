@@ -116,23 +116,31 @@ export async function prepareImportRun(
   const targetTypefaces = await fetchTargetTypefaces(onEvent, pin);
 
   // Cross-step state from the account-settings (A) + banks (B) operations, if
-  // they were run first: folder + typeface id maps, and the imported-bank map for
+  // they were run first: the typeface id map and the imported-bank map for
   // auto-binding draw-from-bank blocks. (Persisted under `_import/`.)
   const accountMap = await readAccountIdMap(storage);
   const boundBanks = await readBankIdMap(storage);
-  // Folders: prefer the map persisted by step A; else create them here when the
-  // caller opted in (back-compat for a one-shot course import without step A).
-  const folderIdMap =
-    accountMap.folders.size > 0
-      ? accountMap.folders
-      : opts.recreateFolders === false
-        ? new Map<string, string>()
-        : await setupFolders(storage, target, opts.dryRun, pacing, onEvent, pin);
   const typefaceSeed = accountMap.typefaces;
   if (boundBanks.size > 0) {
     onEvent({ kind: 'log', message: `Auto-binding draw-from-bank to ${boundBanks.size} imported bank(s).` });
   }
   const courseFolders = await readCourseFolders(storage);
+  // Folders: driven by the "Re-create folders" checkbox, NOT by step A's
+  // persisted id map (which can go stale — see the move-to-folder WARN).
+  // ON → create/reuse ONLY the folder chains of the selected courses, deduped
+  // by name+parent against a fresh listing of the target tree (so step-A
+  // folders are found and reused). OFF → empty map ⇒ no creates, no moves.
+  const folderIdMap = opts.recreateFolders
+    ? await setupFolders(
+        storage,
+        target,
+        opts.dryRun,
+        pacing,
+        onEvent,
+        pin,
+        courseIds.map((id) => courseFolders.get(id) ?? '').filter(Boolean),
+      )
+    : new Map<string, string>();
 
   // --- Pre-flight: does the archive actually HOLD the media it references? ---
   // "Download assets" is a separate export step and easy to forget; without it

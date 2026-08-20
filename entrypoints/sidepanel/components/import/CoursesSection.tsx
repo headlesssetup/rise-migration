@@ -40,6 +40,9 @@ export function CoursesSection({
   const [filter, setFilter] = useState('');
   const [outcomes, setOutcomes] = useState<CourseImportOutcome[]>([]);
   const [blocked, setBlocked] = useState<string | null>(null);
+  // "Re-create folders" — ON: create/reuse just the selected courses' folder
+  // chains on the target and place the courses there; OFF: courses land in root.
+  const [recreateFolders, setRecreateFolders] = useState(false);
   // "Ready to import?" — rough pre-run time estimate for the selection (local
   // archive reads + pure plans; debounced so rapid clicking doesn't churn disk).
   const [estimate, setEstimate] = useState<string | null>(null);
@@ -100,7 +103,7 @@ export function CoursesSection({
           storage,
           [...selected],
           target,
-          { dryRun, override, shouldStop: stop.shouldStop },
+          { dryRun, override, recreateFolders, shouldStop: stop.shouldStop },
           onEvent,
         );
         if (res.blocked) setBlocked(res.blocked);
@@ -114,7 +117,7 @@ export function CoursesSection({
         setRunning(false);
       }
     },
-    [storage, target, override, selected, onEvent, logBreak, setRunning, stop],
+    [storage, target, override, recreateFolders, selected, onEvent, logBreak, setRunning, stop],
   );
 
   return (
@@ -158,6 +161,14 @@ export function CoursesSection({
               Ready to import? {estimate}
             </p>
           )}
+          <label title="On: recreate just the selected courses' folders on the target (existing folders with the same name are reused, never duplicated) and place the courses there. Off: courses are created in the root.">
+            <input
+              type="checkbox"
+              checked={recreateFolders}
+              onChange={(e) => setRecreateFolders(e.target.checked)}
+            />{' '}
+            Re-create folders (off = courses go to the root)
+          </label>
           <div className="row">
             <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>
               {running ? 'Working…' : `Dry-run (${selected.size})`}
