@@ -1,40 +1,24 @@
-// Rise Creator tab — the AI-paste flow (docs/creator-ai-design.md):
+// Rise AI Creator — ENTRY page of the two-page flow (docs/creator-ai-design.md):
 //   1 · copy the prompt pack into an external AI chat together with the source
 //       deck (PPTX/DOCX/PDF) — the provider interprets the source;
 //   2 · paste the returned Course Blueprint JSON here → strict closed-schema
 //       validation (unknown fields/kinds fail; the error report is written to
 //       be pasted back into the chat);
-//   3 · review the pseudo-Rise preview — the ONLY gate to import; unresolved
-//       material must be explicitly acknowledged;
-//   4 · approve → deterministic compiler → ready-to-import package in the
-//       archive folder → normal side-panel Import.
+//   → on a valid blueprint, "Review blueprint" stages the RAW text in a
+//     chrome.storage.session slot (shared/creator-handoff.ts) and opens the
+//     REVIEW page (/review.html?b=<id>) in a NEW TAB — preview, unresolved
+//     acknowledgement, and the write-to-archive step live THERE. This page
+//     stays open as the paste/fix surface.
 // No auth, no network: this page never contacts Rise.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   blueprintErrorReport,
-  compileCourseBlueprint,
   creatorPrompt,
   validateBlueprint,
   type BlueprintValidation,
 } from '@/core/creator';
-import { registryWarnings as templateRegistryWarnings } from '@/core/rise-format';
-import { FileSystemStorage } from '@/core/storage/fs';
-import {
-  loadDirHandle,
-  saveDirHandle,
-  verifyPermission,
-} from '../sidepanel/folder-store';
-import { Preview } from './Preview';
-import {
-  readCreatorBuildWarning,
-  writeBuiltCourse,
-  type WrittenFiles,
-} from './write';
-
-type DirPicker = (opts?: {
-  mode?: 'read' | 'readwrite';
-}) => Promise<FileSystemDirectoryHandle>;
+import { putPendingBlueprint } from '@/shared/creator-handoff';
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -91,37 +75,12 @@ export function App() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [validation, setValidation] = useState<BlueprintValidation | null>(null);
   const [reportCopied, copyReport] = useCopy();
-
-  const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null);
-  const [folderNeedsGrant, setFolderNeedsGrant] = useState(false);
-  const [folderBuildWarning, setFolderBuildWarning] = useState<string | null>(null);
-  const [ackUnresolved, setAckUnresolved] = useState(false);
-  const [writing, setWriting] = useState(false);
-  const [writeError, setWriteError] = useState<string | null>(null);
-  const [written, setWritten] = useState<
-    (WrittenFiles & { courseId: string; title: string; registryWarnings: string[] }) | null
-  >(null);
-
-  useEffect(() => {
-    void (async () => {
-      const handle = await loadDirHandle();
-      if (!handle) return;
-      if (await verifyPermission(handle, false)) {
-        setFolder(handle);
-        setFolderBuildWarning(
-          await readCreatorBuildWarning(new FileSystemStorage(handle)),
-        );
-      } else {
-        setFolder(handle);
-        setFolderNeedsGrant(true);
-      }
-    })();
-  }, []);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [reviewOpened, setReviewOpened] = useState(false);
 
   const parse = useCallback((text: string) => {
-    setWritten(null);
-    setWriteError(null);
-    setAckUnresolved(false);
+    setHandoffError(null);
+    setReviewOpened(false);
     setValidation(validateBlueprint(text));
   }, []);
 
@@ -135,98 +94,44 @@ export function App() {
     [parse],
   );
 
-  const connectFolder = useCallback(async () => {
-    try {
-      if (folder && folderNeedsGrant) {
-        if (await verifyPermission(folder, true)) {
-          setFolderNeedsGrant(false);
-          setFolderBuildWarning(
-            await readCreatorBuildWarning(new FileSystemStorage(folder)),
-          );
-          return;
-        }
-      }
-      const picker = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker;
-      if (!picker) {
-        setWriteError('File System Access API is not available in this browser.');
-        return;
-      }
-      const handle = await picker({ mode: 'readwrite' });
-      await saveDirHandle(handle);
-      setFolder(handle);
-      setFolderNeedsGrant(false);
-      setFolderBuildWarning(
-        await readCreatorBuildWarning(new FileSystemStorage(handle)),
-      );
-    } catch {
-      /* user cancelled */
-    }
-  }, [folder, folderNeedsGrant]);
-
   const blueprint = validation?.ready ? validation.blueprint : null;
 
   const stats = useMemo(() => {
     if (!blueprint) return null;
     const blocks = blueprint.lessons.flatMap((l) => l.blocks);
-    const kinds = blocks.map((b) => b.intent.kind);
     return {
       blocks: blocks.length,
-      kcs: kinds.filter((k) => k === 'knowledge-check').length,
-      placeholders: kinds.filter((k) => k.endsWith('-placeholder')).length,
-      suggested: blocks.filter((b) => b.origin === 'suggested').length,
-      registryWarnings: templateRegistryWarnings(kinds),
+      unresolved: blueprint.unresolved.length,
     };
   }, [blueprint]);
 
-  const approve = useCallback(async () => {
-    if (!blueprint || !folder || writing) return;
-    setWriting(true);
-    setWriteError(null);
+  // Stage the RAW pasted text (the review page re-validates) and open the
+  // review tab. This page keeps the paste, so a fix round stays one tab away.
+  const openReview = useCallback(async () => {
+    if (!blueprint) return;
+    setHandoffError(null);
     try {
-      if (!(await verifyPermission(folder, true))) {
-        throw new Error('No write permission for the archive folder.');
-      }
-      const generatedAt = new Date().toISOString();
-      const built = compileCourseBlueprint(blueprint, generatedAt);
-      const storage = new FileSystemStorage(folder);
-      const manifest = browser.runtime.getManifest();
-      const files = await writeBuiltCourse(
-        storage,
-        built,
-        generatedAt,
-        manifest.version_name ?? manifest.version,
-        blueprint.source.originalFileName ?? fileName ?? 'pasted blueprint',
-      );
-      setFolderBuildWarning(null);
-      setWritten({
-        ...files,
-        courseId: built.courseId,
-        title: blueprint.title,
-        registryWarnings: built.registryWarnings,
+      const id = await putPendingBlueprint(pasted, fileName);
+      await browser.tabs.create({
+        url: browser.runtime.getURL(`/review.html?b=${id}` as '/review.html'),
       });
+      setReviewOpened(true);
     } catch (e) {
-      setWriteError(errText(e));
-    } finally {
-      setWriting(false);
+      setHandoffError(errText(e));
     }
-  }, [blueprint, folder, writing, fileName]);
+  }, [blueprint, pasted, fileName]);
 
   const errors = validation?.issues.filter((i) => i.severity === 'error') ?? [];
   const warnings = validation?.issues.filter((i) => i.severity === 'warning') ?? [];
-  const canApprove =
-    !!blueprint &&
-    !!folder &&
-    !folderNeedsGrant &&
-    !writing &&
-    (blueprint.unresolved.length === 0 || ackUnresolved);
 
   return (
     <div className="app">
-      <h1>Rise Creator</h1>
+      <h1>Rise AI Creator</h1>
       <p className="hint">
-        Source document + AI chat → Course Blueprint JSON → preview → ready-to-import package.
-        Everything on this page is local; the course is created later via the normal Import flow
-        (side panel → Import → C · Courses).
+        Source document + AI chat → Course Blueprint JSON → review → ready-to-import package.
+        Everything on this page is local; the review and the write-to-disk step open in a new
+        tab, and the course is created later via the normal Import flow (side panel → Import
+        Data → C · Courses).
       </p>
 
       <PromptStep />
@@ -287,123 +192,28 @@ export function App() {
             ))}
           </ul>
         )}
-        {blueprint && <p className="ok">✓ Valid blueprint.</p>}
-      </section>
 
-      {blueprint && stats && (
-        <>
-          <section className="card">
-            <h2>3 · Preview</h2>
-            <p className="hint">
-              {blueprint.lessons.length} lessons · {stats.blocks} blocks · {stats.kcs} knowledge
-              checks · {stats.placeholders} placeholders ·{' '}
-              <b className={stats.suggested ? 'suggested-count' : ''}>
-                {stats.suggested} AI-suggested block(s)
-              </b>{' '}
-              ·{' '}
-              <b className={blueprint.unresolved.length ? 'error' : ''}>
-                {blueprint.unresolved.length} unresolved item(s)
+        {blueprint && stats && (
+          <>
+            <p className="ok">
+              ✓ Valid blueprint — <b>{blueprint.title}</b>: {blueprint.lessons.length} lesson(s) ·{' '}
+              {stats.blocks} block(s) ·{' '}
+              <b className={stats.unresolved ? 'error' : ''}>
+                {stats.unresolved} unresolved item(s)
               </b>
             </p>
-            {stats.registryWarnings.length > 0 && (
-              <details>
-                <summary className="hint">
-                  {stats.registryWarnings.length} template(s) are compiler-tested but not yet
-                  marked live-verified
-                </summary>
-                <ul className="notes">
-                  {stats.registryWarnings.map((w) => (
-                    <li key={w}>{w}</li>
-                  ))}
-                </ul>
-              </details>
-            )}
-          </section>
-
-          {blueprint.unresolved.length > 0 && (
-            <section className="card card-danger">
-              <h2>⚠ Unresolved material — will NOT be imported</h2>
-              <ul className="issue-list">
-                {blueprint.unresolved.map((u, i) => (
-                  <li key={i}>
-                    <b>
-                      {u.sourceRef.slideNo != null ? `Slide ${u.sourceRef.slideNo}` : u.sourceRef.label}
-                    </b>{' '}
-                    — {u.reason}
-                    {u.sourceRef.excerpt && <pre>{u.sourceRef.excerpt}</pre>}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          <Preview blueprint={blueprint} />
-
-          <section className="card">
-            <h2>4 · Approve and write to archive</h2>
-            {!folder && (
+            <button className="approve" onClick={() => void openReview()}>
+              Review blueprint →
+            </button>
+            {reviewOpened && (
               <p className="hint">
-                Archive folder not connected — select the same folder the side panel uses.
+                Review opened in a new tab. This page keeps your pasted JSON for fix rounds.
               </p>
             )}
-            {folder && folderNeedsGrant && (
-              <p className="hint">Folder "{folder.name}" remembered, but permission needed.</p>
-            )}
-            {(!folder || folderNeedsGrant) && (
-              <button onClick={connectFolder}>
-                {folder ? `Restore access: ${folder.name}` : 'Connect archive folder…'}
-              </button>
-            )}
-            {folder && !folderNeedsGrant && <p className="hint">Archive folder: {folder.name}</p>}
-            {folderBuildWarning && <p className="error">⚠ {folderBuildWarning}</p>}
-            {blueprint.unresolved.length > 0 && (
-              <label className="ack">
-                <input
-                  type="checkbox"
-                  checked={ackUnresolved}
-                  onChange={(e) => setAckUnresolved(e.target.checked)}
-                />{' '}
-                Acknowledged: {blueprint.unresolved.length} unresolved item(s) will not be imported
-                and must be added manually.
-              </label>
-            )}
-            <button className="approve" onClick={approve} disabled={!canApprove}>
-              {writing ? 'Writing…' : 'Approve → write to archive'}
-            </button>
-            {writeError && <p className="error">⚠ {writeError}</p>}
-            {written && (
-              <div className="done">
-                <p>
-                  ✔ Written: <b>{written.title}</b> ({written.courseId})
-                </p>
-                <ul>
-                  <li>{written.courseFile}</li>
-                  <li>{written.manifestFile}</li>
-                  <li>{written.planFile} — the pasted blueprint, verbatim</li>
-                  {written.productionFile && (
-                    <li>{written.productionFile} — narration scripts for production</li>
-                  )}
-                </ul>
-                {written.priorBuildWarning && (
-                  <p className="error">⚠ {written.priorBuildWarning}</p>
-                )}
-                {written.registryWarnings.length > 0 && (
-                  <p className="hint">
-                    Registry status: {written.registryWarnings.length} used template(s) are
-                    compiler-tested but not yet marked live-verified. Details are in the blueprint
-                    artifact.
-                  </p>
-                )}
-                <p className="hint">
-                  Next: open the side panel → Import (write) → C · Courses — the new course is in
-                  the list. Placeholders (video, Storyline/Mighty, attachments) must be filled in
-                  manually after import.
-                </p>
-              </div>
-            )}
-          </section>
-        </>
-      )}
+            {handoffError && <p className="error">⚠ {handoffError}</p>}
+          </>
+        )}
+      </section>
     </div>
   );
 }

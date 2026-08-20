@@ -1,6 +1,82 @@
 # Project Status
 
-_Last updated: 2026-08-18 (v0.8.1: rebuild + Creator AI-paste branches merged; live certification still in progress). Keep this current at each phase boundary._
+_Last updated: 2026-08-18 (v0.9.0: structural release on top of the merged v0.8.1; live certification still in progress). Keep this current at each phase boundary._
+
+## v0.9.0 structural release (2026-08-18) — BUILT
+
+The behavior-preserving restructure planned as "v0.9.0" in
+`docs/v0.8.0-rebuild-plan.md`, plus the product-surface work it unblocked:
+
+- **Four-tool home taxonomy** (`entrypoints/sidepanel/components/TaskHome.tsx`):
+  the panel home is four data-driven cards — **Rise to Docx**, **Rise AI
+  Creator** (opens `/creator.html` ↗), **Export Data**, **Import Data**; view
+  union `'home'|'docx'|'export'|'import'`. `App.tsx` decomposed into hooks
+  (`use-log`/`use-session`/`use-archive-folder`/`use-export-runs`) + views
+  (`ArchiveView`/`DocxView`/`LogCard`); run state stays in `App`.
+- **Rise to Docx — three sources** (`components/DocxView.tsx`): **From archive**
+  (the folder's manifest courses, as before), **From account** (paced search of
+  the live account, 16/page, radio pick, More button), **Current tab** (the
+  course open in the active `/authoring/<id>` editor tab; `SessionState` gained
+  `editorCourseId`). Both formats remain (prose default with embedded images;
+  SBDOC storyboard table). Live sources are TRANSIENT: `PIN_RISE_TAB` at
+  generate-click, ONE paced GET_COURSE, prose images downloaded in-memory from
+  the public CDN (`orchestrator/docx.ts`) — nothing is written to the archive.
+- **Creator split into two pages**: `entrypoints/creator/` (prompt pack +
+  paste/validate + on-valid "Review blueprint →") and NEW `entrypoints/review/`
+  (`/review.html?b=<slot>`: RE-validates the staged raw text, stats + registry
+  warnings + unresolved ack + preview + folder card + "Approve → save package
+  to disk"). Handoff = a `chrome.storage.session` slot `creator:pending:<uuid>`
+  holding the RAW pasted text (`shared/creator-handoff.ts`; survives refresh;
+  several pending blueprints coexist; missing slot → "review link expired").
+  The review page consumes the slot on success. Future: a "Create in Rise
+  account…" action lands on the review page (rpc works from any extension page).
+- **Creator manifest guard** (`entrypoints/creator/write.ts`):
+  `writeBuiltCourse` now MERGES into an existing creator-origin v1 manifest
+  (successive builds accumulate in `courses[]`; a same-id rebuild refreshes its
+  entry; `creatorSummary` describes the latest build) and REFUSES — before
+  writing anything — a folder holding a rise-export or legacy/unknown manifest.
+  Previously it overwrote `manifest.json` wholesale, so pointing Creator at a
+  populated export archive silently dropped every exported course from the
+  manifest. RECOVERY for an already-clobbered export archive: re-run Export
+  Data → "Fetch N course(s)" (`runExport` rebuilds `manifest.courses` from
+  `listSaved()` and re-stamps `sourceAccount` from the live session), then
+  "Download assets" restores `state:'ready'`. Creator/review pages also keep
+  their OWN folder handle (`folder-store` `CREATOR_FOLDER_KEY='creatorFolder'`)
+  with an explicit one-click "Use panel folder" seed — they no longer silently
+  re-point the side panel's archive handle.
+- **Explicit inventory write**: Export Data's "List N course(s) (paced)" is now
+  a PURE search (no hidden writes, no folder-tree refetch). A new button under
+  the course list in C — **"Save visible course list (inventory)"** — fetches
+  the folder tree (one paced read), merges with the inventory on disk
+  (`mergeById`, now in `core/local-archive/merge.ts`), and writes
+  `_metadata/inventory.csv/json`. Import uses the inventory for folder
+  placement; the Storyline stage (D) records legacy flags into it and LOGS
+  LOUDLY when no inventory exists. Census/catalog/novelty still write
+  implicitly on Fetch (disk-derived). Creator v1 packages import through the
+  unchanged path; the source-identity line says "Creator package — built
+  locally, no source account."
+- **File-split program**: every non-test source file is now ≤ ~700 lines (five
+  were over 1100). Splits (original path always re-exports; public surfaces
+  unchanged): `core/import/verify.ts`→`verify-l10n.ts`;
+  `plan.ts`→`plan-types`/`plan-helpers`/`plan-lesson-body`;
+  `executor.ts`→`executor-run-state` +
+  `executor-steps-{banks,lifecycle,media,storyline,l10n}`;
+  `orchestrator/import.ts`→`import-run-inputs`/`import-summary`/
+  `import-readback`/`import-run-setup`;
+  `orchestrator/storyline.ts`→`storyline-scan`/`storyline-shared`/
+  `storyline-upload`; `ImportView.tsx`→`components/import/*`;
+  `entrypoints/background.ts`→ the `entrypoints/background/` directory
+  (`index`/`rise-fetch`/`tabs`/`reauth`/`storyline-handlers`). The
+  characterization test (`core/import/executor.characterization.test.ts`) is
+  untouched.
+
+Automated verification: **794 passed / 1 skipped**; TypeScript and production
+build green. Operator-owned items carried over: the US/EU live matrix in
+`docs/v0.8.0-rebuild-plan.md` (incl. one >15-minute expiry run) and the Creator
+live pilot. NEW manual smoke items from this release: the docx view's three
+sources, the Creator two-page flow, one import dry-run + a small live import
+(after the plan/executor/orchestrator splits), and an extension smoke pass
+(after the background split).
 
 ## Creator AI-paste flow — BUILT (2026-08-16, merged to main 2026-08-18)
 
@@ -9,8 +85,8 @@ CHAT-PASTE mode of `docs/creator-ai-design.md` is implemented and field-tested
 (one external model run on a real client deck produced immediately-valid JSON
 after prompt round 1). The API mode remains deferred.
 
-What the branch contains (version `0.8.0-ai`; manifest `version` stays numeric
-`0.8.0`, `version_name` carries the suffix):
+What the branch contained (it carried version `0.8.0-ai` pre-merge; it merged
+to main as v0.8.1, since restructured as v0.9.0):
 
 - **Rise Creator page rebuilt** as the AI-paste flow (`entrypoints/creator/`,
   RENAMED from `entrypoints/storyboard/`): copy prompt pack → external AI chat
@@ -35,24 +111,24 @@ What the branch contains (version `0.8.0-ai`; manifest `version` stays numeric
 - `StoryboardError` moved to `core/creator/errors.ts`; direct compiler tests
   with a golden all-kinds fixture (`core/creator/golden-blueprint.fixture.ts`).
 
-### Merge notes (for combining with the other v0.8.0 branch)
+### Merge notes (historical — the merge landed 2026-08-18 as `113eab7`, v0.8.1)
 
-- This branch **deletes** `core/storyboard/parse.ts`, `to-blueprint.ts`,
+- The branch **deleted** `core/storyboard/parse.ts`, `to-blueprint.ts`,
   `archive.ts`, `types.ts` (+ their tests, + `real-docx.integration.test.ts`)
-  and **renames** `entrypoints/storyboard/` → `entrypoints/creator/`. If the
-  other branch touches those files, expect modify/delete and rename conflicts —
-  resolve in favor of the deletions/renames here.
-- `core/storyboard/index.ts` barrel now exports only `./render`.
+  and **renamed** `entrypoints/storyboard/` → `entrypoints/creator/`. The
+  expected modify/delete and rename conflicts were resolved in favor of the
+  deletions/renames.
+- `core/storyboard/index.ts` barrel exports only `./render`.
 - `StoryboardError` import path changed: `@/core/creator/errors` (the old
   `@/core/storyboard/types` is gone).
-- `BuiltCourse.productionMd` is now `string | null`; `WrittenFiles.productionFile`
-  is optional.
-- `package.json` version is `0.8.0-ai` — if the other branch also bumps the
-  version, pick one deliberately.
-- After merging, run the full suite: `prompt.test.ts` (prompt ⇄ schema sync)
+- `BuiltCourse.productionMd` became `string | null`;
+  `WrittenFiles.productionFile` optional.
+- The version was picked deliberately: `0.8.0-ai` merged as `0.8.1`, bumped to
+  `0.9.0` by the structural release above.
+- Post-merge, the full suite ran green: `prompt.test.ts` (prompt ⇄ schema sync)
   and `core/creator/compiler.test.ts` (golden fixture, includes the
   `buildPlan` integration check) catch drift; the import characterization
-  fixture must stay green.
+  fixture stayed green.
 - Still pending from this branch: the live pilot (real deck → chat → paste →
   import into the test account → eyeball in the Rise editor).
 
@@ -74,16 +150,17 @@ writes one source file as one course, uses
 manifest during the transaction, and marks ready/removes the lock only after
 all course and review artifacts exist.
 
-Synthesis now follows `PlannedCourse -> CourseBlueprint -> deterministic
-compiler`. The compiler consults a donor-provenance registry and surfaces every
+Synthesis now follows `pasted Blueprint JSON -> validate -> CourseBlueprint ->
+deterministic compiler`. The compiler consults a donor-provenance registry and surfaces every
 template not yet live-verified. Typed `local-asset` references are recognized by
 the compiler, executor final invariant, and live GET_COURSE read-back; v0.8.0
 refuses asset-bearing blueprints until the captured local-media adapter exists.
 
 The high-risk import plan/executor/background were not cosmetically split. A
 canonical image-course characterization test now freezes the exact ordered
-write envelopes and bodies before any later v0.9.0 refactor. General AI
-conversion is deferred and documented in `docs/creator-ai-design.md`.
+write envelopes and bodies before any later v0.9.0 refactor. Of the AI
+conversion design in `docs/creator-ai-design.md`, only the programmatic API
+mode remains deferred — the chat-paste mode shipped in v0.8.1.
 
 Long course exports now recover an expired bearer without supervision: when a
 GET_COURSE 401/403 occurs with only the dashboard open, the background boots
@@ -92,9 +169,10 @@ advanced same-plane cookie, closes the tab, and retries once. If SSO recovery
 still fails, export stops the queue with untouched/resumable counts instead of
 recording the same failure against every remaining course.
 
-Automated certification: 740 passed / 2 skipped; TypeScript and production
-build green. Release blocker still open: the operator-owned US/EU live matrix
-in `docs/v0.8.0-rebuild-plan.md`, including one >15-minute export expiry run.
+Automated certification at the time: 740 passed / 2 skipped (current: 794
+passed / 1 skipped); TypeScript and production build green. Release blocker
+still open: the operator-owned US/EU live matrix in
+`docs/v0.8.0-rebuild-plan.md`, including one >15-minute export expiry run.
 
 ## Rise → docx storyboard export (SBDOC, 2026-08-12) — BUILT
 
@@ -106,9 +184,9 @@ hint) and a fidelity class (`edit` = the families the storyboard mapper can
 rebuild; everything else `ro`, shaded, best-effort text extraction — honest,
 never silent). Format contract: `docs/rise-storyboard-format.md`. Code:
 `core/storyboard/render/` (pure; hand-built OOXML zipped with fflate, zero new
-deps, deterministic bytes) + a second mode in the storyboard tab
-("Rise → docx"): pick an archived course → the .docx downloads; read-only on
-the archive. Stacks are materialized in the DEFAULT locale + flagged. Round-trip
+deps, deterministic bytes). The UI has since moved: Rise → docx lives in the
+SIDE PANEL (the v0.9.0 "Rise to Docx" view, three sources — archive / account /
+current tab); pick a course → the .docx downloads; read-only on the archive. Stacks are materialized in the DEFAULT locale + flagged. Round-trip
 guarantee: every SBDOC parses through our own `parseSdDocx` (tested); 24 new
 tests (721 total). Sample dump: `SBDOC_OUT=… pnpm vitest run core/storyboard/render`.
 
@@ -127,7 +205,12 @@ update-existing-course path is now protocol-unblocked; **deletion stays
 policy-forbidden until the CLAUDE.md invariant is explicitly revised when that
 path is built.**
 
-## Storyboard → Rise converter (2026-08-10) — BUILT, pilot pending
+## Storyboard → Rise converter (2026-08-10) — SUPERSEDED (kept as history)
+
+> **SUPERSEDED 2026-08-16:** the SD-docx → Rise converter was DROPPED (operator
+> decision: client docx too unreliable as deterministic input). Doc → Rise now
+> goes exclusively through the Creator AI-paste flow (see the top sections and
+> `docs/creator-ai-design.md`). The section below describes the deleted parser.
 
 New capability, plan + status in `docs/rise-storyboard-plan.md`: an INTEA SD
 `.docx` storyboard becomes an editable Rise course. `core/storyboard/` (pure:
@@ -306,8 +389,8 @@ The authoritative protocol is `docs/rise-api-reference.md`; invariants are in
 
 > **Reading note.** The per-phase sections below are a HISTORICAL record, written
 > at each phase boundary and largely left as-is. Where a later phase or the audit
-> changed a behavior they describe, this top section wins. Current: **v0.6.6**,
-> **615 Vitest tests**, `compile` / `test` green.
+> changed a behavior they describe, this top section wins. Current: **v0.9.0**,
+> **794 passed / 1 skipped**, `compile` / `test` / `build` green.
 
 ## Phase 6 — Multi-language stacks (v0.6.0): BUILT, needs live verification
 

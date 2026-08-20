@@ -19,3 +19,20 @@ export function courseEditorUrl(tabUrl: string, courseId: string): string | null
     return null;
   }
 }
+
+/**
+ * Inverse of `courseEditorUrl`: the course id of a Rise EDITOR tab URL.
+ * Only `/authoring/<courseId>` routes carry a course id — the dashboard,
+ * preview, and Review 360 pages do not, and return null rather than a guess.
+ */
+export function editorCourseIdFromUrl(
+  tabUrl: string | undefined | null,
+): string | null {
+  if (!tabUrl || !risePlaneFromUrl(tabUrl)) return null;
+  try {
+    const m = /^\/authoring\/([^/?#]+)/.exec(new URL(tabUrl).pathname);
+    return m?.[1] ? decodeURIComponent(m[1]) : null;
+  } catch {
+    return null;
+  }
+}

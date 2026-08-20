@@ -33,6 +33,18 @@ A single-author headless script ignores it entirely and just issues the HTTP "du
 - The bearer is the `_articulate_rise_` cookie value: an Okta access JWT (`aud:
   api://default`, `~15 min` lifetime, claims include `iss`, `cid`, `scp`). Send it
   as `Authorization: Bearer <jwt>` on every `manage/api` and `ducks` call.
+  - `sub` is USER-scoped (operator-confirmed 2026-08-20): the Articulate ID of
+    the signed-in LOGIN, shape `aid|<uuid>` — the same value for that person on
+    BOTH planes, and different for different logins. It is not account/tenant
+    scoped (that is the account-local `_articulate_user_id` cookie).
+  - `iss` is `https://id.articulate.com/oauth2/default` on BOTH planes: one
+    shared SSO. Signing out of `rise.articulate.com` does NOT end the
+    `id.articulate.com` session, so opening the OTHER plane's origin can
+    silently mint a token for the PREVIOUS login — the Source ≠ Target guard's
+    "token is stale or mis-filled" verdict catches exactly this drift
+    (observed live 2026-08-20: an Elza-login token on the EU origin after a US
+    logout, replaced by the correct login's token once the operator signed the
+    EU origin in explicitly).
 - **Token refresh — MITM-confirmed (2026-06-23), do NOT confuse the two calls:**
   - `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh` → **`204 No
     Content`, no body, no `Set-Cookie`**. It ONLY keeps the Okta SSO session

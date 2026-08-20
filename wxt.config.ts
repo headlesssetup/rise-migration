@@ -1,8 +1,9 @@
 import { defineConfig } from 'wxt';
 
-// WXT config — MV3, side panel + content script + background.
-// Phase 0 is read-only: only the permissions/hosts needed to capture the
-// session token and read the Rise catalog/course documents.
+// WXT config — MV3: side panel + content script + background + the Creator
+// and Review full-page entrypoints. Permissions/hosts cover token capture,
+// Rise catalog/course reads, the authoring write relay, and the S3/CDN
+// asset-byte paths.
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {

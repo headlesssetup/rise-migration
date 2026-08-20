@@ -19,8 +19,11 @@
 > across 7 lessons; the one unparsed row (slide 7) genuinely carries no items
 > in the SD (content expected from the preceding video) — honest demotion.
 > Run it: side panel → **Storyboard ↗** → pick the .docx → review → approve;
-> the course then appears in Import → C. Re-run the real-file check any time:
-> `SD_DOCX=/path/to/SD.docx pnpm vitest run core/storyboard/real-docx`.
+> the course then appears in Import → C. [gone 2026-08-16 with the parser — the
+> current UI is the side panel's Rise to Docx view / the Rise AI Creator page.]
+> Re-run the real-file check any time:
+> `SD_DOCX=/path/to/SD.docx pnpm vitest run core/storyboard/real-docx`
+> [historical/dead — the test file was deleted 2026-08-16 with the parser].
 > **Phase 5 (pilot import into a test account) is NOT done** — the empty-video
 > donor shape remains the one unverified block (pilot eyeballs it).
 > **Donor round 2 (2026-08-10, operator's "Quick Test" export):** Note now maps

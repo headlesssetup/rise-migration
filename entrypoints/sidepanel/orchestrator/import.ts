@@ -11,10 +11,7 @@
 
 import {
   defaultLocaleOf,
-  defaultOnlyTextCells,
   isLocalizedStack,
-  parseTranslationUpdates,
-  pendingKey,
   resolveStackTitle,
   stackLocales,
 } from '@/core/l10n';
@@ -28,24 +25,14 @@ import {
   buildCourseReportMarkdown,
   buildCourseReportJson,
   buildRunCsv,
-  checkSourceNotTarget,
   IdMap,
   findBankRef,
-  verifyParity,
-  verifyL10nParity,
   estimateImportSeconds,
   sumEstimates,
   formatEstimate,
   type ImportEstimate,
-  getTranslations,
-  getTranslationUpdates,
-  getSubscription,
-  getAvailableLanguages,
   summarizeFlags,
-  parseTypefaces,
   moveCourseToFolder,
-  findForeignMediaKeys,
-  findLocalAssetRefs,
   type PlanInput,
   type AssetEntry,
   type SourceBank,
@@ -57,7 +44,6 @@ import {
   type PendingSetReport,
   type L10nParityReport,
   type RunCsvCourse,
-  verifyTypefaceBindings,
   READ_BACK_POLICY_VERSION,
 } from '@/core/import';
 import { isKnownLegacyStorylineMeta } from '@/core/storyline/compatibility';
@@ -66,31 +52,34 @@ import {
   isOrphanStatus,
   type OptionalAssetReason,
 } from '@/core/assets';
-import { archiveErrorSummary, inspectSelectedArchive } from '@/core/local-archive';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
-import { etaStatus, unwrap, type ProgressEvent } from './shared';
+import { unwrap, type ProgressEvent } from './shared';
 import {
-  refreshToken,
+  missingAssetKeys,
+  readCourseAssets,
+  readReferencedBanks,
+  readStorylineAttach,
+} from './import-run-inputs';
+import { emitRunSummary } from './import-summary';
+import { verifyCourseReadBack } from './import-readback';
+import { prepareImportRun } from './import-run-setup';
+import {
   bytesToBase64,
   contentTypeForExt,
-  safeJson,
-  makeFontReader,
-  makePinnedRelay,
-  pinnedRpc,
-  pinTargetTab,
-  readFontManifest,
-  fetchTargetTypefaces,
-  readAccountIdMap,
-  readBankIdMap,
-  setupFolders,
   readSourceIdentity,
 } from './import-shared';
 
 // Re-export the shared + A + B surface so existing importers of './import' (and
 // the orchestrator barrel) keep working unchanged after the split.
 export { readSourceIdentity, type BoundBankMap } from './import-shared';
+// Run inputs (readers/estimate/coverage) split to ./import-run-inputs (v0.9.0).
+export {
+  classifyAssetFailures,
+  estimateCourses,
+  missingAssetKeys,
+} from './import-run-inputs';
 export {
   readArchiveInfo,
   importAccountSettings,
@@ -106,235 +95,6 @@ export {
   type BankImportOptions,
 } from './import-banks';
 
-/**
- * Media keys a course's document references that the archive has NO bytes for
- * (and that are not recorded as terminal orphans). The usual cause is simply
- * that "Download assets" was never run for this archive — in which case the
- * import would create the course, convert the stack, and only then die on the
- * first upload, leaving a partial to clean up. Cheap to check up front.
- */
-export function missingAssetKeys(
-  doc: unknown,
-  courseId: string,
-  entries: {
-    key: string;
-    file?: string;
-    orphaned?: boolean;
-    optionalUnavailable?: boolean;
-  }[],
-): string[] {
-  const have = new Set(
-    entries
-      .filter((e) => e.file || e.orphaned || e.optionalUnavailable)
-      .map((e) => e.key),
-  );
-  const missing = new Set<string>();
-  for (const k of collectAssetKeys(doc, courseId)) {
-    if (!have.has(k.key)) missing.add(k.key);
-  }
-  return [...missing];
-}
-
-/**
- * Split a manifest's `failed` list into the three states the import must treat
- * differently. A required 403/404 is blanked + manually flagged. A typed
- * optional 403/404 is blanked without a flag. Anything else (500, network, 0)
- * is UNKNOWN and blocks import rather than silently discarding possible media.
- */
-export function classifyAssetFailures(
-  failed:
-    | {
-        key: string;
-        status?: number;
-        error?: string;
-        optionalReason?: OptionalAssetReason;
-      }[]
-    | undefined,
-): {
-  orphans: { key: string; status?: number }[];
-  optional: {
-    key: string;
-    status?: number;
-    optionalReason: OptionalAssetReason;
-  }[];
-  unresolved: { key: string; status?: number; error?: string }[];
-} {
-  const orphans: { key: string; status?: number }[] = [];
-  const optional: {
-    key: string;
-    status?: number;
-    optionalReason: OptionalAssetReason;
-  }[] = [];
-  const unresolved: { key: string; status?: number; error?: string }[] = [];
-  for (const f of failed ?? []) {
-    if (isOrphanStatus(f.status) && f.optionalReason) {
-      optional.push({
-        key: f.key,
-        status: f.status,
-        optionalReason: f.optionalReason,
-      });
-    } else if (isOrphanStatus(f.status)) orphans.push({ key: f.key, status: f.status });
-    else unresolved.push({ key: f.key, status: f.status, error: f.error });
-  }
-  return { orphans, optional, unresolved };
-}
-
-/** Map a course's saved asset manifest → plan AssetEntry[] (downloaded + terminal).
- *  `fileByKey` also yields the archive filename so we can read bytes for upload.
- *  `unresolved` lists keys whose bytes are missing for a NON-terminal reason. */
-async function readCourseAssets(
-  storage: Storage,
-  courseId: string,
-): Promise<{
-  entries: AssetEntry[];
-  fileByKey: Map<string, string>;
-  unresolved: { key: string; status?: number; error?: string }[];
-}> {
-  const raw = await storage.readAssetManifest('courses', courseId);
-  const entries: AssetEntry[] = [];
-  const fileByKey = new Map<string, string>();
-  const unresolved: { key: string; status?: number; error?: string }[] = [];
-  if (!raw) return { entries, fileByKey, unresolved };
-  try {
-    const m = JSON.parse(raw) as {
-      assets?: { key: string; kind: string; file: string; ext: string; size?: number }[];
-      failed?: {
-        key: string;
-        status?: number;
-        error?: string;
-        optionalReason?: OptionalAssetReason;
-      }[];
-    };
-    for (const a of m.assets ?? []) {
-      entries.push({ key: a.key, kind: a.kind, file: a.file, ext: a.ext, size: a.size });
-      fileByKey.set(a.key, a.file);
-    }
-    // Terminal orphans are imported as block-less (flagged) keys; anything else
-    // aborts the course in runImport rather than dropping media as "deleted".
-    const split = classifyAssetFailures(m.failed);
-    for (const f of split.orphans) entries.push({ key: f.key, kind: 'media-other', orphaned: true });
-    for (const f of split.optional) {
-      entries.push({
-        key: f.key,
-        kind: 'media-other',
-        optionalUnavailable: true,
-        optionalReason: f.optionalReason,
-      });
-    }
-    unresolved.push(...split.unresolved);
-  } catch {
-    /* tolerate a malformed manifest — treat as no assets */
-  }
-  return { entries, fileByKey, unresolved };
-}
-
-/** Build the storyline attach map for a source course from its storyline
- *  manifest: `blockKey(lessonId, blockId)` → {reviewPrefix, meta, title}, but
- *  ONLY for blocks whose package has been uploaded
- *  (manifest.uploads[leaf].reviewPrefix exists). Blocks without an uploaded
- *  package are left to the manual flag path. Keyed by LESSON + BLOCK id —
- *  block ids are client-generated and real courses reuse them across lessons
- *  (the v0.6.3 collision class), so a blockId-only key would attach the same
- *  package to every same-id block. */
-async function readStorylineAttach(
-  storage: Storage,
-  courseId: string,
-): Promise<
-  | {
-      /** Monolingual: blockKey(lessonId, blockId) → the uploaded package. */
-      byBlock: Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>;
-      /** STACK (docs/rise-multilang.md §4.3b): `${blockKey}|${locale}` →
-       *  package, one per language (each language can carry its own bundle). */
-      byBlockLocale: Map<
-        string,
-        { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
-      >;
-    }
-  | undefined
-> {
-  const raw = await storage.readStorylineManifest(courseId);
-  if (!raw) return undefined;
-  try {
-    const m = JSON.parse(raw) as {
-      blocks?: Array<{
-        blockId: string;
-        lessonId?: string;
-        leaf?: string;
-        meta?: unknown;
-        compatibility?: 'automatic' | 'legacy-unsupported' | 'source-placeholder';
-        locale?: string;
-        l10nId?: string;
-      }>;
-      uploads?: Record<string, { reviewPrefix?: string }>;
-    };
-    const byBlock = new Map<string, { reviewPrefix: string; meta?: unknown; title?: string }>();
-    const byBlockLocale = new Map<
-      string,
-      { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
-    >();
-    for (const b of m.blocks ?? []) {
-      // Legacy packages may exist in pre-policy manifests and may even have a
-      // stale upload record from an `unpackFailed` Review item. They must never
-      // reach copy_review_item; the planner inserts the explicit placeholder.
-      if (
-        b.compatibility === 'legacy-unsupported' ||
-        isKnownLegacyStorylineMeta(b.meta)
-      ) continue;
-      if (!b.leaf) continue;
-      const reviewPrefix = m.uploads?.[b.leaf]?.reviewPrefix;
-      if (!reviewPrefix) continue;
-      // Every manifest since Stage D records lessonId; an entry without one
-      // cannot be joined safely, so it's skipped here and the plan flags that
-      // block for manual attach (loud in the report, never a wrong attach).
-      if (!b.lessonId) continue;
-      const key = blockKey(b.lessonId, b.blockId);
-      const title =
-        b.meta && typeof b.meta === 'object' ? (b.meta as { title?: string }).title : undefined;
-      if (b.locale) {
-        byBlockLocale.set(`${key}|${b.locale}`, {
-          locale: b.locale,
-          l10nId: b.l10nId,
-          reviewPrefix,
-          meta: b.meta,
-          title,
-        });
-      } else {
-        byBlock.set(key, { reviewPrefix, meta: b.meta, title });
-      }
-    }
-    return byBlock.size || byBlockLocale.size ? { byBlock, byBlockLocale } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Collect the banks referenced by draw-from-bank blocks in a course doc. */
-async function readReferencedBanks(
-  storage: Storage,
-  course: PlanInput['course'],
-): Promise<Map<string, SourceBank>> {
-  const ids = new Set<string>();
-  for (const l of course.lessons ?? []) {
-    for (const b of (l.items ?? []) as Block[]) {
-      if (`${b.family}/${b.variant}` === 'knowledgeCheck/draw from question bank') {
-        const { bankId } = findBankRef(b);
-        if (bankId) ids.add(bankId);
-      }
-    }
-  }
-  const out = new Map<string, SourceBank>();
-  for (const id of ids) {
-    const raw = await storage.readQuestionBank(id);
-    if (!raw) continue;
-    try {
-      const doc = JSON.parse(raw) as SourceBank;
-      out.set(id, doc);
-    } catch {
-      /* skip unreadable bank */
-    }
-  }
-  return out;
-}
 
 export interface ImportOptions {
   dryRun: boolean;
@@ -429,53 +189,6 @@ function parsePriorReport(raw: string | null | undefined): PriorCourseReport | n
   }
 }
 
-/**
- * Run an import for the selected source course ids. Enforces the Source ≠ Target
- * guard once up front, then imports each course strictly sequentially. Persists
- * `_import/<courseId>.report.{md,json}` + `<courseId>.joblog.json` (resume map).
- */
-/** "Ready to import?" — rough pre-run estimate for the selected courses.
- *  Local only (archive reads + pure buildPlan; no network, no ids minted).
- *  Returns per-course estimates + the language count so the UI can show
- *  "N courses (M multi-language), ~X min (rough)". */
-export async function estimateCourses(
-  storage: Storage,
-  courseIds: string[],
-): Promise<{
-  estimate: ImportEstimate;
-  stacks: number;
-  missing: number;
-  /** Archived but unusable: the course read/plan threw (a malformed archive or
-   *  a plan-level refusal) — distinct from `missing` (not in the archive). */
-  unreadable: number;
-}> {
-  const per: ImportEstimate[] = [];
-  let stacks = 0;
-  let missing = 0;
-  let unreadable = 0;
-  for (const courseId of courseIds) {
-    const raw = await storage.readCourse(courseId);
-    if (!raw) {
-      missing++;
-      continue;
-    }
-    try {
-      const course = unwrap(raw);
-      if (isLocalizedStack(course)) stacks++;
-      const { entries } = await readCourseAssets(storage, courseId);
-      const steps = buildPlan({
-        course,
-        assets: entries,
-        banksById: new Map(),
-        author: 'estimate',
-      });
-      per.push(estimateImportSeconds(steps, entries));
-    } catch {
-      unreadable++;
-    }
-  }
-  return { estimate: sumEstimates(per), stacks, missing, unreadable };
-}
 
 export async function runImport(
   storage: Storage,
@@ -489,226 +202,32 @@ export async function runImport(
   // Rows for the single run-level CSV (one file for the whole run), built per course.
   const csvCourses: RunCsvCourse[] = [];
 
-  // Selected-input readiness is the first gate, before target pinning,
-  // authentication, or any network work. Validate only what this run will use:
-  // files exist, selected course JSON parses, and its media refs are covered.
-  // Export-time hashes are intentionally NOT enforced; local replacement assets
-  // are an operator-supported workflow.
-  const archive = await inspectSelectedArchive(storage, courseIds);
-  if (!archive.ready) {
-    const reason = `Archive is not ready: ${archiveErrorSummary(archive) || 'validation failed'}`;
-    onEvent({ kind: 'log', message: `BLOCKED: ${reason}` });
-    return { blocked: reason, outcomes };
+  // Run-level setup (gates, pin, token heartbeat, account inputs, preflight,
+  // probe/label caches, ETA) — split to ./import-run-setup (v0.9.0).
+  const setup = await prepareImportRun(storage, courseIds, target, opts, onEvent, pacing);
+  if ('blocked' in setup) {
+    return { blocked: setup.blocked, outcomes };
   }
+  const {
+    send,
+    relay,
+    pacedWithHeartbeat,
+    refreshForCourse,
+    sourceTypefaces,
+    readFontBytes,
+    targetTypefaces,
+    boundBanks,
+    folderIdMap,
+    typefaceSeed,
+    courseFolders,
+    missingByCourse,
+    builtinProbeCache,
+    probeBuiltinAsset,
+    labelSetCache,
+    fetchAvailableLangs,
+    emitStatus,
+  } = setup;
 
-  // Safe-import gate: never write into the source account (unless overridden).
-  const source = await readSourceIdentity(storage);
-  const verdict = checkSourceNotTarget(source, target, opts.override);
-  if (!verdict.ok && !opts.dryRun) {
-    onEvent({ kind: 'log', message: `BLOCKED: ${verdict.reason}` });
-    return { blocked: verdict.reason, outcomes };
-  }
-  onEvent({
-    kind: 'log',
-    message: `${opts.dryRun ? 'DRY-RUN' : 'LIVE'} import → ${target?.name ?? 'unknown target'} (${verdict.reason})`,
-  });
-
-  // Pin the run to ONE target tab before anything touches the network. A live run
-  // that can't be pinned is blocked (writes must never follow window focus); a
-  // dry run only reads, so it proceeds unpinned with a warning.
-  const { pin, blocked } = await pinTargetTab(target, onEvent);
-  if (blocked && !opts.dryRun) {
-    onEvent({ kind: 'log', message: `BLOCKED: ${blocked}` });
-    return { blocked, outcomes };
-  }
-  if (blocked) onEvent({ kind: 'log', message: `WARN ${blocked} — dry run continues (reads only)` });
-  const relay = makePinnedRelay(pin);
-  const send = pinnedRpc(pin);
-
-  // Start on a fresh bearer: the panel may have been idle since the token was
-  // last captured, so the very first reads (target fonts) could otherwise 403.
-  await refreshToken(onEvent, 'run start', pin);
-
-  // Token heartbeat: Rise's own editor refreshes the session continuously (~30s
-  // lifecycle/refresh) so the bearer is always fresh. We don't need that cadence
-  // (we're paced, and re-auth before each course gives a full ~15min window), but a
-  // single LONG course (hundreds of paced writes) can outlast the token mid-course.
-  // So we proactively refresh during a course if the bearer has been held too long
-  // — woven into the paced gap between writes. `lastAuthMs` is reset by every
-  // refresh (run-start, per-course, heartbeat).
-  let lastAuthMs = Date.now();
-  const HEARTBEAT_MS = 5 * 60_000; // well under the ~15min token, far calmer than Rise's 30s
-  const pacedWithHeartbeat = async (): Promise<void> => {
-    if (!opts.dryRun && Date.now() - lastAuthMs > HEARTBEAT_MS) {
-      await refreshToken(onEvent, 'heartbeat', pin);
-      lastAuthMs = Date.now();
-    }
-    await pacedDelay(pacing);
-  };
-
-  // Account-level typeface migration inputs (load once): the source account's
-  // typefaces + the font key→archive-file map, so the import can match fonts by
-  // name on the target and recreate custom ones.
-  const tfRaw = await storage.readTypefaces();
-  const sourceTypefaces = tfRaw ? parseTypefaces(safeJson(tfRaw)) : new Map();
-  const readFontBytes = makeFontReader(storage, await readFontManifest(storage));
-
-  // TARGET account typefaces — fetched once against a *live existing* course.
-  // FETCH_TYPEFACES 404s on a just-created course id, so we can't ask the
-  // brand-new course; we match fonts by name + dedup recreation against this.
-  const targetTypefaces = await fetchTargetTypefaces(onEvent, pin);
-
-  // Cross-step state from the account-settings (A) + banks (B) operations, if
-  // they were run first: folder + typeface id maps, and the imported-bank map for
-  // auto-binding draw-from-bank blocks. (Persisted under `_import/`.)
-  const accountMap = await readAccountIdMap(storage);
-  const boundBanks = await readBankIdMap(storage);
-  // Folders: prefer the map persisted by step A; else create them here when the
-  // caller opted in (back-compat for a one-shot course import without step A).
-  const folderIdMap =
-    accountMap.folders.size > 0
-      ? accountMap.folders
-      : opts.recreateFolders === false
-        ? new Map<string, string>()
-        : await setupFolders(storage, target, opts.dryRun, pacing, onEvent, pin);
-  const typefaceSeed = accountMap.typefaces;
-  if (boundBanks.size > 0) {
-    onEvent({ kind: 'log', message: `Auto-binding draw-from-bank to ${boundBanks.size} imported bank(s).` });
-  }
-  const courseFolders = await readCourseFolders(storage);
-
-  // --- Pre-flight: does the archive actually HOLD the media it references? ---
-  // "Download assets" is a separate export step and easy to forget; without it
-  // every course with media dies on its first upload AFTER the course (and, for a
-  // stack, its languages) already exist. Warn once, up front, naming the courses.
-  // The per-id result is memoized (missingByCourse) so the per-course skip
-  // check in the run loop below doesn't redo the same archive reads + scan.
-  const missingByCourse = new Map<string, number>();
-  {
-    const short: { id: string; title?: string; missing: number }[] = [];
-    for (const [idx, id] of courseIds.entries()) {
-      onEvent({
-        kind: 'log',
-        message: `[${idx + 1}/${courseIds.length} preflight] checking archived assets…`,
-      });
-      const raw = await storage.readCourse(id);
-      if (!raw) continue;
-      const doc = unwrap(raw);
-      const { entries } = await readCourseAssets(storage, id);
-      const missing = missingAssetKeys(doc, id, entries);
-      missingByCourse.set(id, missing.length);
-      if (missing.length) {
-        short.push({
-          id,
-          title: typeof doc.course?.title === 'string' ? doc.course.title : undefined,
-          missing: missing.length,
-        });
-      }
-    }
-    if (short.length) {
-      onEvent({
-        kind: 'log',
-        message:
-          `⚠ ASSETS MISSING FROM THE ARCHIVE — did you forget Export → "Download assets"? ` +
-          `${short.length} of ${courseIds.length} selected course(s) reference media this archive has no bytes for; ` +
-          `they will be SKIPPED (nothing is created for them):`,
-      });
-      for (const c of short) {
-        onEvent({
-          kind: 'log',
-          message: `    - ${c.title ?? c.id}: ${c.missing} missing asset(s)`,
-        });
-      }
-    }
-  }
-
-  // --- Built-in (library/CDN) assets: verify on the TARGET plane -------------
-  // These are copied verbatim (nothing to re-upload), but the two planes' asset
-  // libraries are not known to be identical — a region may not serve a given
-  // file. Probe once per distinct reference, run-wide, and let the executor flag
-  // whatever it cannot confirm. A public CDN request: outside the pacing
-  // invariant, and `no-store` so a probe never poisons the browser cache.
-  const builtinProbeCache = new Map<
-    string,
-    { value: string; available: boolean | null; probedUrl: string; status?: number }
-  >();
-  const probeBuiltinAsset = async (url: string): Promise<{ ok: boolean; status: number }> => {
-    try {
-      const r = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-      return { ok: r.ok, status: r.status };
-    } catch {
-      return { ok: false, status: 0 };
-    }
-  };
-
-  // --- Multi-language stacks (docs/rise-multilang.md): run-level state ---
-  // Account-scoped label sets recreated once per run (source set id → target id).
-  const labelSetCache = new Map<string, string>();
-  // Target's supported translation pairs, keyed by SOURCE language — fetched
-  // lazily, once, only when the run contains a stack. Localization is free on
-  // every subscription; this is purely a locale-code sanity check (cross-plane
-  // drift), so a fetch failure downgrades to a warning (POST /translations
-  // still fails loudly if wrong). Capture-confirmed shapes (capture_31july):
-  //   GET /manage/api/subscription → {…, subscription: {subscription_id, …}}
-  //   GET …/available-languages → {languagesInfo: {sourceLangs: [...],
-  //     targetLangsIndexedBySourceLang: {<src>: [{targetLang, …}, …]}}}
-  let availableBySource: Map<string, Set<string>> | null | undefined;
-  const fetchAvailableLangs = async (): Promise<Map<string, Set<string>> | null> => {
-    if (availableBySource !== undefined) return availableBySource;
-    try {
-      await pacedDelay(pacing); // paced like every other authoring-plane read
-      const sub = await relay(getSubscription());
-      const subBody = sub.ok ? (safeJson(sub.text) as Record<string, unknown>) : {};
-      const subscription = (subBody?.subscription ?? {}) as Record<string, unknown>;
-      const subId = String(subscription.subscription_id ?? '');
-      if (!subId) throw new Error(`subscription id unavailable (HTTP ${sub.status})`);
-      await pacedDelay(pacing);
-      const al = await relay(getAvailableLanguages(subId));
-      if (!al.ok) throw new Error(`available-languages HTTP ${al.status}`);
-      const body = safeJson(al.text) as Record<string, unknown>;
-      const info = (body?.languagesInfo ?? {}) as Record<string, unknown>;
-      const indexed = (info.targetLangsIndexedBySourceLang ?? {}) as Record<string, unknown>;
-      const map = new Map<string, Set<string>>();
-      for (const [src, arr] of Object.entries(indexed)) {
-        if (!Array.isArray(arr)) continue;
-        const codes = arr
-          .map((t) => String((t as Record<string, unknown>)?.targetLang ?? ''))
-          .filter(Boolean);
-        if (codes.length) map.set(src, new Set(codes));
-      }
-      availableBySource = map.size ? map : null;
-      if (!availableBySource) {
-        onEvent({
-          kind: 'log',
-          message: 'WARN available-languages returned no target list — skipping the locale-code sanity check',
-        });
-      }
-    } catch (e) {
-      availableBySource = null;
-      onEvent({
-        kind: 'log',
-        message: `WARN could not read available-languages (${(e as Error).message}) — skipping the locale-code sanity check`,
-      });
-    }
-    return availableBySource;
-  };
-
-  // ETA: project remaining time from elapsed wall-clock and the fraction of work
-  // done (course index + within-course step fraction). Self-correcting and pacing-
-  // agnostic — no need to hardcode per-block/asset times. Live runs only.
-  const numCourses = courseIds.length;
-  const runStart = Date.now();
-  const emitStatus = (i: number, done: number, total: number): void => {
-    if (opts.dryRun) return;
-    onEvent(
-      etaStatus({
-        label: `Importing ${i + 1}/${numCourses}`,
-        doneFraction: (i + (total ? done / total : 0)) / Math.max(1, numCourses),
-        runStartMs: runStart,
-        nowMs: Date.now(),
-      }),
-    );
-  };
 
   let stopped = false;
   for (const [i, courseId] of courseIds.entries()) {
@@ -777,8 +296,7 @@ export async function runImport(
     // and the first ducks call (UPDATE_COURSE_FIELD_THROTTLE / CREATE_LESSON)
     // 403s on a token that lapsed during the previous course. Per-course refresh
     // keeps each course starting on a token with the full ~15 min window.
-    await refreshToken(onEvent, pfx, pin);
-    lastAuthMs = Date.now();
+    await refreshForCourse(pfx);
 
     const { entries, fileByKey, unresolved } = await readCourseAssets(storage, courseId);
     // Media whose bytes are missing for a NON-terminal reason (500 / network) is an
@@ -958,278 +476,34 @@ export async function runImport(
 
     const report = buildFidelityReport(steps, res, courseId, courseTitle);
 
-    // Read-back parity (live, successful runs only): paced GET_COURSE of the new
-    // course → structural diff vs the archived source. The true round-trip check.
-    // Done BEFORE persisting so it folds into the consolidated report.
+    // Read-back parity (live, successful runs only) — split to
+    // ./import-readback (v0.9.0). Mutates `report` exactly as the inline block
+    // did; the outputs feed the consolidated report below.
     let parity: ParityReport | undefined;
-    // Set when the read-back proves a source/foreign media key survived ON THE
-    // TARGET — the executor's own check only inspects a locally derived document.
     let readBackForeign: string[] = [];
-    // Multi-language stack read-back: translation-table parity + per-language
-    // pending-translation counts (informational — see the report warning).
     let l10nParity: L10nParityReport | undefined;
     let l10nPending: Record<string, number> | undefined;
     let l10nPendingSet: PendingSetReport | undefined;
     let aiTextCells: string[] | undefined;
     if (!opts.dryRun && res.ok && res.newCourseId) {
-      await pacedDelay(pacing);
-      onEvent({ kind: 'log', message: `Verifying parity (read-back GET_COURSE ${res.newCourseId})…` });
-      // Pinned like every other request of the run: the read-back must GET the
-      // course from the tab we wrote it to, or an unpinned re-resolve could ask
-      // the SOURCE account for an id that only exists on the target (404 → a
-      // false "could not verify" on a course that is actually fine).
-      const rb = await send({ type: 'GET_COURSE', courseId: res.newCourseId });
-      if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
-        const targetDoc = unwrap(rb.result.data.raw);
-        parity = verifyParity(course, targetDoc, res.flags);
-
-        // INVARIANT, measured on the REAL target (CLAUDE.md: "no source media keys
-        // may survive"). The executor asserts this against a doc it derived itself,
-        // which can only ever confirm its own bookkeeping; this reads what Rise
-        // actually stored. Any uploaded key not owned by the new course / new banks
-        // is a key that wasn't remapped → fail this course loudly.
-        const targetOwners = new Set<string>([res.newCourseId]);
-        for (const sourceBankId of banksById.keys()) {
-          const newBankId = res.idMap[sourceBankId] ?? boundBanks.get(sourceBankId)?.newBankId;
-          if (newBankId) targetOwners.add(newBankId);
-        }
-        readBackForeign = [
-          ...findForeignMediaKeys(targetDoc, targetOwners),
-          ...findLocalAssetRefs(targetDoc).map(
-            (ref) => `local-asset:${ref.assetPath}@${ref.path}`,
-          ),
-        ];
-
-        // Typeface IDENTITY: parity tokenizes ids, so it proves a font is bound
-        // but not WHICH — resolve the three binding slots to names on both
-        // sides (course.typefaces maps id → name in every GET_COURSE).
-        {
-          const hadTypefaceFlag = res.flags.some((f) => f.kind === 'typeface');
-          const tf = verifyTypefaceBindings(course, targetDoc, hadTypefaceFlag);
-          for (const i of tf.issues) {
-            parity.issues.push({ kind: 'course-field-changed', path: i.path, detail: i.detail });
-            parity.ok = false;
-          }
-          for (const i of tf.expected) {
-            parity.expectedDivergences.push({
-              kind: 'course-field-changed',
-              path: i.path,
-              detail: i.detail,
-              expected: true,
-            });
-          }
-          if (tf.issues.length) {
-            onEvent({
-              kind: 'log',
-              message: `${pfx} ⚠ typeface read-back: ${tf.issues.map((i) => `${i.path} (${i.detail})`).join('; ')}`,
-            });
-          }
-        }
-
-        // Storyline bundles: copy_review_item's 200 proved the copy request was
-        // accepted — HEAD the copied bundle's story.html on usercontent (public
-        // read, outside pacing) to confirm it actually exists and serves.
-        for (const prefix of res.storylinePrefixes ?? []) {
-          // Plane-pinned probe only: with no known target plane, guessing a
-          // host would report a false "not readable" against the wrong CDN.
-          if (!target?.plane) {
-            onEvent({
-              kind: 'log',
-              message: `${pfx} ⚠ storyline read-back skipped for ${prefix}/story.html — target plane unknown, cannot pick a usercontent host`,
-            });
-            continue;
-          }
-          const base = target.plane === 'eu'
-            ? 'https://articulateusercontent.eu/'
-            : 'https://articulateusercontent.com/';
-          let ok = false;
-          let status = 0;
-          try {
-            const r = await fetch(`${base}${prefix}/story.html`, { method: 'HEAD', cache: 'no-store' });
-            ok = r.ok;
-            status = r.status;
-          } catch {
-            /* network error → unverified */
-          }
-          if (ok) {
-            onEvent({ kind: 'log', message: `${pfx} storyline read-back OK — ${prefix}/story.html` });
-          } else {
-            parity.issues.push({
-              kind: 'media-missing',
-              path: `storyline ${prefix}/story.html`,
-              detail: `attached bundle not readable on usercontent (HTTP ${status})`,
-            });
-            parity.ok = false;
-            onEvent({
-              kind: 'log',
-              message: `${pfx} ⚠ storyline read-back: ${prefix}/story.html not readable (HTTP ${status})`,
-            });
-          }
-        }
-        if (readBackForeign.length) {
-          report.ok = false;
-          report.survivingSourceKeys = [
-            ...new Set([...report.survivingSourceKeys, ...readBackForeign]),
-          ];
-          report.error =
-            `Read-back FAILED: ${readBackForeign.length} foreign media key(s) survived on the target ` +
-            `course ${res.newCourseId} (${readBackForeign.slice(0, 3).join(', ')}${readBackForeign.length > 3 ? ', …' : ''})`;
-          onEvent({ kind: 'log', message: `${pfx} ${report.error} — course kept; re-run to repair, or fix those blocks manually` });
-        }
-
-        // Multi-language stack: verify the translation tables cell-by-cell
-        // (locale sets, per-locale values modulo media remap) and read back the
-        // per-language pending counts for the report.
-        if (courseIsStack) {
-          // ONLY the FLAGGED storyline cells (flag-l10n-storyline: no staged
-          // package for that language) are deliberately not copied — their
-          // absence is announced, not a failure (docs/rise-multilang.md §4.3b).
-          // Cells the run ATTACHED are not tolerated: if an attached storyline
-          // cell is missing on read-back, the write was lost and that is a
-          // real divergence, not an expected absence.
-          const toleratedMissing = new Set<string>();
-          for (const s of steps) {
-            if (s.kind === 'flag-l10n-storyline') {
-              for (const loc of s.locales) toleratedMissing.add(`${s.l10nId} ${loc}`);
-            }
-          }
-          // Refs the pairing could not match (flagged l10n-ref at await-stack)
-          // are deliberately NOT written — the target has no ref to address.
-          // Their announced absence is tolerated. Also tolerated MISSING: the
-          // default-locale rows of source cells — idea 2 never writes default
-          // rows; their VALUES are verified through the materialized build
-          // (block/course-field parity), not the cell tables.
-          const pairMap = new Map(Object.entries(res.l10nRefMap ?? {}));
-          const allLocaleCodes = Object.keys(course.l10n?.translations ?? {});
-          for (const table of Object.values(course.l10n?.translations ?? {})) {
-            for (const id of Object.keys(table)) {
-              if (!pairMap.has(id)) {
-                for (const code of allLocaleCodes) toleratedMissing.add(`${id} ${code}`);
-              }
-            }
-          }
-          l10nParity = verifyL10nParity(course, targetDoc, {
-            toleratedMissing,
-            idMap: pairMap,
-            toleratedExtra: new Set(res.l10nExpectedExtra ?? []),
-          });
-          // Target rows in locales the source serves by fallback are the
-          // conversion's AI translations of REAL content (idea 2) — expected,
-          // status-neutral, listed as aiTextCells in the report. No manual-work
-          // flag: the operator reviews the report list, nothing is broken.
-          if (l10nParity.placeholderJunk?.length) {
-            onEvent({
-              kind: 'log',
-              message:
-                `${pfx} NOTE ${l10nParity.placeholderJunk.length} cell(s) hold the conversion's AI ` +
-                `translation in languages the source serves by default-language fallback — expected ` +
-                `under the full-course-first import; see the AI-text list in ${courseId}.report.md`,
-            });
-          }
-          // Per-language label-set bindings: every source locale with a CUSTOM
-          // set must be bound on the target to the set this run recreated for it.
-          for (const row of stackLocales(course)) {
-            const code = String(row.locale ?? '');
-            const srcSet = typeof row.labelSetId === 'string' ? row.labelSetId : null;
-            if (!code || !srcSet || code === defaultLocaleOf(course)) continue;
-            const expectedSet = labelSetCache.get(srcSet);
-            const tgtRow = stackLocales(targetDoc).find((r) => r.locale === code);
-            const actual = typeof tgtRow?.labelSetId === 'string' ? tgtRow.labelSetId : null;
-            if (!actual || (expectedSet && actual !== expectedSet)) {
-              l10nParity.issues.push({
-                kind: 'labelset-binding',
-                locale: code,
-                detail: actual
-                  ? `bound to ${actual}, expected ${expectedSet}`
-                  : 'custom label set not bound on the target',
-              });
-              l10nParity.ok = false;
-            }
-          }
-          onEvent({
-            kind: 'log',
-            message: l10nParity.ok
-              ? `Language parity OK — ${l10nParity.cells.compared} cell(s) match across ${l10nParity.locales.target.length} language(s)`
-              : `Language parity DIVERGENCES — ${l10nParity.issues.length} issue(s) (see ${courseId}.report.md)`,
-          });
-          if (!l10nParity.ok) {
-            report.ok = false;
-            report.error =
-              report.error ??
-              `Language read-back FAILED: ${l10nParity.issues.length} translation divergence(s) on ${res.newCourseId}`;
-          }
-          // Pending translations — measured as a SET (F5). `pendingChangesCount`
-          // is LAZY (0 at read-back, populated hours later) and the badge
-          // number is a segment-ish tally, so counts are recorded as decoration
-          // only; `…/translations/updates` lists each pending (l10nId, locale)
-          // entry and is the truth. Expected set after this import shape: EMPTY
-          // (the conversion stamps every cell; no default row is written after
-          // it). Non-empty → warn + record, never fail the course on it (the
-          // signal itself can materialize lazily — the report says to re-check).
-          await pacedDelay(pacing);
-          const tr = await relay(getTranslations(res.newCourseId));
-          if (tr.ok && tr.text) {
-            const body = safeJson(tr.text) as Record<string, unknown>;
-            const items = Array.isArray(body?.stackItems)
-              ? (body.stackItems as Record<string, unknown>[])
-              : [];
-            l10nPending = {};
-            for (const it of items) {
-              const code = String(it.locale ?? '');
-              const n = typeof it.pendingChangesCount === 'number' ? it.pendingChangesCount : 0;
-              if (code && n > 0) l10nPending[code] = n;
-            }
-          }
-          await pacedDelay(pacing);
-          const up = await relay(getTranslationUpdates(res.newCourseId));
-          if (up.ok && up.text) {
-            const parsed = parseTranslationUpdates(safeJson(up.text));
-            l10nPendingSet = {
-              count: parsed.pending.length,
-              keys: parsed.pending.map(pendingKey).slice(0, 50),
-              updateCount: parsed.updateCount,
-              inProgress: parsed.inProgress,
-            };
-            if (parsed.pending.length === 0) {
-              onEvent({
-                kind: 'log',
-                message: `${pfx} pending translations: 0 — every cell stamped (expected)`,
-              });
-            } else {
-              onEvent({
-                kind: 'log',
-                message:
-                  `${pfx} ⚠ pending translations: ${parsed.pending.length} cell(s) ` +
-                  `(badge tally ${parsed.updateCount ?? '—'}) — expected 0 after this import shape. ` +
-                  'The signal can materialize lazily; re-check Manage languages later and see ' +
-                  `${courseId}.report.md. Do NOT run "Update translation" before understanding the list.`,
-              });
-            }
-          } else {
-            onEvent({
-              kind: 'log',
-              message: `${pfx} ⚠ pending-set read-back unavailable (HTTP ${up.status}) — check Manage languages manually`,
-            });
-          }
-          // Default-only TEXT cells: the one knowable divergence of this import
-          // shape — the conversion's AI text persists where the source serves a
-          // locale by default-language fallback (media lands exactly; text
-          // cannot). Listed in the report for review.
-          aiTextCells = defaultOnlyTextCells(course).map((c) => `${c.l10nId} ${c.locale}`);
-        }
-        const blockingReadBackIssues =
-          parity.issues.length +
-          readBackForeign.length +
-          (l10nParity?.issues.length ?? 0);
-        onEvent({
-          kind: 'log',
-          message: blockingReadBackIssues === 0
-            ? `Read-back confirmation OK — ${parity.blocks.compared} block(s), course fields/settings, media ownership${l10nParity ? ', and language cells' : ''} match (${parity.expectedDivergences.length} announced exception(s))`
-            : `Read-back confirmation FAILED — ${blockingReadBackIssues} blocking divergence(s) (see ${courseId}.report.md)`,
-        });
-      } else {
-        onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${res.newCourseId}` });
-      }
+      ({ parity, readBackForeign, l10nParity, l10nPending, l10nPendingSet, aiTextCells } =
+        await verifyCourseReadBack({
+          pacing,
+          onEvent,
+          send,
+          relay,
+          course,
+          res,
+          steps,
+          banksById,
+          boundBanks,
+          target,
+          pfx,
+          courseIsStack,
+          labelSetCache,
+          courseId,
+          report,
+        }));
     }
 
     // A successful live write is not "imported" until GET_COURSE read-back was
@@ -1386,81 +660,4 @@ export async function runImport(
   };
 }
 
-/** Emit a run-level summary: counts by status + the ids needing attention or
- *  manual cleanup (resumable partials, orphaned shells, orphaned banks, not-started). */
-function emitRunSummary(
-  onEvent: (e: ProgressEvent) => void,
-  outcomes: CourseImportOutcome[],
-  notStarted: string[],
-  stopped: boolean,
-  dryRun: boolean,
-): void {
-  const by = (s: CourseStatus): CourseImportOutcome[] => outcomes.filter((o) => o.status === s);
-  const imported = by('imported');
-  const planned = by('planned');
-  const partial = by('partial');
-  const stoppedC = by('stopped');
-  const failed = by('failed');
 
-  onEvent({ kind: 'log', message: `— Run summary${stopped ? ' (STOPPED)' : ''} —` });
-  const parts: string[] = [];
-  parts.push(dryRun ? `${planned.length} planned` : `${imported.length} imported`);
-  if (partial.length) parts.push(`${partial.length} partial`);
-  if (stoppedC.length) parts.push(`${stoppedC.length} stopped`);
-  if (failed.length) parts.push(`${failed.length} failed`);
-  if (notStarted.length) parts.push(`${notStarted.length} not started`);
-  onEvent({ kind: 'log', message: `  ${parts.join(', ')}` });
-
-  if (partial.length) {
-    onEvent({
-      kind: 'log',
-      message:
-        `  needs review (re-run only retries supported writes): ` +
-        partial.map((o) => `"${o.title ?? o.courseId}"`).join(', '),
-    });
-  }
-  if (stoppedC.length) {
-    onEvent({
-      kind: 'log',
-      message: `  stopped/resumable (re-run to continue): ${stoppedC.map((o) => `"${o.title ?? o.courseId}"`).join(', ')}`,
-    });
-  }
-  const orphanCourses = outcomes.filter((o) => o.orphanedCourseId);
-  if (orphanCourses.length) {
-    onEvent({
-      kind: 'log',
-      message: `  orphaned course shells left in place (delete manually if needed): ${orphanCourses.map((o) => o.orphanedCourseId).join(', ')}`,
-    });
-  }
-  const orphanBanks = outcomes.flatMap((o) =>
-    o.report.flags.filter((f) => f.kind === 'orphan-bank').map((f) => f.detail),
-  );
-  if (orphanBanks.length) {
-    onEvent({ kind: 'log', message: `  orphaned/incomplete banks left in place (delete manually if needed):` });
-    for (const d of orphanBanks) onEvent({ kind: 'log', message: `    - ${d}` });
-  }
-  if (notStarted.length) {
-    onEvent({ kind: 'log', message: `  not started: ${notStarted.length} course(s) — re-run to import` });
-  }
-}
-
-/** Course id → source folderId, from `_metadata/inventory.json`. */
-async function readCourseFolders(storage: Storage): Promise<Map<string, string>> {
-  const m = new Map<string, string>();
-  const raw = await storage.readInventory();
-  if (!raw) return m;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    const rows = Array.isArray(parsed)
-      ? parsed
-      : ((parsed as { items?: unknown[] }).items ?? []);
-    for (const r of rows as Record<string, unknown>[]) {
-      if (typeof r.id === 'string' && typeof r.folderId === 'string' && r.folderId) {
-        m.set(r.id, r.folderId);
-      }
-    }
-  } catch {
-    /* tolerate */
-  }
-  return m;
-}

@@ -55,6 +55,55 @@ describe('checkSourceNotTarget', () => {
     }
   });
 
+  // Account-local user ids (recorded at export since v0.9.0) are ACCOUNT-scoped
+  // — the strongest evidence on either side of the verdict.
+  it('blocks on a matching account-local userId as the strongest evidence (matchedBy userId)', () => {
+    const v = checkSourceNotTarget(
+      { ...src, userId: 'auth0|acct-1' },
+      { name: 'Renamed Team', sub: 'aid|other-login', userId: 'auth0|acct-1', plane: 'us' },
+    );
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.matchedBy).toBe('userId');
+      expect(v.reason).toMatch(/this IS the source account/i);
+    }
+  });
+
+  it('still blocks a sub match with provably different accounts, naming BOTH readings (one login in two accounts vs SSO drift)', () => {
+    // sub is the login's plane-stable aid| id: one person with seats in both
+    // accounts trips it, and so does the previous login's SSO-drift token —
+    // indistinguishable at a single instant, so the guard must keep blocking.
+    const v = checkSourceNotTarget(
+      { name: 'Elza Upmane', sub: 'aid|852c', userId: 'auth0|elza-us', plane: 'us' },
+      { name: 'Konstantin S', sub: 'aid|852c', userId: 'auth0|konst-eu', plane: 'eu' },
+    );
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.matchedBy).toBe('sub');
+      expect(v.reason).toMatch(/same Articulate LOGIN/i);
+      expect(v.reason).toMatch(/account-local user ids differ/i);
+      expect(v.reason).toMatch(/Override to proceed/i);
+      expect(v.reason).toMatch(/SSO session/i);
+    }
+  });
+
+  it('allows different logins AND different account-local ids across planes', () => {
+    const v = checkSourceNotTarget(
+      { name: 'Elza Upmane', sub: 'aid|852c', userId: 'auth0|elza-us', plane: 'us' },
+      { name: 'Konstantin S', sub: 'aid|4c81', userId: 'auth0|konst-eu', plane: 'eu' },
+    );
+    expect(v.ok).toBe(true);
+  });
+
+  it('overriding a same-login different-account block still works', () => {
+    const v = checkSourceNotTarget(
+      { sub: 'aid|852c', userId: 'auth0|elza-us', plane: 'us' },
+      { sub: 'aid|852c', userId: 'auth0|konst-eu', plane: 'eu' },
+      true,
+    );
+    expect(v.ok).toBe(true);
+  });
+
   it('allows distinct signed-in users across different Rise planes', () => {
     const v = checkSourceNotTarget(
       { sub: 'auth0|source', plane: 'us' },

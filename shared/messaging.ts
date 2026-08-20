@@ -53,6 +53,10 @@ export interface SessionState {
    *  the valid principal for folder ownership — NOT the token `sub`, which on a
    *  cross-plane session is a different (Okta) id the folders API rejects. */
   userId: string | null;
+  /** Course id of the editor open in the write tab (`/authoring/<id>` routes
+   *  only — dashboard/preview/Review pages carry none). Falls back to a single
+   *  open editor tab; null otherwise. Drives the docx "Current tab" source. */
+  editorCourseId: string | null;
 }
 
 /** Requests the panel sends to the background. EVERY request may carry a `pin`

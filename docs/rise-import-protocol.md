@@ -870,7 +870,15 @@ its own dry-run + live run. They share state through small id-map artifacts unde
    THIS account".
 3. **Source ≠ Target guard.** Read the source identity from the archive's
    `manifest.json`; refuse to write into the same account/plane unless explicitly
-   overridden (prevents re-importing into the source).
+   overridden (prevents re-importing into the source). Evidence hierarchy
+   (v0.9.0): the **account-local user id** (`_articulate_user_id`, recorded in
+   the manifest since v0.9.0) is account-scoped and authoritative — a match IS
+   the source account. The JWT **`sub`** is the LOGIN's plane-stable Articulate
+   ID (`aid|<uuid>`, operator-confirmed 2026-08-20): a sub match with differing
+   account-local ids means either one login holding seats in both accounts
+   (override-able) or the previous login's SSO-drift token on the target origin
+   (the shared id.articulate.com SSO survives a site logout) — indistinguishable
+   at a single instant, so it stays a block with both readings named.
 4. **Archive stays read-only.** Derive the target payload from a **copy** of each source
    doc; never mutate `courses/*.json` etc.
 5. **Dry-run plan preview.** Default to DRY-RUN: produce the full ordered plan (every

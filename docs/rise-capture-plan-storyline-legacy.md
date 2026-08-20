@@ -14,7 +14,8 @@ generations. The zip container is not the incompatibility; `story.html` is.
 - Completed: 101 courses (89 newly packaged + 12 resumed/skipped).
 - Failed: 52 courses.
   - 51 failed the modern `story.html` repackage assertion.
-  - 1 separately failed `build/raw` with HTTP 404.
+  - 1 separately failed `build/raw` with HTTP 404 — since root-caused, see the
+    closing note at the bottom.
 - Every one of the 51 format-failure courses contains at least one legacy
   Storyline package: versions 3.9 or 3.26–3.34, or a mixed course containing one
   of those versions. Newer blocks in the same mixed course do not make the
@@ -136,3 +137,16 @@ Only after the donor pair exists:
 
 The one `build/raw` HTTP 404 is a separate investigation and must not be grouped
 under this format capture.
+
+> **RESOLVED (2026-08-20, operator-confirmed): `build/raw` 404 = publish-rights
+> gating.** On a US account where all 4 storyline courses 404'd identically
+> (`{"statusCode":404,"error":"NotFoundError"}` after a successful socket
+> `identify`), the Rise UI itself refused to publish the same courses with an
+> "owned by …" message. Rise's build route answers 404 for a course the
+> logged-in user cannot publish (owned by another seat), while ducks READS of
+> the same course still succeed — so content export works and only stage D
+> fails. Not plan gating (a stack without Localize answers **500**), not route
+> drift, not auth. Remedy: run stage D logged in as the owning user, or have
+> ownership transferred, then re-run — the stage is resumable and picks up only
+> the failed courses. (Do NOT "send a copy": a copy re-mints course/block ids
+> and breaks the storyline-manifest join.)
