@@ -204,6 +204,21 @@ export function blockKey(lessonId: string, blockId: string): string {
   return `${lessonId}\u0000${blockId}`;
 }
 
+/**
+ * The id under which plan + executor address a SOURCE block. Block ids are
+ * client-generated, and real courses have shipped blocks whose `id` is missing
+ * or not a string — those get a DETERMINISTIC positional fallback (`noid:<n>`,
+ * `n` = index in the lesson's `items` array; `:` never appears in a real id).
+ * Every blockKey derivation MUST go through this one function: the planner used
+ * to key such a block by `''` while `indexSource` skipped it, so the executor
+ * aborted the course with "Source block  not found". The fallback is not
+ * cuid-shaped, so `freshClientIds` mints a real id for the created block.
+ */
+export function sourceBlockIdOf(block: { id?: unknown }, index: number): string {
+  const id = block.id;
+  return typeof id === 'string' && id !== '' ? id : `noid:${index}`;
+}
+
 export function indexSource(course: GetCourseDocument): {
   lessons: Map<string, Lesson>;
   blocks: Map<string, { block: Block; lessonId: string }>;
@@ -213,10 +228,9 @@ export function indexSource(course: GetCourseDocument): {
   for (const l of course.lessons ?? []) {
     const lid = typeof l.id === 'string' ? l.id : '';
     if (lid) lessons.set(lid, l);
-    for (const b of (l.items ?? []) as Block[]) {
-      const bid = typeof b.id === 'string' ? b.id : '';
-      if (bid) blocks.set(blockKey(lid, bid), { block: b, lessonId: lid });
-    }
+    ((l.items ?? []) as Block[]).forEach((b, i) => {
+      blocks.set(blockKey(lid, sourceBlockIdOf(b, i)), { block: b, lessonId: lid });
+    });
   }
   return { lessons, blocks };
 }

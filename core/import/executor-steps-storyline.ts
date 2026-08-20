@@ -78,9 +78,9 @@ export async function handleAttachStoryline(
           // item's bundle into the course, then patch the (empty) block's
           // media.storyline to point at the copied bundle. The copy preserves the
           // review item's leaf, so contentPrefix = rise/courses/{courseId}/{leaf}.
-          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          const norm = ctx.normBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!entry || !meta) throw new WriteError('attach before block create', step.kind);
+          if (!norm || !meta) throw new WriteError('attach before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
           const leaf = step.reviewPrefix.split('/').filter(Boolean).pop() ?? '';
 
@@ -94,7 +94,16 @@ export async function handleAttachStoryline(
           );
 
           const contentPrefix = `rise/courses/${ctx.newCourseId}/${leaf}`;
-          const item = remapIds(entry.block, ids) as Record<string, unknown>;
+          // Rebuild FROM THE NORMALIZED (as-created) block — see normBlocks:
+          // re-normalizing the raw source block would mint different ids and
+          // the server 404s the update ("Block not found in lesson").
+          const item = remapIds(norm, ids) as Record<string, unknown>;
+          if (String(item.id ?? '') !== meta.newId) {
+            throw new WriteError(
+              `attach payload id ${String(item.id ?? '(none)')} != created block id ${meta.newId} — id-mint drift (code fault)`,
+              step.kind,
+            );
+          }
           const items = Array.isArray(item.items) ? item.items : [];
           const first = items[0];
           if (first && typeof first === 'object') {

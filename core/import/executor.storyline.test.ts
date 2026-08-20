@@ -157,3 +157,52 @@ describe('executePlan — storyline attach', () => {
     expect(copied).toBe(false);
   });
 });
+
+// Regression (observed 2026-08-20, live course went PARTIAL): the attach's
+// UPDATE_BLOCK_DEBOUNCE used to rebuild its payload from the RAW source block —
+// for a non-cuid source block id (freshClientIds re-mints those per call) the
+// item payload carried the source id and the server 404'd "Block not found in
+// lesson". The attach must rebuild from the block AS CREATED.
+describe('executePlan — storyline attach with a non-cuid source block id', () => {
+  it('the attach update targets the CREATED block id', async () => {
+    const sourceId = 'a7aee4ad-095d-443a-8cde-aedd7fb35e0f';
+    const input = storylineCourse(
+      new Map([
+        [
+          blockKey('L1', sourceId),
+          { reviewPrefix: 'review/items/LEAF1', meta: { title: 'S1' }, title: 'S1' },
+        ],
+      ]),
+    );
+    (input.course.lessons![0]!.items![0] as { id: string }).id = sourceId;
+    let createdId: string | undefined;
+    let update: any;
+    const { relay } = mockRelay({
+      ...happyHandlers,
+      CREATE_BLOCKS: (body: any) => {
+        createdId = body.payload.blocks[0].id;
+        return { payload: { success: true, blockMetadata: [{ id: createdId, globalBlockId: 'g1' }] } };
+      },
+      copy_review_item: () => [],
+      UPDATE_BLOCK_DEBOUNCE: (body: any) => {
+        update = body.payload;
+        return { payload: { success: true } };
+      },
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: '', contentType: '' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.storylineAttached).toBe(1);
+    expect(createdId).toBeTruthy();
+    expect(update).toBeTruthy();
+    expect(update.id).toBe(createdId);
+    expect(update.item.id).toBe(createdId);
+    expect(JSON.stringify(update)).not.toContain(sourceId);
+  });
+});

@@ -323,12 +323,21 @@ export async function handlePatchBlockMedia(
     buildCellChange,
     noteBuiltins,
   } = ctx;
-          const entry = srcBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
+          const norm = ctx.normBlocks.get(blockKey(step.sourceLessonId, step.sourceBlockId));
           const meta = blockMeta.get(blockKey(step.sourceLessonId, step.sourceBlockId));
-          if (!entry || !meta) throw new WriteError('patch before block create', step.kind);
+          if (!norm || !meta) throw new WriteError('patch before block create', step.kind);
           const newLessonId = ids.get(step.sourceLessonId)!;
-          // Build the patched block: remap ids, then swap source keys → new keys.
-          const patched = remapMediaKeys(remapIds(entry.block, ids), keyMap);
+          // Build the patched block FROM THE NORMALIZED (as-created) block:
+          // remap ids, then swap source keys → new keys. remapIds over the same
+          // normalized doc reproduces the created ids exactly (the shared IdMap
+          // answers the same for every id it minted at create time).
+          const patched = remapMediaKeys(remapIds(norm, ids), keyMap) as Record<string, unknown>;
+          if (String(patched.id ?? '') !== meta.newId) {
+            throw new WriteError(
+              `patch payload id ${String(patched.id ?? '(none)')} != created block id ${meta.newId} — id-mint drift (code fault)`,
+              step.kind,
+            );
+          }
           await send(
             env.updateBlockDebounce({
               id: meta.newId,

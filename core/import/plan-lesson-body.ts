@@ -9,7 +9,7 @@ import { isKnownLegacyStorylineBlock } from '@/core/storyline/compatibility';
 import type { Block, Lesson } from '@/shared/types/rise';
 import { courseImageKind } from './builtin-assets';
 // Type-only/runtime imports back from executor-types stay cycle-free (see plan.ts).
-import { blockKey } from './executor-types';
+import { blockKey, sourceBlockIdOf } from './executor-types';
 import {
   DRAW_FROM_BANK,
   coverCardImageKey,
@@ -206,8 +206,8 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
     steps.push({
       kind: 'create-blocks',
       sourceLessonId,
-      blocks: blocks.map((b) => ({
-        sourceBlockId: typeof b.id === 'string' ? b.id : '',
+      blocks: blocks.map((b, i) => ({
+        sourceBlockId: sourceBlockIdOf(b, i),
         family: String(b.family ?? ''),
         variant: String(b.variant ?? ''),
         ...(!stack && isStoryline(b) && isKnownLegacyStorylineBlock(b)
@@ -220,8 +220,8 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
     // 2. Per-block follow-ups — run AFTER every block exists, addressed by id,
     //    so they never affect ordering: storyline/draw-from-bank flags + binds,
     //    media upload + patch, orphan flags.
-    for (const block of blocks) {
-      const sourceBlockId = typeof block.id === 'string' ? block.id : '';
+    for (const [blockIdx, block] of blocks.entries()) {
+      const sourceBlockId = sourceBlockIdOf(block, blockIdx);
       const family = String(block.family ?? '');
       const variant = String(block.variant ?? '');
 

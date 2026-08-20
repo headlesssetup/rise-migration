@@ -14,7 +14,7 @@ import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 import { isLocalizedStack, materializeLocale } from '@/core/l10n';
 import { orderLessons } from './plan';
 import type { ManualFlag } from './executor';
-import { blockKey } from './executor-types';
+import { blockKey, sourceBlockIdOf } from './executor-types';
 import { fidelityStatus, type FidelityReport } from './fidelity';
 import {
   l10nParityToMarkdown,
@@ -81,8 +81,9 @@ export function buildBlockIndex(doc: GetCourseDocument): Map<string, BlockLocati
     const lessonId = typeof lesson.id === 'string' ? lesson.id : '';
     const blocks = (lesson.items ?? []) as Block[];
     blocks.forEach((b, bi) => {
-      const id = typeof b.id === 'string' ? b.id : '';
-      if (!id) return;
+      // Positional fallback for id-less blocks — matches the plan/executor's
+      // sourceBlockId, so flags on such a block still resolve to a location.
+      const id = sourceBlockIdOf(b, bi);
       const loc: BlockLocation = {
         lessonNumber: li + 1,
         lessonTitle: lessonTitleOf(lesson),

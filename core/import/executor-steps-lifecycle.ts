@@ -589,12 +589,26 @@ export async function handleCreateBlocks(
           const built: Record<string, unknown>[] = [];
           for (const ref of step.blocks) {
             const entry = srcBlocks.get(blockKey(step.sourceLessonId, ref.sourceBlockId));
-            if (!entry) throw new WriteError(`Source block ${ref.sourceBlockId} not found`, step.kind);
+            if (!entry) {
+              throw new WriteError(
+                `Source block ${ref.sourceBlockId} not found in lesson ${step.sourceLessonId}`,
+                step.kind,
+              );
+            }
+            // A block id is client-generated and ours to choose; a source block
+            // with a missing/non-string id ships under its positional `noid:<n>`
+            // key (sourceBlockIdOf) so freshClientIds mints it a real one below.
+            const src = entry.block as Record<string, unknown>;
+            const withId =
+              typeof src.id === 'string' && src.id !== ''
+                ? entry.block
+                : ({ ...src, id: ref.sourceBlockId } as typeof entry.block);
             // freshClientIds FIRST: block/item ids that are not cuid-shaped (Rise's
             // sample courses number them "1","2","3"… in EVERY lesson) get a fresh
             // per-block id, so two lessons never claim the same block id. Then the
             // usual IdMap pass handles cuid-shaped ids + refs globally.
-            const normalized = freshClientIds(entry.block, mint);
+            const normalized = freshClientIds(withId, mint);
+            ctx.normBlocks.set(blockKey(step.sourceLessonId, ref.sourceBlockId), normalized);
             const remappedSource = blankUploadedMediaKeys(
               remapIds(normalized, ids),
             ) as Record<string, unknown>;

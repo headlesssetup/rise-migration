@@ -743,3 +743,50 @@ describe('summarizePlan / planStats', () => {
     expect(stats.total).toBe(steps.length);
   });
 });
+
+describe('buildPlan — blocks with a missing/non-string id', () => {
+  it('keys them by the shared positional fallback, matching indexSource', () => {
+    const steps = buildPlan(
+      input({
+        assets: [
+          { key: 'rise/courses/SRC/a.jpg', kind: 'media-image', file: 'assets/h.jpg', ext: 'jpg' },
+        ],
+        course: {
+          course: { id: 'SRC', title: 'C' },
+          lessons: [
+            {
+              id: 'L1',
+              position: 0,
+              type: 'blocks',
+              title: 'L',
+              items: [
+                // no `id` at all (observed in a real course, aborted its import)
+                {
+                  family: 'image',
+                  variant: 'hero',
+                  items: [{ media: { image: { key: 'rise/courses/SRC/a.jpg', type: 'image' } } }],
+                } as never,
+                // numeric id — same class (plan used to key it '')
+                { id: 42, family: 'text', variant: 'paragraph', items: [] } as never,
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    const create = steps.find((s) => s.kind === 'create-blocks') as Extract<
+      ReturnType<typeof buildPlan>[number],
+      { kind: 'create-blocks' }
+    >;
+    expect(create.blocks.map((b) => b.sourceBlockId)).toEqual(['noid:0', 'noid:1']);
+    // The follow-up media patch addresses the SAME key as the create ref, so the
+    // executor's srcBlocks/blockMeta lookups (also keyed via sourceBlockIdOf)
+    // resolve — this is exactly where "Source block  not found" used to abort.
+    const patch = steps.find((s) => s.kind === 'patch-block-media') as Extract<
+      ReturnType<typeof buildPlan>[number],
+      { kind: 'patch-block-media' }
+    >;
+    expect(patch).toBeTruthy();
+    expect(patch.sourceBlockId).toBe('noid:0');
+  });
+});

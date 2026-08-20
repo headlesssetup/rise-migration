@@ -10,7 +10,7 @@ import {
   type OptionalAssetReason,
 } from '@/core/assets/keys';
 // Type-only imports back from executor-types keep this cycle-free at runtime.
-import { blockKey } from './executor-types';
+import { blockKey, sourceBlockIdOf } from './executor-types';
 import {
   cellKey,
   collectCells,
@@ -111,11 +111,10 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   if (stack) {
     for (const lesson of input.course.lessons ?? []) {
       const lid = typeof lesson.id === 'string' ? lesson.id : '';
-      for (const b of (lesson.items ?? []) as Block[]) {
-        const bid = typeof b.id === 'string' ? b.id : '';
+      ((lesson.items ?? []) as Block[]).forEach((b, i) => {
         const cell = storylineCellId(b);
-        if (lid && bid && cell) rawStorylineCellByBlock.set(blockKey(lid, bid), cell);
-      }
+        if (lid && cell) rawStorylineCellByBlock.set(blockKey(lid, sourceBlockIdOf(b, i)), cell);
+      });
     }
   }
   if (stack) {

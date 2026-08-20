@@ -21,7 +21,7 @@ import {
   indexSource,
 } from './executor-types';
 import type { ExecutorDeps, ExecResult, AssetBytes } from './executor-types';
-import type { GetCourseDocument } from '@/shared/types/rise';
+import type { Block, GetCourseDocument } from '@/shared/types/rise';
 
 /**
  * Per-run executor context (v0.9.0 restructure, phase A of the anticipated
@@ -65,6 +65,14 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   const shellLessons: { id: string }[] = [];
   // sourceBlockId → {newId, globalBlockId} (from CREATE_BLOCKS metadata).
   const blockMeta = new Map<string, { newId: string; globalBlockId?: string }>();
+  // blockKey → the normalized block CREATE_BLOCKS shipped (post-freshClientIds,
+  // pre-media-blanking). Follow-up UPDATE payloads (media patch, storyline
+  // attach) MUST rebuild from this, never from the raw source block: the
+  // freshClientIds mint map is local to its call, so a block whose source id is
+  // not cuid-shaped gets a DIFFERENT id on re-normalization — and the server
+  // resolves UPDATE_BLOCK_DEBOUNCE from the item payload's own id, so the
+  // mismatch 404s ("Block <sourceId> not found in lesson", observed 2026-08-20).
+  const normBlocks = new Map<string, Block>();
   // sourceKey → new target key (after upload) for media patches.
   const keyMap = new Map<string, string>();
   // sourceBankId → ordered new question ids (for INSERT_QUESTION_BANK_QUESTIONS).
@@ -275,6 +283,7 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
     result,
     shellLessons,
     blockMeta,
+    normBlocks,
     keyMap,
     bankQuestionIds,
     stack,
