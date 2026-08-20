@@ -282,6 +282,10 @@ export function useExportRuns({
         const sourceAccount = {
             name: session?.accountName ?? session?.identity?.name ?? null,
             sub: session?.identity?.sub ?? null,
+            // Account-local principal (`_articulate_user_id`) — ACCOUNT-scoped,
+            // unlike the login-scoped `sub`, so the import guard can tell "same
+            // account" from "same login, different account" (v0.9.0).
+            userId: session?.userId ?? null,
             email: session?.identity?.email ?? null,
             plane: session?.plane ?? null,
           };

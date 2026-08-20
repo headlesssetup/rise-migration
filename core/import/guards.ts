@@ -7,12 +7,16 @@
 export interface AccountIdentity {
   /** Display name from the Rise header / export manifest. */
   name?: string | null;
-  /** JWT `sub` (stable signed-in USER id), when available. It is not a Rise
-   *  account/tenant id: one person may use the same `sub` on both planes. */
+  /** JWT `sub`: the signed-in LOGIN's Articulate ID (`aid|<uuid>`), when
+   *  available. Plane-STABLE for that person (operator-confirmed 2026-08-20)
+   *  and never account/tenant-scoped: one login with seats in two accounts
+   *  carries the SAME sub into both, so a sub match alone cannot distinguish
+   *  "same account" from "same person, different account". */
   sub?: string | null;
   /** Account-local Rise user id (`_articulate_user_id` cookie) — the valid
-   *  principal for folder ownership (differs from `sub` on a cross-plane
-   *  session). Target side only. */
+   *  principal for folder ownership, and ACCOUNT-scoped (differs per account
+   *  even for one login), so it is the strongest same-account evidence.
+   *  Recorded in export manifests since v0.9.0; older archives lack it. */
   userId?: string | null;
   /** Email, when available. */
   email?: string | null;
@@ -39,10 +43,13 @@ export type GuardVerdict =
       sameAccount: boolean;
       samePlane: boolean;
       /** Which evidence matched — shown to the operator so a same-account
-       *  verdict is never a mystery. 'sub' with DIFFERENT display names means a
-       *  stale cached identity (an account switch the background hadn't picked
-       *  up) far more often than a real same-account write. */
-      matchedBy?: 'sub' | 'name';
+       *  verdict is never a mystery. 'userId' is account-scoped (the strongest
+       *  evidence: this IS the source account). 'sub' is the login's
+       *  plane-stable Articulate ID — with DIFFERENT account-local user ids it
+       *  means either one login holding seats in both accounts (override-able)
+       *  or the previous login's SSO-drift token (dangerous); with different
+       *  display names it usually means a stale cached identity. */
+      matchedBy?: 'userId' | 'sub' | 'name';
     };
 
 /**
@@ -75,6 +82,11 @@ export function checkSourceNotTarget(
 
   const sourcePlane = source.plane;
   const targetPlane = target.plane;
+  // Account-local user ids are the strongest evidence: they are ACCOUNT-scoped,
+  // so a match proves the target IS the source account, and a mismatch proves
+  // it is not — even when the same login (same sub) is behind both.
+  const bothUserIds = !!source.userId && !!target.userId;
+  const sameUserId = bothUserIds && source.userId === target.userId;
   const sameSub =
     !!source.sub && !!target.sub && source.sub === target.sub;
   const sameName =
@@ -92,28 +104,42 @@ export function checkSourceNotTarget(
   // A user-id match is suspicious on every plane combination. A display-name
   // match is weaker and only blocks within the same data plane; independent US
   // and EU accounts may legitimately use the same organization name.
-  const sameAccount = sameSub || (samePlane && sameName);
+  const sameAccount = sameUserId || sameSub || (samePlane && sameName);
 
   if (sameAccount && !override) {
-    const matchedBy: 'sub' | 'name' = sameSub ? 'sub' : 'name';
+    const matchedBy: 'userId' | 'sub' | 'name' = sameUserId
+      ? 'userId'
+      : sameSub
+        ? 'sub'
+        : 'name';
     // Names present AND different, yet the JWT sub matched: the cached bearer
     // almost certainly predates an account switch. Say so — the operator would
     // otherwise see two different names above a "same account" verdict.
     const namesDiffer = !!source.name && !!target.name && !sameName;
     const detail =
-      matchedBy === 'sub'
-        ? namesDiffer || differentKnownPlanes
-          ? `the target token carries the source signed-in user id (JWT sub)` +
-            `${namesDiffer ? ` while the displayed names differ ("${source.name}" vs "${target.name}")` : ''}` +
-            `${differentKnownPlanes ? ` across different planes (${sourcePlane!.toUpperCase()} → ${targetPlane!.toUpperCase()})` : ''}` +
-            ' — the target token is stale or mis-filled if these are different people: reload the target Rise COURSE EDITOR tab and re-check; do not override'
-          : // A sub match with matching/absent names is either a genuine
-            // same-account write OR a target token slot holding the SOURCE
-            // account's bearer (stale, or — pre-F0 — cross-plane-poisoned).
-            // Either way the run would write with the source's credentials, so
-            // the remedy is the same: refresh the target slot, don't override.
-            'matched by signed-in user id (JWT sub) — if the target tab really is a different account, its token slot is stale or mis-filled: reload the target Rise COURSE EDITOR tab and re-check before overriding'
-        : `matched by account name ("${target.name}")`;
+      matchedBy === 'userId'
+        ? `the target's account-local user id matches the id recorded at export — this IS the source account`
+        : matchedBy === 'sub'
+          ? bothUserIds
+            ? // Same LOGIN, provably different ACCOUNTS (the account-local ids
+              // differ). Two readings, one of them dangerous, and they are
+              // indistinguishable at a single instant — so this stays a block,
+              // but the operator gets the real choice instead of a mystery.
+              `the target token belongs to the same Articulate LOGIN that made this export (the JWT sub is the login's plane-stable aid| id) while the account-local user ids differ — ` +
+              `either this login deliberately holds seats in BOTH accounts (tick Override to proceed; writes stay pinned to the target tab), ` +
+              `or the target origin silently carries the previous login's SSO session (the shared id.articulate.com SSO survives a site logout): sign into the target origin explicitly and re-check`
+            : namesDiffer || differentKnownPlanes
+              ? `the target token carries the source signed-in user id (JWT sub)` +
+                `${namesDiffer ? ` while the displayed names differ ("${source.name}" vs "${target.name}")` : ''}` +
+                `${differentKnownPlanes ? ` across different planes (${sourcePlane!.toUpperCase()} → ${targetPlane!.toUpperCase()})` : ''}` +
+                ' — the target token is stale or mis-filled if these are different people: reload the target Rise COURSE EDITOR tab and re-check; do not override'
+              : // A sub match with matching/absent names is either a genuine
+                // same-account write OR a target token slot holding the SOURCE
+                // account's bearer (stale, or — pre-F0 — cross-plane-poisoned).
+                // Either way the run would write with the source's credentials, so
+                // the remedy is the same: refresh the target slot, don't override.
+                'matched by signed-in user id (JWT sub) — if the target tab really is a different account, its token slot is stale or mis-filled: reload the target Rise COURSE EDITOR tab and re-check before overriding'
+          : `matched by account name ("${target.name}")`;
     return {
       ok: false,
       reason: `Target authentication is not safely distinct from the source (${detail}). Importing now could use the wrong identity.`,
