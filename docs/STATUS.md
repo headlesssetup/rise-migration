@@ -1,6 +1,17 @@
 # Project Status
 
-_Last updated: 2026-08-20 (v0.9.4: prose docx export cover page). Keep this current at each phase boundary._
+_Last updated: 2026-08-20 (v0.9.5: docx HTML named-entity decoding). Keep this current at each phase boundary._
+
+## v0.9.5 patch (2026-08-20)
+
+- **Docx entity decoding**: Rise stores some strings with HTML NAMED entities
+  instead of literal UTF-8 (a real German course exported
+  `regelm&auml;&szlig;ige` / `&bdquo;…&ldquo;` verbatim into the docx — only
+  XML's five entities were decoded). The storyboard HTML decoder now carries a
+  Latin-1 + typography/symbol named-entity map (`HTML_ENTITIES` in
+  `core/storyboard/render/html.ts`); numeric forms were already handled, and
+  `&amp;auml;` still decodes to the literal text `&auml;` (no double-decode).
+  The XML parser's five-entity table is untouched.
 
 ## v0.9.4 patch (2026-08-20)
 

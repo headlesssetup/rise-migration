@@ -13,9 +13,53 @@ import type { SbPara, SbRun } from './model';
 
 const BLOCK_TAGS = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'blockquote']);
 
-/** Decode HTML entities (named subset + numeric) to plain text. */
+/** HTML named entities beyond XML's five — Rise content stores some strings
+ *  with these instead of literal UTF-8 (observed: German `&auml;&szlig;`,
+ *  `&bdquo;…&ldquo;` quotes exported verbatim into a docx). Latin-1 letters +
+ *  common typography/symbols; numeric forms are handled by `decodeEntities`.
+ *  XML's own five (amp/lt/gt/quot/apos) are deliberately NOT here — they
+ *  decode in `decodeEntities` AFTER this map, so `&amp;auml;` stays the
+ *  author's literal text `&auml;`, never double-decodes into `ä`. */
+const HTML_ENTITIES: Record<string, string> = {
+  // Latin-1 uppercase
+  Agrave: 'À', Aacute: 'Á', Acirc: 'Â', Atilde: 'Ã', Auml: 'Ä', Aring: 'Å',
+  AElig: 'Æ', Ccedil: 'Ç', Egrave: 'È', Eacute: 'É', Ecirc: 'Ê', Euml: 'Ë',
+  Igrave: 'Ì', Iacute: 'Í', Icirc: 'Î', Iuml: 'Ï', ETH: 'Ð', Ntilde: 'Ñ',
+  Ograve: 'Ò', Oacute: 'Ó', Ocirc: 'Ô', Otilde: 'Õ', Ouml: 'Ö', Oslash: 'Ø',
+  Ugrave: 'Ù', Uacute: 'Ú', Ucirc: 'Û', Uuml: 'Ü', Yacute: 'Ý', THORN: 'Þ',
+  // Latin-1 lowercase
+  agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã', auml: 'ä', aring: 'å',
+  aelig: 'æ', ccedil: 'ç', egrave: 'è', eacute: 'é', ecirc: 'ê', euml: 'ë',
+  igrave: 'ì', iacute: 'í', icirc: 'î', iuml: 'ï', eth: 'ð', ntilde: 'ñ',
+  ograve: 'ò', oacute: 'ó', ocirc: 'ô', otilde: 'õ', ouml: 'ö', oslash: 'ø',
+  ugrave: 'ù', uacute: 'ú', ucirc: 'û', uuml: 'ü', yacute: 'ý', thorn: 'þ',
+  yuml: 'ÿ', szlig: 'ß',
+  // Latin Extended-A common pairs
+  OElig: 'Œ', oelig: 'œ', Scaron: 'Š', scaron: 'š', Yuml: 'Ÿ',
+  // Typography
+  ndash: '–', mdash: '—', hellip: '…', lsquo: '\u2018', rsquo: '\u2019', sbquo: '‚',
+  ldquo: '\u201c', rdquo: '\u201d', bdquo: '„', laquo: '«', raquo: '»',
+  prime: '′', Prime: '″', dagger: '†', Dagger: '‡', bull: '•', middot: '·',
+  permil: '‰', tilde: '˜', circ: 'ˆ', shy: '\u00ad',
+  ensp: '\u2002', emsp: '\u2003', thinsp: '\u2009', zwnj: '', zwj: '', lrm: '', rlm: '',
+  // Currency + signs
+  euro: '€', pound: '£', yen: '¥', cent: '¢', curren: '¤',
+  copy: '©', reg: '®', trade: '™', sect: '§', para: '¶', deg: '°',
+  plusmn: '±', frac12: '½', frac14: '¼', frac34: '¾',
+  sup1: '¹', sup2: '²', sup3: '³', micro: 'µ', times: '×', divide: '÷',
+  iexcl: '¡', iquest: '¿', ordf: 'ª', ordm: 'º', not: '¬', macr: '¯',
+  acute: '´', cedil: '¸', uml: '¨', brvbar: '¦',
+  larr: '←', rarr: '→', uarr: '↑', darr: '↓', harr: '↔', minus: '−',
+};
+
+/** Decode HTML entities (named + numeric) to plain text. HTML names first,
+ *  the XML five (via `decodeEntities`) last — see HTML_ENTITIES. */
 function decode(s: string): string {
-  return decodeEntities(s.replace(/&nbsp;/g, ' '));
+  return decodeEntities(
+    s
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (whole, name: string) => HTML_ENTITIES[name] ?? whole),
+  );
 }
 
 function sameFormat(a: SbRun, b: SbRun): boolean {

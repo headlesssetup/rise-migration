@@ -485,3 +485,32 @@ describe('renderCourseModel — course/lesson descriptions', () => {
     expect(body.indent).toBe(1);
   });
 });
+
+// Regression: Rise stores some strings with HTML NAMED entities instead of
+// literal UTF-8 (a real German course exported "regelm&auml;&szlig;ige" into
+// the docx verbatim — only XML's five entities were decoded).
+describe('htmlToParas — HTML named entities', () => {
+  it('decodes Latin-1 letters and German typography', () => {
+    const paras = htmlToParas(
+      '<p>Viele denken beim Stichwort &bdquo;regelm&auml;&szlig;ige Bewegung&ldquo; an Joggen.</p>',
+    );
+    expect(paras[0]!.runs.map((r) => r.text).join('')).toBe(
+      'Viele denken beim Stichwort „regelmäßige Bewegung“ an Joggen.',
+    );
+  });
+
+  it('decodes French/Spanish letters, dashes and symbols', () => {
+    const paras = htmlToParas('<p>d&eacute;j&agrave; &ndash; ni&ntilde;o &euro; &copy;</p>');
+    expect(paras[0]!.runs[0]!.text).toBe('déjà – niño € ©');
+  });
+
+  it('never double-decodes an escaped entity: &amp;auml; stays literal &auml;', () => {
+    const paras = htmlToParas('<p>&amp;auml; is how you write &auml;</p>');
+    expect(paras[0]!.runs.map((r) => r.text).join('')).toBe('&auml; is how you write ä');
+  });
+
+  it('leaves unknown named entities untouched', () => {
+    const paras = htmlToParas('<p>&notarealentity; stays</p>');
+    expect(paras[0]!.runs[0]!.text).toBe('&notarealentity; stays');
+  });
+});
