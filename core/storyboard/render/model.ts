@@ -20,6 +20,16 @@ export interface SbPara {
   /** Indent level (720 twips per level) — item CONTENT under an item title in
    *  accordion-style blocks, so title vs content reads at a glance. */
   indent?: number;
+  /** Authored but hidden from learners (`isHidden: true` on the source item).
+   *  Exposed in the doc — the prose writer shades it light red — because a
+   *  hidden item can be un-hidden in Rise at any time. */
+  hidden?: boolean;
+}
+
+/** One flashcard (front/back) — prose renders a card per table row. */
+export interface SbCard {
+  front: SbPara[];
+  back: SbPara[];
 }
 
 /** `edit` = the storyboard pipeline can rebuild this family; `ro` = rendered
@@ -53,6 +63,10 @@ export interface SbRow {
   image?: SbImage;
   /** Rendering hint for the prose writer. */
   prose?: 'impact' | 'continue' | 'divider';
+  /** Flashcards: one front/back pair per card — the prose writer renders
+   *  these as a 2-column table (one row per card) instead of `content`.
+   *  `content` still carries the flat paras for the SBDOC table format. */
+  cards?: SbCard[];
 }
 
 export interface SbLesson {

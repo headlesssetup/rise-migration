@@ -14,7 +14,7 @@ import { orderLessons } from '@/core/import/plan-helpers';
 import { isLocalizedStack, materializeLocale, resolveStackTitle } from '@/core/l10n';
 import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 import { htmlToParas, htmlToText } from './html';
-import { fnv1a8, type SbCourse, type SbImage, type SbLesson, type SbPara, type SbRow, type SbRun } from './model';
+import { fnv1a8, type SbCard, type SbCourse, type SbImage, type SbLesson, type SbPara, type SbRow, type SbRun } from './model';
 
 export interface RenderModelOptions {
   /** ISO timestamp stamped into the meta table (injectable for tests). */
@@ -61,8 +61,7 @@ type EditRenderer = (b: Block) => SbPara[] | null;
 function renderText(b: Block): SbPara[] | null {
   const out: SbPara[] = [];
   for (const it of arr(b.items)) {
-    out.push(...boldFromHtml(str(it.heading)));
-    out.push(...htmlToParas(str(it.paragraph)));
+    out.push(...hid(it, [...boldFromHtml(str(it.heading)), ...htmlToParas(str(it.paragraph))]));
   }
   return out.length > 0 ? out : null;
 }
@@ -71,9 +70,9 @@ function renderList(b: Block): SbPara[] | null {
   const kind = b.variant === 'numbered' ? 'number' : 'bullet';
   const out: SbPara[] = [];
   for (const it of arr(b.items)) {
-    for (const p of htmlToParas(str(it.paragraph))) {
-      out.push({ ...p, list: p.list ?? kind });
-    }
+    out.push(
+      ...hid(it, htmlToParas(str(it.paragraph)).map((p) => ({ ...p, list: p.list ?? kind }))),
+    );
   }
   return out.length > 0 ? out : null;
 }
@@ -84,32 +83,65 @@ function indented(paras: SbPara[]): SbPara[] {
   return paras.map((p) => ({ ...p, indent: (p.indent ?? 0) + 1 }));
 }
 
+/** Mark an item's paras when the item is authored but HIDDEN from learners
+ *  (`isHidden: true`, e.g. a Process summary toggled off). The text is still
+ *  exposed in the doc — it can be un-hidden in Rise at any time — but shaded
+ *  light red by the prose writer so a reviewer knows learners don't see it. */
+function hid(it: Record<string, unknown>, paras: SbPara[]): SbPara[] {
+  return it.isHidden === true ? paras.map((p) => ({ ...p, hidden: true })) : paras;
+}
+
 function renderItemsTitled(b: Block): SbPara[] | null {
   const out: SbPara[] = [];
   for (const it of arr(b.items)) {
     const title = htmlToText(str(it.title));
-    if (title) out.push(boldPara(title));
-    out.push(...indented(htmlToParas(str(it.description))));
+    const paras: SbPara[] = [];
+    if (title) paras.push(boldPara(title));
+    paras.push(...indented(htmlToParas(str(it.description))));
+    out.push(...hid(it, paras));
   }
   return out.length > 0 ? out : null;
 }
 
+function flashcardSide(v: unknown): { html: string; media: boolean } {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+  return { html: str(o.description), media: !!o.media };
+}
+
 function renderFlashcards(b: Block): SbPara[] | null {
-  const side = (v: unknown): { html: string; media: boolean } => {
-    const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
-    return { html: str(o.description), media: !!o.media };
-  };
   const out: SbPara[] = [];
   for (const it of arr(b.items)) {
-    const front = side(it.front);
-    const back = side(it.back);
+    const front = flashcardSide(it.front);
+    const back = flashcardSide(it.back);
     const frontText = htmlToText(front.html);
-    out.push(boldPara(frontText || (front.media ? '(media)' : '')));
+    const paras: SbPara[] = [boldPara(frontText || (front.media ? '(media)' : ''))];
     const backParas = indented(htmlToParas(back.html));
-    if (backParas.length > 0) out.push(...backParas);
-    else if (back.media) out.push({ runs: [{ text: '(media)' }], indent: 1 });
+    if (backParas.length > 0) paras.push(...backParas);
+    else if (back.media) paras.push({ runs: [{ text: '(media)' }], indent: 1 });
+    out.push(...hid(it, paras));
   }
   return out.some((p) => p.runs.some((r) => r.text.trim() !== '')) ? out : null;
+}
+
+/** Flashcards as front/back PAIRS — the prose writer renders one card per
+ *  table row (front cell | back cell). Cell paras are unindented; a media-only
+ *  side keeps its `(media)` placeholder. */
+function extractFlashcards(b: Block): SbCard[] | undefined {
+  const cards: SbCard[] = [];
+  for (const it of arr(b.items)) {
+    const front = flashcardSide(it.front);
+    const back = flashcardSide(it.back);
+    const frontParas: SbPara[] = htmlToParas(front.html).map((p) => ({
+      ...p,
+      runs: p.runs.map((r) => ({ ...r, bold: true })),
+    }));
+    if (frontParas.length === 0 && front.media) frontParas.push(boldPara('(media)'));
+    const backParas: SbPara[] = htmlToParas(back.html);
+    if (backParas.length === 0 && back.media) backParas.push({ runs: [{ text: '(media)' }] });
+    if (frontParas.length === 0 && backParas.length === 0) continue;
+    cards.push({ front: hid(it, frontParas), back: hid(it, backParas) });
+  }
+  return cards.length > 0 ? cards : undefined;
 }
 
 function renderProcess(b: Block): SbPara[] | null {
@@ -117,11 +149,14 @@ function renderProcess(b: Block): SbPara[] | null {
   for (const it of arr(b.items)) {
     const title = htmlToText(str(it.title));
     if (it.type === 'intro') {
-      if (title) out.push(boldPara(title));
-      out.push(...htmlToParas(str(it.description)));
+      const paras: SbPara[] = [];
+      if (title) paras.push(boldPara(title));
+      paras.push(...htmlToParas(str(it.description)));
+      out.push(...hid(it, paras));
     } else {
-      out.push(boldPara(title || '(no title)'));
-      out.push(...indented(htmlToParas(str(it.description))));
+      out.push(
+        ...hid(it, [boldPara(title || '(no title)'), ...indented(htmlToParas(str(it.description)))]),
+      );
     }
   }
   return out.length > 0 ? out : null;
@@ -132,8 +167,9 @@ function renderTimeline(b: Block): SbPara[] | null {
   for (const it of arr(b.items)) {
     const date = htmlToText(str(it.date));
     const title = htmlToText(str(it.title));
-    out.push(boldPara(`${date}: ${title}`));
-    out.push(...indented(htmlToParas(str(it.description))));
+    out.push(
+      ...hid(it, [boldPara(`${date}: ${title}`), ...indented(htmlToParas(str(it.description)))]),
+    );
   }
   return out.length > 0 ? out : null;
 }
@@ -146,7 +182,7 @@ function renderSorting(b: Block): SbPara[] | null {
     out.push(boldPara(htmlToText(str(pile.title)) || '(untitled)'));
     for (const card of arr(b.items)) {
       if (card.pileId === pile.id) {
-        out.push({ runs: [{ text: htmlToText(str(card.title)) }], list: 'bullet' });
+        out.push(...hid(card, [{ runs: [{ text: htmlToText(str(card.title)) }], list: 'bullet' }]));
       }
     }
   }
@@ -156,19 +192,21 @@ function renderSorting(b: Block): SbPara[] | null {
 function renderKc(b: Block): SbPara[] | null {
   const out: SbPara[] = [];
   for (const q of arr(b.items)) {
-    out.push(...boldFromHtml(str(q.title) || '(no question)'));
+    const paras: SbPara[] = [];
+    paras.push(...boldFromHtml(str(q.title) || '(no question)'));
     for (const a of arr(q.answers)) {
       const runs: SbRun[] = htmlToParas(str(a.title)).flatMap((p) => p.runs);
       const text = runs.map((r) => r.text).join('') || '(empty answer)';
-      out.push({
+      paras.push({
         runs: [{ text, ...(a.correct === true ? { color: GREEN_CORRECT } : {}) }],
         list: 'bullet',
       });
       const perAnswer = htmlToText(str(a.feedback));
-      if (perAnswer) out.push(italicPara(`↳ ${perAnswer}`));
+      if (perAnswer) paras.push(italicPara(`↳ ${perAnswer}`));
     }
     const feedback = htmlToText(str(q.feedback));
-    if (feedback) out.push(italicPara(`Feedback: ${feedback}`));
+    if (feedback) paras.push(italicPara(`Feedback: ${feedback}`));
+    out.push(...hid(q, paras));
   }
   return out.length > 0 ? out : null;
 }
@@ -176,14 +214,16 @@ function renderKc(b: Block): SbPara[] | null {
 function renderMatching(b: Block): SbPara[] | null {
   const out: SbPara[] = [];
   for (const q of arr(b.items)) {
+    const paras: SbPara[] = [];
     const stem = htmlToText(str(q.title));
-    if (stem) out.push(boldPara(stem));
+    if (stem) paras.push(boldPara(stem));
     for (const a of arr(q.answers)) {
-      out.push({
+      paras.push({
         runs: [{ text: `${htmlToText(str(a.title))} ⇄ ${htmlToText(str(a.matchTitle))}` }],
         list: 'bullet',
       });
     }
+    out.push(...hid(q, paras));
   }
   return out.length > 0 ? out : null;
 }
@@ -194,11 +234,12 @@ function renderButtons(b: Block): SbPara[] | null {
     const label = htmlToText(str(it.label)) || htmlToText(str(it.title));
     const destination = str(it.destination) || str(it.url);
     if (!label) continue;
-    out.push({
-      runs: [{ text: `[${label}]`, ...(destination ? { link: destination } : {}) }],
-    });
+    const paras: SbPara[] = [
+      { runs: [{ text: `[${label}]`, ...(destination ? { link: destination } : {}) }] },
+    ];
     const description = htmlToText(str(it.description));
-    if (description) out.push({ runs: [{ text: description }] });
+    if (description) paras.push({ runs: [{ text: description }] });
+    out.push(...hid(it, paras));
   }
   return out.length > 0 ? out : null;
 }
@@ -419,6 +460,18 @@ function renderBlock(b: Block, no: number, roOnly: boolean, flags: string[]): Sb
 
   const image = extractPrimaryImage(b);
   const prose = proseHintFor(family, variant);
+  // Flashcards additionally carry structured front/back pairs — the prose
+  // writer renders one card per 2-column table row instead of `content`.
+  const cards =
+    fidelity === 'edit' && `${family}/${variant}` === 'flashcard/flashcard'
+      ? extractFlashcards(b)
+      : undefined;
+  if (cards) {
+    for (const card of cards) {
+      escapeTokens(card.front, flags, `block ${blockId}`);
+      escapeTokens(card.back, flags, `block ${blockId}`);
+    }
+  }
 
   return {
     no,
@@ -432,6 +485,7 @@ function renderBlock(b: Block, no: number, roOnly: boolean, flags: string[]): Sb
     rev: fnv1a8(JSON.stringify(b)),
     ...(image ? { image } : {}),
     ...(prose ? { prose } : {}),
+    ...(cards ? { cards } : {}),
   };
 }
 

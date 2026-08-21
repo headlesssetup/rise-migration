@@ -11,7 +11,7 @@
 // Block identity: `⟦B:id R:rev edit⟧` as small gray paragraph after each block.
 
 import { strToU8, zipSync } from 'fflate';
-import type { SbCourse, SbLesson, SbPara, SbRow, SbRun } from './model';
+import type { SbCard, SbCourse, SbLesson, SbPara, SbRow, SbRun } from './model';
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
 const R = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
@@ -21,6 +21,8 @@ const PIC = 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture
 
 const GRAY = '999999';
 const WARN = 'C00000';
+/** Light-red run shading for authored-but-hidden-from-learners text. */
+const HIDDEN_SHD = 'FFC7CE';
 const TOKEN_SZ = 16; // 8 pt
 const TOKEN_FONT = 'Consolas';
 const EMU_PER_CM = 360000;
@@ -74,7 +76,7 @@ function imageRelFor(state: DocState, key: string, ext: string, bytes: Uint8Arra
 
 // ---------------------------------------------------------------- XML helpers
 
-function runXml(run: SbRun, opts: { sz?: number; highlight?: string } = {}): string {
+function runXml(run: SbRun, opts: { sz?: number; highlight?: string; shd?: string } = {}): string {
   const props: string[] = [];
   if (run.link) props.push('<w:rStyle w:val="Hyperlink"/>');
   if (run.bold) props.push('<w:b/>');
@@ -82,6 +84,7 @@ function runXml(run: SbRun, opts: { sz?: number; highlight?: string } = {}): str
   if (run.color) props.push(`<w:color w:val="${esc(run.color)}"/>`);
   if (opts.sz) props.push(`<w:sz w:val="${opts.sz}"/><w:szCs w:val="${opts.sz}"/>`);
   if (opts.highlight) props.push(`<w:highlight w:val="${opts.highlight}"/>`);
+  if (opts.shd) props.push(`<w:shd w:val="clear" w:color="auto" w:fill="${opts.shd}"/>`);
   const rPr = props.length > 0 ? `<w:rPr>${props.join('')}</w:rPr>` : '';
   const body = run.text
     .split('\n')
@@ -108,19 +111,21 @@ function paraXml(
   if (opts.jc) pPr.push(`<w:jc w:val="${opts.jc}"/>`);
   const pre = pPr.length > 0 ? `<w:pPr>${pPr.join('')}</w:pPr>` : '';
 
+  // Hidden-from-learners text is exposed but shaded light red (see SbPara.hidden).
+  const shd = p.hidden ? HIDDEN_SHD : undefined;
   const parts: string[] = [];
   let i = 0;
   while (i < p.runs.length) {
     const run = p.runs[i]!;
     if (!run.link) {
-      parts.push(runXml(run, { sz: opts.sz, highlight: opts.highlight }));
+      parts.push(runXml(run, { sz: opts.sz, highlight: opts.highlight, shd }));
       i++;
       continue;
     }
     const url = run.link;
     let j = i;
     while (j < p.runs.length && p.runs[j]!.link === url) j++;
-    const inner = p.runs.slice(i, j).map((r) => runXml(r, { sz: opts.sz })).join('');
+    const inner = p.runs.slice(i, j).map((r) => runXml(r, { sz: opts.sz, shd })).join('');
     parts.push(`<w:hyperlink r:id="${relFor(state, url)}">${inner}</w:hyperlink>`);
     i = j;
   }
@@ -267,6 +272,12 @@ function renderBlockProse(
     }
   }
 
+  // Flashcards — a 2-column table, one card per row: front | back.
+  if (row.cards && row.cards.length > 0) {
+    parts.push(flashcardTable(row.cards, state));
+    return parts.join('');
+  }
+
   // Prose hint overrides
   if (row.prose === 'impact') {
     for (const p of row.content) {
@@ -292,6 +303,33 @@ function renderBlockProse(
   }
 
   return parts.join('');
+}
+
+// Flashcard table: two equal columns filling the text width (A4 − margins =
+// 9638 twips), min row height ≈ half the column width for square-ish cells.
+const CARD_COL = 4819;
+const CARD_ROW_MIN = 2400;
+
+function flashcardTable(cards: SbCard[], state: DocState): string {
+  const cell = (paras: SbPara[]): string =>
+    `<w:tc><w:tcPr><w:tcW w:w="${CARD_COL}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>` +
+    (paras.length > 0 ? contentParas(paras, state) : '<w:p/>') +
+    '</w:tc>';
+  const rows = cards
+    .map(
+      (card) =>
+        `<w:tr><w:trPr><w:trHeight w:val="${CARD_ROW_MIN}" w:hRule="atLeast"/></w:trPr>` +
+        cell(card.front) +
+        cell(card.back) +
+        '</w:tr>',
+    )
+    .join('');
+  return (
+    `<w:tbl><w:tblPr><w:tblW w:w="${CARD_COL * 2}" w:type="dxa"/>` +
+    `${TABLE_BORDERS}<w:tblLayout w:type="fixed"/></w:tblPr>` +
+    `<w:tblGrid><w:gridCol w:w="${CARD_COL}"/><w:gridCol w:w="${CARD_COL}"/></w:tblGrid>` +
+    `${rows}</w:tbl><w:p/>`
+  );
 }
 
 /** KC rendering: correct answers get lime highlight instead of green font. */
@@ -405,7 +443,25 @@ function metaTable(course: SbCourse, state: DocState): string {
 const GUARD_TEXT =
   'This document is generated from a Rise course archive for proofreading. ' +
   'Gray ⟦…⟧ tokens are identity markers — do not modify them. ' +
-  'Highlighted answers are correct. Images are thumbnails for reference only.';
+  'Images are thumbnails for reference only.';
+
+/** Cover legend: one line demonstrating each marker in its actual formatting. */
+function legendXml(): string {
+  const item = (rPr: string, sample: string, meaning: string): string =>
+    `<w:r><w:rPr>${rPr}<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>` +
+    `<w:t xml:space="preserve">${esc(sample)}</w:t></w:r>` +
+    `<w:r><w:rPr><w:color w:val="${GRAY}"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>` +
+    `<w:t xml:space="preserve"> ${esc(meaning)}   </w:t></w:r>`;
+  return (
+    '<w:p><w:pPr><w:spacing w:after="120"/></w:pPr>' +
+    `<w:r><w:rPr><w:b/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>` +
+    '<w:t xml:space="preserve">Legend:   </w:t></w:r>' +
+    item('<w:highlight w:val="green"/>', 'green', '= correct quiz answer') +
+    item('<w:b/><w:highlight w:val="yellow"/>', 'yellow', '= block type') +
+    item(`<w:shd w:val="clear" w:color="auto" w:fill="${HIDDEN_SHD}"/>`, 'red', '= in the course but hidden from learners') +
+    '</w:p>'
+  );
+}
 
 const SECT_PR =
   '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>' +
@@ -427,6 +483,7 @@ function documentXml(course: SbCourse, state: DocState, images: Map<string, Reso
   // --- Page 1: the export COVER — title, metadata, contents. No content. ---
   body.push(textPara(course.title, state, { style: 'Heading1' }));
   body.push(textPara(GUARD_TEXT, state, { italic: true, color: GRAY, sz: 18 }));
+  body.push(legendXml());
   body.push(metaTable(course, state));
   body.push('<w:p/>');
 

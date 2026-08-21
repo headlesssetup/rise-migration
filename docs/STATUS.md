@@ -1,6 +1,21 @@
 # Project Status
 
-_Last updated: 2026-08-20 (v0.9.5: docx HTML named-entity decoding). Keep this current at each phase boundary._
+_Last updated: 2026-08-21 (v0.9.6: prose docx flashcard tables, hidden-text exposure, cover legend). Keep this current at each phase boundary._
+
+## v0.9.6 patch (2026-08-21)
+
+- **Flashcards as card tables** (prose): each flashcard block renders as a
+  2-column borderless-header table — one row per card, front | back, min row
+  height for square-ish cells. The flat paragraph form remains in `content`
+  for the SBDOC table format.
+- **Hidden text exposed + shaded**: items authored but hidden from learners
+  (`isHidden: true`, e.g. a Process summary toggled off) are rendered and
+  shaded light red (FFC7CE) — hidden content can be un-hidden in Rise at any
+  time, so an SME must see it. Marker: `SbPara.hidden`, applied across all
+  edit renderers.
+- **Cover legend**: green = correct quiz answer, yellow = block type,
+  light red = in the course but hidden from learners — each demonstrated in
+  its actual formatting on the cover page.
 
 ## v0.9.5 patch (2026-08-20)
 

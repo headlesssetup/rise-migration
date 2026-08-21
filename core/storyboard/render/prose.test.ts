@@ -217,3 +217,89 @@ describe('prose docx — export cover page', () => {
     expect(xml.lastIndexOf('Cover Course')).toBeGreaterThan(brk);
   });
 });
+
+describe('prose docx — flashcard table, hidden shading, legend', () => {
+  const { unzipSync } = require('fflate') as typeof import('fflate');
+  const docXml = (bytes: Uint8Array): string =>
+    new TextDecoder().decode(unzipSync(bytes)['word/document.xml']!);
+
+  const model = () =>
+    renderCourseModel(
+      {
+        course: { id: 'c1', title: 'T', lessons: ['l1'] },
+        lessons: [
+          {
+            id: 'l1',
+            title: 'L1',
+            type: 'blocks',
+            items: [
+              {
+                id: 'b-fc',
+                family: 'flashcard',
+                variant: 'flashcard',
+                items: [
+                  { id: 'c1', front: { description: '<p>Front one</p>' }, back: { description: '<p>Back one</p>' } },
+                  { id: 'c2', front: { description: '<p>Front two</p>' }, back: { media: { image: { key: 'k' } } } },
+                ],
+              },
+              {
+                id: 'b-proc',
+                family: 'interactive-fullscreen',
+                variant: 'process',
+                items: [
+                  { id: 'p1', type: 'step', title: 'Step 1', description: '<p>Visible step.</p>' },
+                  { id: 'p2', type: 'summary', title: 'Summary', isHidden: true, description: '<p>Secret summary.</p>' },
+                ],
+              },
+            ],
+          },
+        ],
+      } as any,
+      { generatedAt: '2026-01-01T00:00:00Z', toolVersion: '0.0.test' },
+    );
+
+  it('renders flashcards as a 2-column table, one card per row', () => {
+    const m = model();
+    const row = m.lessons[0]!.rows.find((r) => r.blockId === 'b-fc')!;
+    expect(row.cards).toHaveLength(2);
+    const xml = docXml(writeStoryboardDocxProse(m));
+    // one table row per card: front cell then back cell
+    const tbl = xml.slice(xml.indexOf('Front one') - 2000);
+    expect(tbl.indexOf('Front one')).toBeLessThan(tbl.indexOf('Back one'));
+    expect(xml).toContain('Front two');
+    expect(xml).toContain('(media)');
+    // the flat front/back paragraph fallback is NOT also emitted (no dup text)
+    expect(xml.split('Front one').length - 1).toBe(1);
+    // square-ish rows: min height on each card row
+    expect(xml).toContain('<w:trHeight w:val="2400" w:hRule="atLeast"/>');
+  });
+
+  it('marks hidden items in the model and shades them light red in prose', () => {
+    const m = model();
+    const proc = m.lessons[0]!.rows.find((r) => r.blockId === 'b-proc')!;
+    const hiddenParas = proc.content.filter((p) => p.hidden);
+    expect(hiddenParas.length).toBeGreaterThan(0);
+    expect(hiddenParas.some((p) => p.runs.some((r) => r.text.includes('Secret summary')))).toBe(true);
+    // visible step is NOT marked
+    expect(
+      proc.content.some((p) => !p.hidden && p.runs.some((r) => r.text.includes('Visible step'))),
+    ).toBe(true);
+    const xml = docXml(writeStoryboardDocxProse(m));
+    const at = xml.indexOf('Secret summary');
+    expect(xml.lastIndexOf('w:fill="FFC7CE"', at)).toBeGreaterThan(at - 400);
+    // the visible step carries no shading
+    const vis = xml.indexOf('Visible step');
+    expect(xml.slice(vis - 400, vis)).not.toContain('FFC7CE');
+  });
+
+  it('puts a legend on the cover, before the page break', () => {
+    const xml = docXml(writeStoryboardDocxProse(model()));
+    const brk = xml.indexOf('<w:br w:type="page"/>');
+    const legend = xml.indexOf('Legend:');
+    expect(legend).toBeGreaterThan(-1);
+    expect(legend).toBeLessThan(brk);
+    expect(xml).toContain('= correct quiz answer');
+    expect(xml).toContain('= block type');
+    expect(xml).toContain('= in the course but hidden from learners');
+  });
+});
