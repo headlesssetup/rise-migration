@@ -1,6 +1,22 @@
 # Project Status
 
-_Last updated: 2026-08-21 (v0.9.7: flashcard variants + docx image weight). Keep this current at each phase boundary._
+_Last updated: 2026-08-21 (v0.9.8: fix invalid docx from v0.9.7 image dedup). Keep this current at each phase boundary._
+
+## v0.9.8 patch (2026-08-21) — HOTFIX for v0.9.7
+
+**v0.9.7 produced an unopenable docx for any course with duplicate images**
+(Word: "found unreadable content"). The content dedup made several asset keys
+share one image part, but the rels/content-types writers iterated the
+per-KEY map, emitting the same `<Relationship Id>` once per key — duplicate
+Ids are invalid OOXML. Both writers now iterate distinct PARTS
+(`uniqueImageParts`).
+
+Tests now assert package integrity, not just part counts: unique relationship
+Ids, every declared image target present, every `r:id`/`r:embed` in
+`document.xml` declared, and a content type for every embedded extension —
+across shared, distinct and mixed-format image sets. Verified end-to-end on
+the real course with the real duplicated JPEG (15 keys → 1 part, 9/9 unique
+ids, all XML well-formed).
 
 ## v0.9.7 patch (2026-08-21)
 

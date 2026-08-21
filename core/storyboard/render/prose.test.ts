@@ -389,3 +389,106 @@ describe('prose docx — flashcard variants and image dedup', () => {
     expect(docXml(bytes).split('rIdImg1').length - 1).toBe(3);
   });
 });
+
+// Regression (v0.9.7 shipped broken): content-dedup made several asset keys
+// share one image part, and the rels writer emitted one <Relationship> PER KEY
+// — so the same Id appeared several times. Word rejected the file with
+// "unreadable content". The package's relationship graph is now asserted.
+describe('prose docx — OOXML package integrity', () => {
+  const { unzipSync } = require('fflate') as typeof import('fflate');
+
+  /** Every Relationship Id unique, and every r:id/r:embed used by the document
+   *  actually declared. Throws with a readable message on violation. */
+  function assertPackageValid(bytes: Uint8Array): void {
+    const files = unzipSync(bytes);
+    const dec = (p: string): string => new TextDecoder().decode(files[p]!);
+    const rels = dec('word/_rels/document.xml.rels');
+    const ids = [...rels.matchAll(/Id="([^"]+)"/g)].map((m) => m[1]!);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    expect(dupes, `duplicate Relationship Id(s): ${[...new Set(dupes)].join(', ')}`).toEqual([]);
+    // Every declared image target exists as a part.
+    for (const m of rels.matchAll(/Target="(media\/[^"]+)"/g)) {
+      expect(files[`word/${m[1]!}`], `missing part word/${m[1]}`).toBeTruthy();
+    }
+    // Every reference in the document resolves to a declared relationship.
+    const doc = dec('word/document.xml');
+    const used = new Set(
+      [...doc.matchAll(/r:(?:id|embed)="([^"]+)"/g)].map((m) => m[1]!),
+    );
+    for (const ref of used) {
+      expect(ids, `document references undeclared ${ref}`).toContain(ref);
+    }
+    // Each embedded extension has a content type.
+    const ct = dec('[Content_Types].xml');
+    for (const part of Object.keys(files).filter((f) => f.startsWith('word/media/'))) {
+      const ext = part.split('.').pop()!;
+      expect(ct, `no content type for .${ext}`).toContain(`Extension="${ext}"`);
+    }
+  }
+
+  function courseWithImages(keys: string[]) {
+    return {
+      course: { id: 'c1', title: 'T', lessons: ['l1'] },
+      lessons: [
+        {
+          id: 'l1',
+          title: 'L1',
+          type: 'blocks',
+          items: keys.map((k, i) => ({
+            id: `b${i}`,
+            family: 'image',
+            variant: 'banner',
+            items: [{ id: `i${i}`, media: { image: { key: k, type: 'image' } } }],
+          })),
+        },
+      ],
+    };
+  }
+
+  it('stays valid when several keys share the SAME bytes (dedup path)', () => {
+    const keys = ['rise/courses/c1/a.jpg', 'rise/courses/c1/b.jpg', 'rise/courses/c1/c.jpg'];
+    const model = renderCourseModel(courseWithImages(keys) as any, {
+      generatedAt: '2026-01-01T00:00:00Z',
+      toolVersion: '0.0.test',
+    });
+    const shared = new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    const images = new Map(
+      keys.map((k) => [k, { key: k, bytes: shared, ext: 'jpg', width: 100, height: 80 }]),
+    );
+    const bytes = writeStoryboardDocxProse(model, images as never);
+    assertPackageValid(bytes);
+    // one part, one relationship — referenced by all three blocks
+    const files = unzipSync(bytes);
+    expect(Object.keys(files).filter((f) => f.startsWith('word/media/'))).toHaveLength(1);
+    const rels = new TextDecoder().decode(files['word/_rels/document.xml.rels']!);
+    expect(rels.match(/relationships\/image/g)).toHaveLength(1);
+  });
+
+  it('stays valid with a MIX of shared, distinct and multi-format images', () => {
+    const keys = [
+      'rise/courses/c1/a.jpg',
+      'rise/courses/c1/b.jpg',
+      'rise/courses/c1/c.png',
+      'rise/courses/c1/d.jpg',
+    ];
+    const model = renderCourseModel(courseWithImages(keys) as any, {
+      generatedAt: '2026-01-01T00:00:00Z',
+      toolVersion: '0.0.test',
+    });
+    const shared = new Uint8Array([1, 1, 2, 3, 5, 8]);
+    const images = new Map<string, unknown>([
+      ['rise/courses/c1/a.jpg', { key: keys[0], bytes: shared, ext: 'jpg', width: 90, height: 60 }],
+      ['rise/courses/c1/b.jpg', { key: keys[1], bytes: shared, ext: 'jpg', width: 90, height: 60 }],
+      ['rise/courses/c1/c.png', { key: keys[2], bytes: new Uint8Array([4, 4, 4]), ext: 'png', width: 50, height: 50 }],
+      ['rise/courses/c1/d.jpg', { key: keys[3], bytes: new Uint8Array([7, 7]), ext: 'jpg', width: 70, height: 30 }],
+    ]);
+    const bytes = writeStoryboardDocxProse(model, images as never);
+    assertPackageValid(bytes);
+    const files = unzipSync(bytes);
+    // 4 keys, 3 unique payloads → 3 parts
+    expect(Object.keys(files).filter((f) => f.startsWith('word/media/'))).toHaveLength(3);
+    const ct = new TextDecoder().decode(files['[Content_Types].xml']!);
+    expect(ct).toContain('Extension="jpg"');
+    expect(ct).toContain('Extension="png"');
+  });
+});

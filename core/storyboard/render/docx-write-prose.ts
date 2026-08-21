@@ -97,6 +97,17 @@ function imageRelFor(state: DocState, key: string, ext: string, bytes: Uint8Arra
   return rId;
 }
 
+/** The distinct image parts in the package — deduped by relationship id, so a
+ *  part shared by several asset keys is emitted exactly once in
+ *  `[Content_Types].xml` and `document.xml.rels`. */
+function uniqueImageParts(state: DocState): { rId: string; partName: string }[] {
+  const byRId = new Map<string, { rId: string; partName: string }>();
+  for (const entry of state.images.values()) {
+    if (!byRId.has(entry.rId)) byRId.set(entry.rId, entry);
+  }
+  return [...byRId.values()];
+}
+
 // ---------------------------------------------------------------- XML helpers
 
 function runXml(run: SbRun, opts: { sz?: number; highlight?: string; shd?: string } = {}): string {
@@ -539,9 +550,8 @@ function documentXml(course: SbCourse, state: DocState, images: Map<string, Reso
 
 function contentTypes(state: DocState): string {
   const imageExts = new Set<string>();
-  for (const [, { partName }] of state.images) {
-    const ext = partName.split('.').pop()!;
-    imageExts.add(ext);
+  for (const { partName } of uniqueImageParts(state)) {
+    imageExts.add(partName.split('.').pop()!);
   }
   const MIME: Record<string, string> = {
     jpg: 'image/jpeg',
@@ -580,7 +590,10 @@ function documentRels(state: DocState): string {
         `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(url)}" TargetMode="External"/>`,
     )
     .join('');
-  const imageRels = [...state.images.values()]
+  // One relationship per unique PART: with content dedup several asset keys
+  // share an entry in `state.images`, and emitting per key produced the SAME
+  // Relationship Id more than once — invalid OOXML ("unreadable content").
+  const imageRels = uniqueImageParts(state)
     .map(
       ({ rId, partName }) =>
         `<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${partName}"/>`,
