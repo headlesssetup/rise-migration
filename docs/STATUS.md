@@ -1,6 +1,23 @@
 # Project Status
 
-_Last updated: 2026-08-21 (v0.9.6: prose docx flashcard tables, hidden-text exposure, cover legend). Keep this current at each phase boundary._
+_Last updated: 2026-08-21 (v0.9.7: flashcard variants + docx image weight). Keep this current at each phase boundary._
+
+## v0.9.7 patch (2026-08-21)
+
+- **Flashcards keyed by FAMILY, not variant.** A live course reported
+  `flashcard/stack`; the v0.9.6 card table gated on `flashcard/flashcard`, so
+  stack fell through to the generic RO extractor and emitted back-then-front
+  (raw JSON key order) as loose paragraphs — the "all fronts, all backs"
+  report. `EDIT['flashcard']` + a family-level card gate now cover every
+  variant, present and future.
+- **Docx image weight — two independent bloats fixed.** A real export was
+  25 MB: (a) three BYTE-IDENTICAL 8 MB JPEGs embedded as separate parts
+  because dedup keyed on the asset key, not content — the writer now also
+  dedups by content digest; (b) 6240×4160 (26 MP) originals embedded whole
+  though the doc shows ≤15 cm — both image paths (live CDN + archive) now
+  downscale to ≤1800 px via OffscreenCanvas before embedding, PNG stays PNG,
+  GIF and decode failures pass through untouched. Measured on that export:
+  25.1 MB → ~1.2 MB of images.
 
 ## v0.9.6 patch (2026-08-21)
 

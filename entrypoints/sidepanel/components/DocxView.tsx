@@ -25,9 +25,11 @@ import {
 import {
   DOCX_SEARCH_PAGE_SIZE,
   fetchCourseForDocx,
+  MAX_EMBED_PX,
   pinRiseTabForDocx,
   resolveImagesFromCdn,
   searchCoursesPage,
+  shrinkForEmbed,
 } from '../orchestrator/docx';
 import { unwrap } from '../orchestrator/shared';
 import type { ProgressEvent } from '../orchestrator';
@@ -86,6 +88,9 @@ async function resolveImagesFromArchive(
 
   let resolved = 0;
   let skipped = 0;
+  let shrunk = 0;
+  let bytesIn = 0;
+  let bytesOut = 0;
   for (const key of needed) {
     const entry = keyToEntry.get(key);
     if (!entry || !RASTER_EXTS.has(entry.ext)) {
@@ -101,17 +106,29 @@ async function resolveImagesFromArchive(
     const row = model.lessons
       .flatMap((l) => l.rows)
       .find((r) => r.image?.key === key);
+    const ext = entry.ext === 'jpeg' ? 'jpg' : entry.ext;
+    // Same thumbnail cap as the live path — archived originals are full-size.
+    const small = await shrinkForEmbed(bytes, ext);
+    bytesIn += bytes.length;
+    bytesOut += small ? small.bytes.length : bytes.length;
+    if (small) shrunk++;
     images.set(key, {
       key,
-      bytes,
-      ext: entry.ext === 'jpeg' ? 'jpg' : entry.ext,
-      width: row?.image?.width ?? 800,
-      height: row?.image?.height ?? 600,
+      bytes: small ? small.bytes : bytes,
+      ext: small ? small.ext : ext,
+      width: small ? small.width : row?.image?.width ?? 800,
+      height: small ? small.height : row?.image?.height ?? 600,
     });
     resolved++;
   }
   if (resolved > 0 || skipped > 0) {
-    addLog(`Images: ${resolved} embedded, ${skipped} skipped (SVG/missing).`);
+    const mb = (n: number): string => (n / 1e6).toFixed(1);
+    addLog(
+      `Images: ${resolved} embedded, ${skipped} skipped (SVG/missing)` +
+        (shrunk > 0
+          ? ` — ${shrunk} downscaled to ≤${MAX_EMBED_PX}px (${mb(bytesIn)} MB → ${mb(bytesOut)} MB)`
+          : ''),
+    );
   }
   return images;
 }

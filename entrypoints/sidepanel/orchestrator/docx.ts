@@ -19,6 +19,54 @@ import { extractItems, unwrap, type ProgressEvent } from './shared';
  *  archive-backed image path). */
 const RASTER_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 
+/**
+ * Cap for EMBEDDED image pixels. The doc shows images at most 15 cm wide, so
+ * ~1800 px is still >300 dpi print quality — while a real course served
+ * 6240×4160 originals (8 MB each) and one export came out 24 MB. Anything
+ * wider is re-encoded; smaller images are embedded untouched.
+ */
+export const MAX_EMBED_PX = 1800;
+const JPEG_QUALITY = 0.82;
+
+/**
+ * Downscale one oversized raster to {@link MAX_EMBED_PX} using the panel's
+ * OffscreenCanvas. Returns the original bytes unchanged when the image is
+ * already small enough, when the format is animated (GIF — re-encoding would
+ * flatten it), or on ANY decode/encode failure: a thumbnail is a convenience,
+ * never a reason to fail a docx export.
+ */
+export async function shrinkForEmbed(
+  bytes: Uint8Array,
+  ext: string,
+): Promise<{ bytes: Uint8Array; ext: string; width: number; height: number } | null> {
+  if (ext === 'gif') return null;
+  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return null;
+  let bitmap: ImageBitmap | undefined;
+  try {
+    // Copy into a fresh buffer: Blob wants an ArrayBuffer, and `bytes` may be a
+    // view into a larger one.
+    bitmap = await createImageBitmap(new Blob([bytes.slice().buffer]));
+    if (bitmap.width <= MAX_EMBED_PX && bitmap.height <= MAX_EMBED_PX) return null;
+    const scale = MAX_EMBED_PX / Math.max(bitmap.width, bitmap.height);
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    // PNG stays PNG (transparency); everything else re-encodes as JPEG.
+    const type = ext === 'png' ? 'image/png' : 'image/jpeg';
+    const blob = await canvas.convertToBlob({ type, quality: JPEG_QUALITY });
+    const out = new Uint8Array(await blob.arrayBuffer());
+    if (out.length === 0 || out.length >= bytes.length) return null; // no win
+    return { bytes: out, ext: type === 'image/png' ? 'png' : 'jpg', width, height };
+  } catch {
+    return null;
+  } finally {
+    bitmap?.close();
+  }
+}
+
 /** Mirrors the Rise UI page size — we page like a person. */
 export const DOCX_SEARCH_PAGE_SIZE = 16;
 
@@ -124,6 +172,9 @@ export async function resolveImagesFromCdn(
   const download = makeCdnDownloader(bases);
   let resolved = 0;
   let skipped = 0;
+  let shrunk = 0;
+  let bytesIn = 0;
+  let bytesOut = 0;
   for (const [key, dims] of needed) {
     const out = await download(key);
     const rawExt = extFromKey(key) || extFromContentType(out.contentType);
@@ -131,18 +182,29 @@ export async function resolveImagesFromCdn(
       skipped++;
       continue;
     }
+    const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+    // Re-encode oversized originals — the doc only ever shows a thumbnail.
+    const small = await shrinkForEmbed(out.bytes, ext);
+    bytesIn += out.bytes.length;
+    bytesOut += small ? small.bytes.length : out.bytes.length;
+    if (small) shrunk++;
     images.set(key, {
       key,
-      bytes: out.bytes,
-      ext: rawExt === 'jpeg' ? 'jpg' : rawExt,
-      width: dims.width ?? 800,
-      height: dims.height ?? 600,
+      bytes: small ? small.bytes : out.bytes,
+      ext: small ? small.ext : ext,
+      width: small ? small.width : dims.width ?? 800,
+      height: small ? small.height : dims.height ?? 600,
     });
     resolved++;
   }
+  const mb = (n: number): string => (n / 1e6).toFixed(1);
   onEvent({
     kind: 'log',
-    message: `Images: ${resolved} embedded, ${skipped} skipped (SVG/missing).`,
+    message:
+      `Images: ${resolved} embedded, ${skipped} skipped (SVG/missing)` +
+      (shrunk > 0
+        ? ` — ${shrunk} downscaled to ≤${MAX_EMBED_PX}px (${mb(bytesIn)} MB → ${mb(bytesOut)} MB)`
+        : ''),
   });
   return images;
 }

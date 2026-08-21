@@ -50,6 +50,8 @@ interface DocState {
   numberInstances: number[];
   nextNumId: number;
   images: Map<string, { rId: string; partName: string }>;
+  /** content digest → the part already holding those exact bytes (dedup). */
+  imagesByContent: Map<string, { rId: string; partName: string }>;
   nextImageId: number;
   mediaFiles: Map<string, Uint8Array>;
 }
@@ -63,13 +65,34 @@ function relFor(state: DocState, url: string): string {
   return id;
 }
 
+/** FNV-1a 32-bit over raw bytes — a content fingerprint for image dedup. */
+function fnv1a8Bytes(bytes: Uint8Array): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i]!;
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
 function imageRelFor(state: DocState, key: string, ext: string, bytes: Uint8Array): string {
   const existing = state.images.get(key);
   if (existing) return existing.rId;
+  // Dedup by CONTENT too, not just asset key: a real course re-uploads the same
+  // photo under several keys (one export embedded three byte-identical 8 MB
+  // JPEGs, 16 MB of pure duplication). Same bytes → same part + rel.
+  const digest = `${fnv1a8Bytes(bytes)}:${bytes.length}`;
+  const sameBytes = state.imagesByContent.get(digest);
+  if (sameBytes) {
+    state.images.set(key, sameBytes);
+    return sameBytes.rId;
+  }
   const n = state.nextImageId++;
   const rId = `rIdImg${n}`;
   const partName = `media/image${n}.${ext}`;
-  state.images.set(key, { rId, partName });
+  const entry = { rId, partName };
+  state.images.set(key, entry);
+  state.imagesByContent.set(digest, entry);
   state.mediaFiles.set(`word/${partName}`, bytes);
   return rId;
 }
@@ -625,6 +648,7 @@ export function writeStoryboardDocxProse(
     numberInstances: [],
     nextNumId: 2,
     images: new Map(),
+    imagesByContent: new Map(),
     nextImageId: 1,
     mediaFiles: new Map(),
   };

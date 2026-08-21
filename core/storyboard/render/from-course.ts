@@ -257,7 +257,11 @@ const EDIT: Record<string, EditRenderer> = {
   'list': renderList,
   'interactive/accordion': renderItemsTitled,
   'interactive/tabs': renderItemsTitled,
-  'flashcard/flashcard': renderFlashcards,
+  // By FAMILY, not variant: Rise ships several flashcard variants (`flashcard`,
+  // `stack`, …) with the same front/back item shape. Gating on one variant sent
+  // `flashcard/stack` to the generic RO extractor, which emitted back-then-front
+  // (JSON key order) as loose paragraphs — the "all fronts, all backs" report.
+  'flashcard': renderFlashcards,
   'interactive-fullscreen/process': renderProcess,
   'interactive-fullscreen/timeline': renderTimeline,
   'interactive-fullscreen/sorting': renderSorting,
@@ -462,10 +466,7 @@ function renderBlock(b: Block, no: number, roOnly: boolean, flags: string[]): Sb
   const prose = proseHintFor(family, variant);
   // Flashcards additionally carry structured front/back pairs — the prose
   // writer renders one card per 2-column table row instead of `content`.
-  const cards =
-    fidelity === 'edit' && `${family}/${variant}` === 'flashcard/flashcard'
-      ? extractFlashcards(b)
-      : undefined;
+  const cards = fidelity === 'edit' && family === 'flashcard' ? extractFlashcards(b) : undefined;
   if (cards) {
     for (const card of cards) {
       escapeTokens(card.front, flags, `block ${blockId}`);

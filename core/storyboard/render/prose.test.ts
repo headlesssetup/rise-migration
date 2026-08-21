@@ -303,3 +303,89 @@ describe('prose docx — flashcard table, hidden shading, legend', () => {
     expect(xml).toContain('= in the course but hidden from learners');
   });
 });
+
+describe('prose docx — flashcard variants and image dedup', () => {
+  const { unzipSync } = require('fflate') as typeof import('fflate');
+  const parts = (bytes: Uint8Array): Record<string, Uint8Array> => unzipSync(bytes);
+  const docXml = (bytes: Uint8Array): string =>
+    new TextDecoder().decode(parts(bytes)['word/document.xml']!);
+
+  // Regression: a live course reported variant `stack`, which fell through the
+  // exact-variant gate to the RO extractor — emitting back-then-front (JSON key
+  // order) as loose paragraphs instead of a card table.
+  it.each(['flashcard', 'stack', 'someFutureVariant'])(
+    'renders flashcard/%s as a card table',
+    (variant) => {
+      const model = renderCourseModel(
+        {
+          course: { id: 'c1', title: 'T', lessons: ['l1'] },
+          lessons: [
+            {
+              id: 'l1',
+              title: 'L1',
+              type: 'blocks',
+              items: [
+                {
+                  id: 'b-fc',
+                  family: 'flashcard',
+                  variant,
+                  // NOTE: `back` first, exactly as the archive stores it.
+                  items: [
+                    {
+                      id: 'c1',
+                      back: { description: '<p>The answer.</p>' },
+                      front: { description: '<p>The prompt.</p>' },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        } as any,
+        { generatedAt: '2026-01-01T00:00:00Z', toolVersion: '0.0.test' },
+      );
+      const row = model.lessons[0]!.rows[0]!;
+      expect(row.fidelity).toBe('edit');
+      expect(row.cards).toHaveLength(1);
+      const xml = docXml(writeStoryboardDocxProse(model));
+      expect(xml).toContain('<w:tbl>');
+      // FRONT precedes BACK in the table, whatever the source key order.
+      expect(xml.indexOf('The prompt.')).toBeLessThan(xml.indexOf('The answer.'));
+    },
+  );
+
+  it('embeds byte-identical images once, however many keys reference them', () => {
+    const model = renderCourseModel(
+      {
+        course: { id: 'c1', title: 'T', lessons: ['l1'] },
+        lessons: [
+          {
+            id: 'l1',
+            title: 'L1',
+            type: 'blocks',
+            items: ['a', 'b', 'c'].map((n) => ({
+              id: `b-${n}`,
+              family: 'image',
+              variant: 'banner',
+              items: [{ id: `i-${n}`, media: { image: { key: `rise/courses/c1/${n}.jpg`, type: 'image' } } }],
+            })),
+          },
+        ],
+      } as any,
+      { generatedAt: '2026-01-01T00:00:00Z', toolVersion: '0.0.test' },
+    );
+    // Same bytes under three different keys (a real course re-uploads a photo).
+    const shared = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    const images = new Map(
+      ['a', 'b', 'c'].map((n) => [
+        `rise/courses/c1/${n}.jpg`,
+        { key: `rise/courses/c1/${n}.jpg`, bytes: shared, ext: 'jpg', width: 100, height: 80 },
+      ]),
+    );
+    const bytes = writeStoryboardDocxProse(model, images as never);
+    const media = Object.keys(parts(bytes)).filter((p) => p.startsWith('word/media/'));
+    expect(media).toHaveLength(1);
+    // …and all three blocks still show it.
+    expect(docXml(bytes).split('rIdImg1').length - 1).toBe(3);
+  });
+});
