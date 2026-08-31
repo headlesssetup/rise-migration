@@ -46,14 +46,21 @@ export function createBlockumentFromBlank(plane: Plane, courseId: string): Write
 
 /** WRITE state: POST /api/blockuments/<id>/transaction — a FULL-STATE upsert
  *  of the touched entities. Body is either `{blockument: <doc>}` or
- *  `{items: {<itemId>: <item>}}` (the editor sends one entity per call; we
- *  mirror that). Response is the plain text `OK`. */
+ *  `{items: {<itemId>: <item>, …}}`. The editor sends one entity per call when
+ *  EDITING an existing graph; CONSTRUCTION must ship all items in ONE call —
+ *  the server's pruneManifest validator 400s any post-state that references a
+ *  missing item ("Item <id> was referenced in the manifest but not present",
+ *  live 2026-08-31), and group items carry `children` lists, so no sequential
+ *  order is consistent. Response is the plain text `OK`. */
 export function blockumentTransaction(
   plane: Plane,
   blockumentId: string,
   body: { blockument: unknown } | { items: Record<string, unknown> },
 ): WriteSpec {
-  const what = 'blockument' in body ? 'doc' : `item ${Object.keys(body.items)[0] ?? '?'}`;
+  const what =
+    'blockument' in body
+      ? 'doc'
+      : `${Object.keys(body.items).length} item(s)`;
   return {
     url: `${mondrianApiBase(plane)}/api/blockuments/${encodeURIComponent(blockumentId)}/transaction`,
     method: 'POST',

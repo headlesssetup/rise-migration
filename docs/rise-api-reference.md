@@ -472,8 +472,14 @@ Captured endpoints (`-mondrian{,2,3}.mitm` — EU create/edit + US plane parity)
 - `POST /api/blockuments/createFromTemplate/<templateId> {parentId, parentType}`
   → same, with `createdFromTemplateId` + per-item `clonedFromId` provenance.
 - `POST /api/blockuments/<id>/transaction` — **FULL-STATE upsert** of touched
-  entities: body `{blockument:<doc>}` or `{items:{<itemId>:<item>}}`; response
-  is the plain text `OK`. The editor writes ONE entity per call.
+  entities: body `{blockument:<doc>}` or `{items:{<itemId>:<item>, …}}`; response
+  is the plain text `OK`. The editor writes ONE entity per call when EDITING an
+  existing graph. ⚠ CONSTRUCTION must ship ALL items in one call: the server
+  validates the post-transaction reachability manifest and 400s
+  (`pruneManifest: Item <id> was referenced in the manifest but not present`,
+  live-observed 2026-08-31) when a group's `children` (or the doc's) reference
+  an item that does not exist — group items carry `children` lists, so no
+  sequential single-item order is ever consistent.
 - `POST /api/signed-asset-url {name, blockumentId}` →
   `{asset:{id,path,name,type}, mimeType, url}` — presigned S3 PUT for
   `mondrian/assets/blockument/<bid>/<assetId>.<ext>`; followed by the standard

@@ -185,16 +185,19 @@ describe('executePlan — mondrian happy path', () => {
       `mondrian/assets/blockument/${NEW_BID}/cnewasset000000000000000.png`,
     );
 
-    // transactions: doc first, then items (root canvas adopted, image reminted)
+    // transactions: doc first, then ALL items in ONE atomic upsert — per-item
+    // writes 400 on the server's pruneManifest (children refs must exist in
+    // the post-transaction state; live 2026-08-31).
     const txs = sent.filter((s) => s.url.includes('/transaction'));
-    expect(txs.length).toBe(3); // 1 doc + 2 items
+    expect(txs.length).toBe(2); // 1 doc + 1 items map
     expect(txs[0]!.url).toContain(NEW_BID);
     const docTx = txs[0]!.body as { blockument: { id: string; children: { id: string }[] } };
     expect(docTx.blockument.id).toBe(NEW_BID);
     expect(docTx.blockument.children[0]!.id).toBe(CANVAS_ID);
-    const itemBodies = txs.slice(1).map((t) => t.body as { items: Record<string, unknown> });
-    const itemIds = itemBodies.flatMap((b) => Object.keys(b.items));
-    expect(itemIds[0]).toBe(CANVAS_ID); // parents first
+    const itemsTx = txs[1]!.body as { items: Record<string, { parentId: string }> };
+    const itemIds = Object.keys(itemsTx.items);
+    expect(itemIds).toHaveLength(2); // canvas + image, one consistent set
+    expect(itemIds).toContain(CANVAS_ID);
     // no old ids/paths anywhere in the transactions
     const blob = JSON.stringify(txs);
     expect(blob).not.toContain(SRC_BID);
@@ -226,7 +229,7 @@ describe('executePlan — mondrian happy path', () => {
     const labels = res.envelopes.map((e) => e.label);
     expect(labels.some((l) => l.includes('createFromBlank'))).toBe(true);
     expect(labels.some((l) => l.includes('signed-asset-url'))).toBe(true);
-    expect(labels.filter((l) => l.includes('transaction')).length).toBe(3);
+    expect(labels.filter((l) => l.includes('transaction')).length).toBe(2);
   });
 
   it('fails loudly when the target plane is unknown (live run)', async () => {

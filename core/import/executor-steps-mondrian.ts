@@ -148,12 +148,23 @@ export async function handleCreateBlockument(
     keyMap.set(rec.path, newPath); // old mondrian path must never survive
   }
 
-  // 4. Write the document, then its items (parents first), as full-state
-  //    transactions — one entity per call, mirroring the editor.
+  // 4. Write the document, then ALL items in ONE full-state transaction.
+  //    Per-item writes cannot construct a graph: group items carry `children`
+  //    lists, and the server's pruneManifest validator 400s a transaction whose
+  //    post-state references an item that does not exist ("Item <id> was
+  //    referenced in the manifest but not present" — live 2026-08-31, first
+  //    Mercedes run). Parents-first hits missing children; children-first hits
+  //    unreferenced orphans. The `{items:{<id>:…}}` body is a map, so one
+  //    atomic upsert of the whole internally-consistent set is the only order-
+  //    free construction (the server's own createFromBlank/createFromTemplate
+  //    return exactly such multi-item graphs). The doc write stays FIRST — its
+  //    children reference only the adopted canvas, which createFromBlank made.
   const items: BlockumentItem[] = applyAssetMap(remapped.items, assetMap);
   await send(blockumentTransaction(p, newBid, { blockument: remapped.doc }), step.kind);
-  for (const item of items) {
-    await send(blockumentTransaction(p, newBid, { items: { [item.id]: item } }), step.kind);
+  if (items.length > 0) {
+    const itemMap: Record<string, unknown> = {};
+    for (const item of items) itemMap[item.id] = item;
+    await send(blockumentTransaction(p, newBid, { items: itemMap }), step.kind);
   }
 
   ctx.blockumentMap.set(step.sourceBlockumentId, newBid);
