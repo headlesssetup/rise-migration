@@ -12,7 +12,7 @@ export default defineConfig({
     // DISPLAYED string in chrome://extensions. Fix builds bump the LETTER
     // (0.9.9a, 0.9.9b, …) so a reload is visibly confirmable at a glance —
     // bump it with EVERY rebuilt fix, alongside package.json for real patches.
-    version_name: '0.9.9a',
+    version_name: '0.9.9b',
     description:
       'Export and import Rise courses, save course documents, and build validated local course packages with Rise Creator.',
     // `cookies` lets us read the bearer straight from the `_articulate_rise_`

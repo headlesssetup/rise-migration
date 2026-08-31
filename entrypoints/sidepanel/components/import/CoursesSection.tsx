@@ -60,9 +60,10 @@ export function CoursesSection({
           ...selected,
         ]);
         if (!alive) return;
+        const estimable = selected.size - missing - unreadable;
         const parts = [
           `${selected.size} course(s)${stacks ? ` (${stacks} multi-language)` : ''}`,
-          `${formatEstimate(e.seconds)} (rough)`,
+          estimable > 0 ? `${formatEstimate(e.seconds)} (rough)` : 'estimate unavailable',
         ];
         if (missing) parts.push(`${missing} not in archive`);
         if (unreadable) parts.push(`${unreadable} unreadable/plan error`);
@@ -193,4 +194,3 @@ export function CoursesSection({
     </CollapsibleStep>
   );
 }
-

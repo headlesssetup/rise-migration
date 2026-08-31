@@ -62,5 +62,8 @@ package-lock.json
 _export_test_4aug/
 _multilang_capture/
 _capture*/
-_mercedes/
+# Operator-local archives + publish-comparison folders (customer content).
+_mercedes*/
+_scorm2rise/
+_publish-compare/
 *.mitm

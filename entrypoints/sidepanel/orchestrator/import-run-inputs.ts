@@ -329,10 +329,12 @@ export async function estimateCourses(
       const course = unwrap(raw);
       if (isLocalizedStack(course)) stacks++;
       const { entries } = await readCourseAssets(storage, courseId);
+      const blockuments = await readBlockumentGraphs(storage, courseId);
       const steps = buildPlan({
         course,
         assets: entries,
         banksById: new Map(),
+        blockuments,
         author: 'estimate',
       });
       per.push(estimateImportSeconds(steps, entries));

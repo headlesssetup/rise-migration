@@ -108,8 +108,8 @@ the lesson) — kept here for completeness; copy-faithful handles them.
 
 ## Library census (581 courses, 2026-06-19)
 
-- **65 distinct `family/variant`**, all documented above; full per-variant field
-  profiles in `core/census/catalog.fields.json` (5,435 field-paths).
+- **65 distinct `family/variant`**, all documented above; the accepted per-variant
+  baseline in `core/census/catalog.fields.json` now contains 5,709 field-paths.
 - **Reference distribution:** `media-image` 56,026 · `cdn` 11,061 ·
   `media-storyline` 1,021 · `media-audio` 714 · `media-video` 713 ·
   `storyline-crossref` 450 · `embed` 209 · `media-other` 135 ·
@@ -147,6 +147,7 @@ warning at export. See `docs/rise-api-reference.md` §mondrian.
 
 | Variant | Field | Classification | Source |
 |---|---|---|---|
+| 18 existing variants (`continue`, `divider`, `flashcard`, `image`, `impact`, `scenario`, `knowledgeCheck`, `list`, `quote`, `text`) | 273 field paths from the complete `_mercedes2` profiles | **accepted current Rise schema** — image dimensions/crops and `originalImage` metadata; background-image metadata; scenario pose records; custom padding; retry count; block attachment; audio position. Copy-faithful; the full union is recorded in `core/census/catalog.fields.json`. | `_mercedes2` export 2026-08-31 (2 courses, 34 known variants, 0 new variants); source JSON matched live Rise and both source courses previewed and published successfully. |
 | `image/hero` | `items[].media.image.translationOverride` | **new field** — multi-language feature: marks a media cell a language OVERRIDE (set when a target language's asset is swapped; the cell then stops following the source language). Copy-faithful; carried verbatim in the l10n cell. | novelty run 2026-08-02 (EU stack `AEDTROY…`), capture `capture1aug_2.mitm`; see `docs/rise-multilang.md` §2/§4.3 |
 
 ## Review queue (auto-captured, awaiting classification)
