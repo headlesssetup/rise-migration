@@ -298,7 +298,7 @@ export function useExportRuns({
             // validates the self-contained byte set and promotes this to ready.
             state: 'building',
             createdAt,
-            toolVersion: browser.runtime.getManifest().version,
+            toolVersion: browser.runtime.getManifest().version_name ?? browser.runtime.getManifest().version,
             sourceAccount,
             courses: await buildCourseEntries(storage, courseList),
             exportSummary: {

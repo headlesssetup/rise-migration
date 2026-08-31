@@ -260,7 +260,7 @@ export function DocxView({
       logBreak('Generate .docx');
       const opts = {
         generatedAt: new Date().toISOString(),
-        toolVersion: browser.runtime.getManifest().version,
+        toolVersion: browser.runtime.getManifest().version_name ?? browser.runtime.getManifest().version,
       };
 
       let model: SbCourse;
