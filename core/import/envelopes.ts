@@ -43,6 +43,28 @@ function ducks(domain: string, action: string, payload: unknown): WriteSpec {
   };
 }
 
+/** UPDATE_COURSE_DEBOUNCE {id, settings} — the Settings panel's write; the UI
+ *  sends the FULL settings object each time (capture-proven 2026-08-31,
+ *  `-settings.mitm`: the aiTutorEnabled toggle). */
+export function updateCourseSettings(
+  courseId: string,
+  settings: Record<string, unknown>,
+): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE_DEBOUNCE', { id: courseId, settings });
+}
+
+/** UPDATE_COURSE_DEBOUNCE {id, aiTutorConfig} — the AI-tutor name/avatar write
+ *  (capture-proven 2026-08-31, `-settings.mitm`). NOTE the same capture also
+ *  proved `UPDATE_COURSE {id, labelSetId}` (immediate, not debounced) as the
+ *  monolingual label-set binding — recorded for the future label-set migration
+ *  (documented gap; not written yet). */
+export function updateCourseAiTutorConfig(
+  courseId: string,
+  aiTutorConfig: unknown,
+): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE_DEBOUNCE', { id: courseId, aiTutorConfig });
+}
+
 /** UPDATE_COURSE_DEBOUNCE {id, exportSettings} — the publish dialog's settings
  *  write (capture-proven 2026-08-31: `-import_fail2.mitm` 14:20, mercedes
  *  13:19/13:21, fonts2 15:27). The FULL exportSettings object rides one call. */

@@ -330,12 +330,17 @@ Three read-backs per course, all against real `GET_COURSE` responses:
      (`null`/`''`/`{}`) are equivalent; a field holding an explicitly flagged
      media key reports as *expected*. Kind: `course-field-changed`, path
      `course.<field>`.
-     ⚠ KNOWN WRITE GAP made blocking by this check: the importer does not yet
-     MIGRATE the settings fields. A source/target settings difference is a real
-     parity failure and the course is `partial`, never `imported` or "Parity OK".
-     The write is small (`UPDATE_COURSE_DEBOUNCE {id, settings:{…}}` /
-     `UPDATE_COURSE` field writes — the settings envelope is captured in
-     `capture1aug.mitm`, `aiTutorEnabled` toggle) — implement when prioritized.
+     v0.9.9 (capture 2026-08-31, `-settings.mitm`): the importer now WRITES
+     `settings` (full object; an empty source neutralizes the shell's
+     aiTutorEnabled default), `aiTutorConfig` (avatar uploaded + key remapped)
+     and `exportSettings` (quizId remapped, identifier from the new id, the
+     target's shareId, activeEdition reset). The legacy TOP-LEVEL mirrors
+     (navigationMode, markComplete, sidebarMode, color, …) are written by NO
+     current control — their behavior rides the THEME (strictly compared), so
+     their diffs demote to EXPECTED divergences. `allowCopy` remains blocking
+     (no captured write anywhere). `UPDATE_COURSE {id, labelSetId}` is now
+     capture-proven (monolingual label-set binding) but not yet written —
+     the label-set gap stands.
      `labelSetId` is deliberately NOT compared (documented label-set gap; noise).
    - lessons/blocks, media keys, l10n cells — as before.
    - **typeface IDENTITY** (v0.6.5): parity tokenizes ids, so it proves a font is

@@ -280,7 +280,13 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     expect(r.issues.map((i) => i.path)).toContain('course.title');
   });
 
-  it('makes every unmigrated setting difference a blocking parity failure', () => {
+  it('blocks on writable settings; legacy top-level mirrors are expected only', () => {
+    // v0.9.9 policy (capture 2026-08-31, `-settings.mitm` + `-fonts.mitm`):
+    // the current editor writes settings/exportSettings/aiTutorConfig and the
+    // THEME twins of the navigation scalars — the top-level scalars are
+    // unwritable legacy mirrors (source courses even disagree with their own
+    // theme and still preview/publish). Behavior parity rides `theme`
+    // (blocking); the mirrors demote to expected divergences.
     const source = base({
       sidebarMode: 'closed',
       markComplete: true,
@@ -291,42 +297,60 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     const r = verifyParity(source, target);
     expect(r.ok).toBe(false);
     expect(r.issues.map((i) => i.path).sort()).toEqual([
-      'course.markComplete',
       'course.settings',
-      'course.sidebarMode',
       'course.theme',
     ]);
-    expect(r.expectedDivergences).toEqual([]);
+    expect(r.expectedDivergences.map((i) => i.path).sort()).toEqual([
+      'course.markComplete',
+      'course.sidebarMode',
+    ]);
     expect(
-      r.issues
-        .filter((i) => i.path !== 'course.theme')
-        .every((i) => i.detail?.includes('parity cannot be confirmed')),
+      r.expectedDivergences.every((i) => i.detail?.includes('legacy top-level mirror')),
     ).toBe(true);
   });
 
-  it('reads back the complete top-level settings surface, including nested settings', () => {
-    const fields: Record<string, unknown> = {
+  it('settings compares absent booleans as OFF (the panel writes explicit false)', () => {
+    // {} vs {aiTutorEnabled:false} — both mean the AI tutor is off.
+    const r = verifyParity(
+      base({ settings: {} }),
+      base({ settings: { aiTutorEnabled: false } }),
+    );
+    expect(r.issues.filter((i) => i.path === 'course.settings')).toEqual([]);
+    // {} vs {aiTutorEnabled:true} — a REAL behavior difference, blocking.
+    const r2 = verifyParity(
+      base({ settings: {} }),
+      base({ settings: { aiTutorEnabled: true } }),
+    );
+    expect(r2.issues.some((i) => i.path === 'course.settings')).toBe(true);
+  });
+
+  it('reads back the full settings surface: writable fields block, mirrors expected', () => {
+    const mirrors: Record<string, unknown> = {
       sidebarMode: 'closed',
       navigationMode: 'restricted',
       showLessonCount: false,
       showNavigationButtons: false,
       allowSearch: false,
-      allowCopy: true,
       animateBlockEntrance: false,
       markComplete: true,
       enableVideoPlaybackSpeed: false,
       color: '#123456',
+    };
+    const writable: Record<string, unknown> = {
+      allowCopy: true, // no captured control writes it anywhere → stays loud
       settings: { aiTutorEnabled: true, isAIConceptToCourse: true },
       aiTutorConfig: { mode: 'guided' },
     };
-    const source = base(fields);
+    const source = base({ ...mirrors, ...writable });
     const target = base();
     const r = verifyParity(source, target);
     expect(r.ok).toBe(false);
     expect(new Set(r.issues.map((i) => i.path))).toEqual(
-      new Set(Object.keys(fields).map((field) => `course.${field}`)),
+      new Set(Object.keys(writable).map((field) => `course.${field}`)),
     );
-    expect(r.expectedDivergences).toEqual([]);
+    expect(new Set(r.expectedDivergences.map((i) => i.path))).toEqual(
+      new Set(Object.keys(mirrors).map((field) => `course.${field}`)),
+    );
   });
 
   it('confirms the course kind created by the importer', () => {

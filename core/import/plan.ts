@@ -544,6 +544,32 @@ export function buildPlan(input: PlanInput): PlanStep[] {
   // its set-course-images (from the MATERIALIZED course) pre-conversion.
   if (!stack) planCourseImages(course as Record<string, unknown>);
 
+  // Course settings + AI-tutor config (Settings panel; capture-proven
+  // 2026-08-31). Emitted BEFORE the unsupported-media sweep so the AI-tutor
+  // avatar keys count as handled (they upload via the normal chain).
+  {
+    const c = course as Record<string, unknown>;
+    const srcSettings = c.settings;
+    const settingsEmpty =
+      !srcSettings || typeof srcSettings !== 'object' || Object.keys(srcSettings).length === 0;
+    steps.push({
+      kind: 'set-course-settings',
+      summary: settingsEmpty
+        ? 'Write course settings (neutralize the shell default: AI tutor off)'
+        : 'Write course settings (Settings panel state)',
+    });
+    const tutor = c.aiTutorConfig;
+    if (tutor && typeof tutor === 'object') {
+      const tutorKeys = collectAssetKeys(tutor, sourceCourseId).map((k) => k.key);
+      for (const k of tutorKeys) handledKeys.add(k);
+      steps.push({
+        kind: 'set-ai-tutor-config',
+        sourceKeys: tutorKeys,
+        summary: 'Write AI-tutor configuration (name/avatar)',
+      });
+    }
+  }
+
   // Media that isn't on a recreatable block OR an uploaded lesson header — theme
   // images and bank question media (lesson headers are handled per-lesson above).
   // The captured write path doesn't cover these, so flag them (manual) rather than

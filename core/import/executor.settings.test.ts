@@ -91,7 +91,10 @@ describe('executePlan — set-export-settings', () => {
       ids: new IdMap(counterMint()),
       mintId: counterMint(),
     });
-    const write = sent.find((s) => s.url.includes('UPDATE_COURSE_DEBOUNCE'));
+    const write = sent.find(
+      (s) => s.url.includes('UPDATE_COURSE_DEBOUNCE') && !!s.body &&
+        'exportSettings' in ((s.body as { payload: Record<string, unknown> }).payload ?? {}),
+    );
     const payload = write
       ? (write.body as { payload: { id: string; exportSettings: Record<string, unknown> } }).payload
       : undefined;
@@ -120,6 +123,62 @@ describe('executePlan — set-export-settings', () => {
     expect(res.ok).toBe(true);
     expect(payload!.exportSettings.quizId).toBeNull();
     expect(res.flags.some((f) => f.kind === 'export-settings' && /quizId/.test(f.detail))).toBe(true);
+  });
+});
+
+describe('executePlan — set-course-settings / set-ai-tutor-config', () => {
+  async function runCourse(courseFields: Record<string, unknown>) {
+    const input = quizCourse(undefined);
+    Object.assign(input.course.course as Record<string, unknown>, courseFields);
+    const steps = buildPlan(input);
+    const sent: { url: string; body: unknown }[] = [];
+    const { relay } = mockRelay(handlers);
+    const res = await executePlan(steps, {
+      input,
+      relay: async (spec) => {
+        sent.push({ url: spec.url, body: spec.body ? JSON.parse(spec.body) : undefined });
+        return relay(spec);
+      },
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/svg+xml' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    const debounces = sent
+      .filter((s) => s.url.includes('UPDATE_COURSE_DEBOUNCE'))
+      .map((s) => (s.body as { payload: Record<string, unknown> }).payload);
+    return { res, sent, debounces };
+  }
+
+  it('writes the source settings object verbatim', async () => {
+    const { res, debounces } = await runCourse({
+      settings: { aiTutorEnabled: true, isAIConceptToCourse: true },
+    });
+    expect(res.ok).toBe(true);
+    const w = debounces.find((p) => 'settings' in p)!;
+    expect(w.settings).toEqual({ aiTutorEnabled: true, isAIConceptToCourse: true });
+  });
+
+  it('neutralizes the shell default when the source settings are empty', async () => {
+    const { debounces } = await runCourse({ settings: {} });
+    const w = debounces.find((p) => 'settings' in p)!;
+    expect(w.settings).toEqual({ aiTutorEnabled: false });
+  });
+
+  it('uploads the AI-tutor avatar and writes the config with the remapped key', async () => {
+    const { res, sent, debounces } = await runCourse({
+      aiTutorConfig: {
+        name: 'Ask me!',
+        image: { media: { image: { key: 'rise/courses/SRC/avatar.svg' } } },
+      },
+    });
+    expect(res.ok).toBe(true);
+    // avatar rode the normal upload chain (GET_YURL + S3 PUT)
+    expect(sent.some((s) => s.url.includes('GET_YURL'))).toBe(true);
+    const w = debounces.find((p) => 'aiTutorConfig' in p)!;
+    const blob = JSON.stringify(w.aiTutorConfig);
+    expect(blob).toContain('Ask me!');
+    expect(blob).not.toContain('rise/courses/SRC'); // source key remapped
+    expect(res.survivingKeys).toEqual([]);
   });
 });
 

@@ -176,23 +176,11 @@ const COURSE_FIELDS = [
 
 /** Course settings the importer does NOT migrate yet. This set is only used to
  *  make the blocking report actionable; membership never excuses a mismatch.
- *  `settings` covers nested flags such as `aiTutorEnabled` and
- *  `isAIConceptToCourse`. Remove the annotation field-by-field as settings
- *  migration ships. */
-const COURSE_SETTINGS_FIELDS: ReadonlySet<string> = new Set([
-  'sidebarMode',
-  'navigationMode',
-  'showLessonCount',
-  'showNavigationButtons',
-  'allowSearch',
-  'allowCopy',
-  'animateBlockEntrance',
-  'markComplete',
-  'enableVideoPlaybackSpeed',
-  'color',
-  'settings',
-  'aiTutorConfig',
-]);
+ *  v0.9.9 shipped `settings` + `aiTutorConfig` writes and reclassified the
+ *  legacy top-level mirrors (LEGACY_MIRROR_FIELDS below) — `allowCopy` is the
+ *  one field with NO captured write anywhere (Settings panel + theme panel
+ *  passes, 2026-08-31). */
+const COURSE_SETTINGS_FIELDS: ReadonlySet<string> = new Set(['allowCopy']);
 
 /** Empty-equivalence for course fields: a fresh course carries `{}`/null/'' in
  *  slots the source may hold as any OTHER of those — none is a divergence. An
@@ -222,16 +210,32 @@ function compareCourseFields(
   // unavoidable and expected, not a fidelity failure.
   const IMAGE_FIELDS = new Set(['coverImage', 'cardImage', 'media', 'lessonHeaderImage']);
   for (const f of COURSE_FIELDS) {
-    const sv = sc[f];
-    const tv = tc[f];
+    let sv = sc[f];
+    let tv = tc[f];
+    // `settings` is a feature-toggle object: an ABSENT boolean means the
+    // feature is off, exactly like an explicit `false` (capture 2026-08-31:
+    // the panel writes {aiTutorEnabled:false}; an untouched course has {}).
+    if (f === 'settings') {
+      sv = normalizeToggleObject(sv);
+      tv = normalizeToggleObject(tv);
+    }
     if (isDeepEmpty(sv) && isDeepEmpty(tv)) continue;
     const a = canonicalize(sv);
     const b = canonicalize(tv);
     if (JSON.stringify(a) === JSON.stringify(b)) continue;
     const raw = JSON.stringify(sv ?? null);
     const isSettingsGap = COURSE_SETTINGS_FIELDS.has(f);
+    // Legacy top-level mirrors (navigationMode, markComplete, …): the CURRENT
+    // editor writes only their THEME twins (capture 2026-08-31: a full pass
+    // over the Settings panel + theme Navigation controls never touched a
+    // top-level scalar, and source courses disagree with their own theme —
+    // CRM: markComplete true vs theme.markLessonsComplete false — yet preview
+    // and publish fine). Behavior migrates via the strictly-compared `theme`;
+    // a top-level residue diff is expected and unwritable, never blocking.
+    const isLegacyMirror = LEGACY_MIRROR_FIELDS.has(f);
     const isDefaultImage = IMAGE_FIELDS.has(f) && isDeepEmpty(sv) && !isDeepEmpty(tv);
-    const isExpected = isDefaultImage || flaggedKeys.some((k) => raw.includes(k));
+    const isExpected =
+      isDefaultImage || isLegacyMirror || flaggedKeys.some((k) => raw.includes(k));
     const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
     collectLeafDiffs(a, b, f, diffs);
     const detailPaths = [...diffs.changed, ...diffs.mediaMissing];
@@ -242,14 +246,48 @@ function compareCourseFields(
     (isExpected ? expected : issues).push({
       kind: 'course-field-changed',
       path: `course.${f}`,
-      detail: isSettingsGap
-        ? `${detail} (course setting is not migrated yet; parity cannot be confirmed)`
-        : isDefaultImage
-          ? `${detail} (source has no ${f}; the target keeps Rise's random default — no captured write clears an image slot)`
-          : detail,
+      detail: isLegacyMirror
+        ? `${detail} (legacy top-level mirror — the current editor writes only the theme twin; behavior migrates via the theme)`
+        : isSettingsGap
+          ? `${detail} (course setting is not migrated yet; parity cannot be confirmed)`
+          : isDefaultImage
+            ? `${detail} (source has no ${f}; the target keeps Rise's random default — no captured write clears an image slot)`
+            : detail,
       ...(isExpected ? { expected: true } : {}),
     });
   }
+}
+
+/** The top-level scalars the CURRENT editor never writes — their controls live
+ *  in the THEME (capture 2026-08-31, `-settings.mitm` + `-fonts.mitm`): the
+ *  Settings panel writes settings/exportSettings/aiTutorConfig/labelSetId, the
+ *  theme panel writes `theme.{navigationType,navigationRestricted,
+ *  sidebarStartsOpen,showLessonCount,allowSearch,markLessonsComplete,
+ *  animateBlockEntrance,enableVideoPlaybackSpeed,…}`. `allowCopy` is
+ *  deliberately NOT here — no captured control writes it anywhere yet, so a
+ *  divergence stays loud until its envelope is captured. */
+const LEGACY_MIRROR_FIELDS: ReadonlySet<string> = new Set([
+  'navigationMode',
+  'sidebarMode',
+  'showLessonCount',
+  'showNavigationButtons',
+  'allowSearch',
+  'animateBlockEntrance',
+  'markComplete',
+  'enableVideoPlaybackSpeed',
+  'color',
+]);
+
+/** Feature-toggle object normalization: drop explicit `false` booleans so an
+ *  absent toggle compares equal to an explicitly-off one. */
+function normalizeToggleObject(v: unknown): unknown {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (val === false) continue;
+    out[k] = val;
+  }
+  return out;
 }
 
 function blockKey(b: Block): string {

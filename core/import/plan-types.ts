@@ -189,6 +189,22 @@ export type PlanStep =
       summary: string;
     }
   | {
+      // Course settings (UPDATE_COURSE_DEBOUNCE {id, settings} — capture-proven
+      // 2026-08-31, Settings panel; the UI writes the FULL object). A source
+      // with EMPTY settings still writes {aiTutorEnabled:false}: the target
+      // shell defaults the AI tutor ON, which the source does not show.
+      kind: 'set-course-settings';
+      summary: string;
+    }
+  | {
+      // AI-tutor configuration (UPDATE_COURSE_DEBOUNCE {id, aiTutorConfig},
+      // capture-proven 2026-08-31). Its avatar image is uploaded via the
+      // normal chain and the key remapped before the write.
+      kind: 'set-ai-tutor-config';
+      sourceKeys: string[];
+      summary: string;
+    }
+  | {
       // Publish/export settings (completion mode + %, LMS reporting, resume,
       // exit, telemetry, packaging, quiz binding) via
       // UPDATE_COURSE_DEBOUNCE {id, exportSettings} — capture-proven

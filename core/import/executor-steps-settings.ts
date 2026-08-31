@@ -6,8 +6,46 @@
 // envelopes still need the focused Settings-panel capture before implementation.
 
 import * as env from './envelopes';
+import { remapMediaKeys } from './remap';
 import type { PlanStep } from './plan';
 import type { ExecCtx } from './executor-run-state';
+
+/** UPDATE_COURSE_DEBOUNCE {id, settings} — the Settings panel writes the FULL
+ *  object each time (capture 2026-08-31: `{aiTutorEnabled:false|true}`). A
+ *  source with EMPTY settings still writes `{aiTutorEnabled:false}`: the
+ *  target shell defaults the AI tutor ON, which the source does not show —
+ *  behavior must follow the source. */
+export async function handleSetCourseSettings(
+  ctx: ExecCtx,
+  step: Extract<PlanStep, { kind: 'set-course-settings' }>,
+): Promise<void> {
+  const { deps, log, pfx, send } = ctx;
+  const src = (deps.input.course.course as Record<string, unknown> | undefined)?.settings;
+  const settings =
+    src && typeof src === 'object' && !Array.isArray(src) && Object.keys(src).length > 0
+      ? (src as Record<string, unknown>)
+      : { aiTutorEnabled: false };
+  await send(env.updateCourseSettings(ctx.newCourseId, settings), step.kind);
+  log(`${pfx()} OK   course settings written (${Object.keys(settings).join(', ')})`);
+}
+
+/** UPDATE_COURSE_DEBOUNCE {id, aiTutorConfig} — capture 2026-08-31 (name +
+ *  avatar). The avatar image is uploaded first via the normal chain, then the
+ *  config ships with its keys remapped (no source key may survive). */
+export async function handleSetAiTutorConfig(
+  ctx: ExecCtx,
+  step: Extract<PlanStep, { kind: 'set-ai-tutor-config' }>,
+): Promise<void> {
+  const { deps, log, keyMap, pfx, send, uploadOne } = ctx;
+  const src = (deps.input.course.course as Record<string, unknown> | undefined)?.aiTutorConfig;
+  if (!src || typeof src !== 'object') return;
+  for (const key of step.sourceKeys) {
+    await uploadOne(key, key.split('/').pop() ?? 'avatar', step.kind);
+  }
+  const config = remapMediaKeys(src as Record<string, unknown>, keyMap);
+  await send(env.updateCourseAiTutorConfig(ctx.newCourseId, config), step.kind);
+  log(`${pfx()} OK   AI-tutor configuration written`);
+}
 
 export async function handleSetExportSettings(
   ctx: ExecCtx,

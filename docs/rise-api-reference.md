@@ -252,6 +252,34 @@ rides. All are plain ducks POSTs (§4 conventions); every one returned 200.
   otherwise, the update path must rely on its own fingerprint check (fresh
   GET_COURSE diff immediately before applying), not on server-side rejection.
 
+### 4a′. Settings panel envelopes (capture-confirmed 2026-08-31, `-settings.mitm`)
+
+- `UPDATE_COURSE_DEBOUNCE {id, settings}` — the FULL settings object per write
+  (observed: `{aiTutorEnabled: false|true}`).
+- `UPDATE_COURSE_DEBOUNCE {id, exportSettings}` — the FULL publish-settings
+  object per write; fields observed live: completeWith, completionPercentage
+  (number OR string!), reporting, target/targetName + activeLMS, exportType,
+  loadOnlyInLMS, hideLmsUi, enableExitCourse, disableCoverPage,
+  enableTelemetryCollection, format, isRemotePackage, notifyLearnersOfUpdates,
+  resetLearnerData, localesPackageType, quizComplete/quizId,
+  storylineComplete/storylineId, identifier (`<courseId>_rise`), shareId,
+  activeEdition, locales, isTranslated, **updateResumeData**,
+  **webExportSettings** (both new 2026-08-31).
+- `UPDATE_COURSE_DEBOUNCE {id, aiTutorConfig}` — AI-tutor name (debounced
+  typing) + avatar (`image.media.image.{key,src}` after the normal GET_YURL →
+  S3 PUT upload).
+- `UPDATE_COURSE {id, labelSetId}` — the label-set select (IMMEDIATE, not
+  debounced) — the monolingual label-set binding envelope.
+- ⚠ The navigation/appearance controls are NOT Settings fields: they write the
+  THEME object (`UPDATE_COURSE {id, theme}` — navigationType,
+  navigationRestricted, sidebarStartsOpen, showLessonCount, allowSearch,
+  markLessonsComplete, animateBlockEntrance, enableVideoPlaybackSpeed, …).
+  The TOP-LEVEL course scalars (navigationMode, markComplete, sidebarMode,
+  color, …) are LEGACY MIRRORS no current control writes — source courses
+  disagree with their own theme (CRM: markComplete=true vs
+  theme.markLessonsComplete=false) and still preview/publish fine. `allowCopy`
+  has no captured write anywhere yet.
+
 ## 4b. Folders & content placement (REST, capture-confirmed 2026-06-23)
 
 Folder ids are **UUIDs**. Two roots exist per account (`folderType: shared` / `private`,

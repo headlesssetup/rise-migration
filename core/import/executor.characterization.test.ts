@@ -119,6 +119,15 @@ describe('import executor characterization', () => {
         url: '/api/rise-runtime/ducks/rise/courses/UPDATE_COURSE',
         body: '{"type":"rise/courses/UPDATE_COURSE","payload":{"id":"NEWCOURSE","theme":{"themeId":"classic"}}}',
       },
+      // v0.9.9 INTENTIONAL fixture diff (blocker 2, `-settings.mitm` capture):
+      // course settings are now written; an empty-source course neutralizes the
+      // shell's aiTutorEnabled default so the target behaves like the source.
+      {
+        label: 'rise/courses/UPDATE_COURSE_DEBOUNCE',
+        method: 'POST',
+        url: '/api/rise-runtime/ducks/rise/courses/UPDATE_COURSE_DEBOUNCE',
+        body: '{"type":"rise/courses/UPDATE_COURSE_DEBOUNCE","payload":{"id":"NEWCOURSE","settings":{"aiTutorEnabled":false}}}',
+      },
     ]);
   });
 });

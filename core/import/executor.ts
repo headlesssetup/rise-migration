@@ -45,7 +45,11 @@ import {
   handleFlagL10nStoryline,
 } from './executor-steps-storyline';
 import { handleCreateBlockument } from './executor-steps-mondrian';
-import { handleSetExportSettings } from './executor-steps-settings';
+import {
+  handleSetAiTutorConfig,
+  handleSetCourseSettings,
+  handleSetExportSettings,
+} from './executor-steps-settings';
 import { collectBlockumentRefs } from '@/core/mondrian';
 import {
   handleSetCourseDescription,
@@ -170,6 +174,14 @@ export async function executePlan(
         }
         case 'unlock-lesson': {
           await handleUnlockLesson(ctx, step);
+          break;
+        }
+        case 'set-course-settings': {
+          await handleSetCourseSettings(ctx, step);
+          break;
+        }
+        case 'set-ai-tutor-config': {
+          await handleSetAiTutorConfig(ctx, step);
           break;
         }
         case 'set-export-settings': {
