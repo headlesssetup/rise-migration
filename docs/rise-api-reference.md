@@ -45,11 +45,13 @@ A single-author headless script ignores it entirely and just issues the HTTP "du
     (observed live 2026-08-20: an Elza-login token on the EU origin after a US
     logout, replaced by the correct login's token once the operator signed the
     EU origin in explicitly).
-- **Token refresh — MITM-confirmed (2026-06-23), do NOT confuse the two calls:**
-  - `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh` → **`204 No
-    Content`, no body, no `Set-Cookie`**. It ONLY keeps the Okta SSO session
-    (`sid`/`xids` cookies on `id.articulate.com`) warm. It does **not** rotate the
-    bearer. (Same-site from the rise origin; `prefer: return=minimal`.)
+- **Token refresh — MITM-confirmed (2026-06-23, rechecked US 2026-08-31), do
+  NOT confuse the two calls:**
+  - `POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh` usually returns
+    **`204 No Content`**; the 2026-08-31 login-transition session also observed
+    one `200` session response and Okta `JSESSIONID`/`sid`/`xids` Set-Cookie
+    headers. It ONLY keeps/updates the Okta SSO session. It does **not** set or
+    rotate `_articulate_rise_`, so it does not refresh the Rise bearer.
   - The bearer is actually rotated by **Okta silent re-auth**, which the Rise SPA
     runs internally: a hidden iframe to `GET {iss}/v1/authorize?client_id={cid}
     &prompt=none&response_type=id_token+token&response_mode=okta_post_message
@@ -160,8 +162,9 @@ body `{type, payload}`, bearer auth.
      is involved** — questions are plain blocks. (`question_banks` is a separate, optional
      reusable-bank feature, read-only in our captures.)
 
-   Blocks can be **batched**; `id`/item-`id`s are **client-generated** (cuid-style) — you
-   choose them, keep internal refs consistent. `rise/lessons/UPDATE_BLOCK` for later edits
+   Blocks can be **batched**; `id`/item-`id`s are **client-generated** (older
+   captures used cuid-style ids; the 2026-08-31 editor used UUIDv4) — you choose
+   them and keep internal refs consistent. `rise/lessons/UPDATE_BLOCK` for later edits
    (`UPDATE_BLOCK_DEBOUNCE` is the autosave-coalesced variant — use the plain form when scripting).
 
 ---
@@ -177,14 +180,19 @@ rides. All are plain ducks POSTs (§4 conventions); every one returned 200.
 - **Delete blocks** — `rise/lessons/DELETE_BLOCKS`
   `{blockIds:["…"], courseId, lessonId}` →
   `{success:true, blockIds, lessonId, updatedAt, contentUpdatedAt}`.
-  `blockIds` is an array (editor always sends one). Deleting a media-bearing
-  block triggers **no asset-side call** — uploads are left orphaned server-side.
+  `blockIds` is a real batch: the 2026-08-31 Manage Blocks UI sent three ids in
+  one request. Deleting a media-bearing block triggers **no asset-side call** —
+  uploads are left orphaned server-side.
 
 - **Reorder blocks (within a lesson)** — `rise/lessons/MOVE_BLOCKS`
   `{lessonId, courseId, moves:[{blockId, previousBlockId, nextBlockId}]}` →
   `{success:true, moves, lessonId, updatedAt, contentUpdatedAt}`.
   **Linked-list anchors, not indexes** (first position: `previousBlockId:null`).
-  No cross-lesson move exists in the UI; none captured.
+  `moves` is a real, order-sensitive batch: Manage Blocks sent two entries in
+  one request, and the second entry's anchors depended on the first move having
+  already executed. Preserve array order and verify the final order with
+  `GET_COURSE`; selection cardinality need not equal `moves.length`. No
+  cross-lesson move exists in the UI; none captured.
 
 - **Batch mutate (the editor's UNDO/REDO transport)** —
   `rise/lessons/BULK_UPDATE_BLOCKS`
@@ -205,7 +213,11 @@ rides. All are plain ducks POSTs (§4 conventions); every one returned 200.
 
 - **Duplicate a block** — no dedicated envelope: plain `CREATE_BLOCKS` with the
   copied payload under fresh client ids, anchored by `previousBlockId`
-  (confirms the insert-anywhere semantics of `CREATE_BLOCKS`).
+  (confirms the insert-anywhere semantics of `CREATE_BLOCKS`). The 2026-08-31
+  multi-select UI duplicated two selected blocks as two overlapping,
+  single-block `CREATE_BLOCKS` calls sharing an anchor; it did not use
+  `BULK_UPDATE_BLOCKS`. A scripted importer should keep writes sequential and
+  use deterministic anchors rather than copying that UI overlap.
 
 - **Insert a block template** — `rise/lessons/INSERT_BLOCK_TEMPLATE`
   `{blockTemplateId, lessonId, courseId, itemIndex, updatedAt}` → the LESSON
@@ -434,7 +446,9 @@ bank (create + PUT questions), then point the block's item at the new bank id.
 - Private API; expect periodic breakage and re-capture.
 - Likely against Articulate ToS; confirm content ownership/licensing.
 - Re-uploaded media is re-processed (not byte-identical to originals).
-- Token expiry → refresh on 401 (`POST id.articulate.com/api/v1/sessions/me/lifecycle/refresh`).
+- Token expiry → on 401 **or 403**, boot/reload a course editor and require the
+  `_articulate_rise_` JWT `exp` to advance; lifecycle refresh alone is not a
+  bearer refresh.
 - **Multi-language courses ("stacks")** rewrite the course document into l10n
   form (`{l10nId}` refs + per-locale translation tables in `payload.l10n`, most
   media keys INSIDE the tables) and add a family of `…/translations` +

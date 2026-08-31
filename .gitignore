@@ -61,3 +61,6 @@ package-lock.json
 .pnpm-store/
 _export_test_4aug/
 _multilang_capture/
+_capture*/
+_mercedes/
+*.mitm

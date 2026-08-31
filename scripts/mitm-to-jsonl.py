@@ -14,6 +14,10 @@ Request timestamps are included so ordering + gaps are visible.
     python3 scripts/mitm-to-jsonl.py capture.mitm out.jsonl
 
 Zero dependencies (implements mitmproxy's tnetstring flow format).
+
+SECURITY: output is UNSANITIZED and can contain OAuth codes, access tokens,
+cookies embedded in socket payloads, account identity data, and authored
+content. Keep it outside git and run a redaction pass before sharing.
 """
 
 import json
@@ -50,7 +54,10 @@ NOISE_PATHS = (
 
 TEXTUAL = ("application/json", "text/", "application/xml", "+json", "application/x-www-form", "javascript")
 MAX_REQ = 1_000_000   # keep write payloads (theme/blocks JSON) in full
-MAX_RESP = 200_000    # keep GET_COURSE etc. — large but bounded
+# Current GET_COURSE bodies exceed 450 KB. Truncating JSON made the extracted
+# body invalid and hid fields during the 2026-08-31 recapture, so retain up to
+# 2 MB while keeping a defensive bound for unexpectedly huge responses.
+MAX_RESP = 2_000_000
 
 
 def parse(data, off):
@@ -130,6 +137,7 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
+    print("WARNING: output is UNSANITIZED; keep it outside git.")
     src = sys.argv[1]
     out = sys.argv[2] if len(sys.argv) > 2 else src.rsplit(".", 1)[0] + ".jsonl"
 

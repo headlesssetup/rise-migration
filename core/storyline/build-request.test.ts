@@ -66,6 +66,7 @@ describe('buildRawExportRequest', () => {
   it('accepts overridden bundles + driver version (version drift)', () => {
     const bundles = {
       rise_frontend: 'aaa',
+      ai_scenario: 'eee',
       learn_distribution_frontend: 'bbb',
       mondrian: 'ccc',
       sandbox: 'ddd',

@@ -31,22 +31,25 @@ import type { WriteSpec } from '@/core/import/envelopes';
  * and WILL drift as Rise ships. They are config, not UI (per operator): update
  * the defaults here — or pass `bundles`/`lmsDriverVersion` to
  * {@link buildRawExportRequest} — when a capture shows new values. Defaults are
- * the capture-confirmed values from `008212ae-mitmzip.txt` (2026-06-24, EU).
+ * the capture-confirmed values from the 2026-08-31 US recapture
+ * (`_capture3108/capture-editing-20260831-import-test.mitm`).
  *
  * A drifted value is not silent: if the server rejects the build the relay
  * surfaces the non-2xx body (loud-fail), pointing here.
  */
 export const DEFAULT_EXPORT_BUNDLES = {
-  rise_frontend: 'a3be93ae6a5f99327fc1fc6a1e88bb908c9ce360',
-  learn_distribution_frontend: '3cc01a2801faab66e9c0d2994afec237bb448c2e',
-  mondrian: '3b2e1f565719af1c648b50a07707814090dd2792',
+  rise_frontend: '138df8347f29d7a2ed31fc506d7f54d1826e4983',
+  ai_scenario: 'a5a39ec2268be9757df119279017e713aa697bf1',
+  learn_distribution_frontend: '036472797945bdca27b2c7cfe3a4d0b743a4a977',
+  mondrian: 'a0e63065d3a4cbe865042e3ced4865ba54c4f7ad',
   sandbox: '42753f3391b109fa3788c525c22880445ab48325',
 } as const;
 
-export const DEFAULT_LMS_DRIVER_VERSION = '7.12.0.a.1.6.2';
+export const DEFAULT_LMS_DRIVER_VERSION = '7.12.0.a.1.6.6';
 
 export interface ExportBundles {
   rise_frontend: string;
+  ai_scenario: string;
   learn_distribution_frontend: string;
   mondrian: string;
   sandbox: string;
