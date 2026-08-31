@@ -151,6 +151,24 @@ export async function readCourseAssets(
   return { entries, fileByKey, unresolved };
 }
 
+/** The doc to SCAN for asset coverage: the course PLUS its archived blockument
+ *  graphs — their `mondrian/assets/…` keys live in the same content-addressed
+ *  store, and a coverage check over the course doc alone misses them (the
+ *  2026-08-31 `_mercedes2` regression class). */
+export async function courseAssetScanDoc(
+  storage: Storage,
+  courseId: string,
+  doc: unknown,
+): Promise<unknown> {
+  const raw = await storage.readBlockuments(courseId);
+  if (!raw) return doc;
+  try {
+    return { course: doc, blockuments: JSON.parse(raw) };
+  } catch {
+    return doc;
+  }
+}
+
 /** Read a course's archived mondrian (Custom block) blockument graphs →
  *  `PlanInput.blockuments` (sourceBlockumentId → graph). Returns undefined when
  *  the archive has no blockuments file — the plan then ABORTS any course that

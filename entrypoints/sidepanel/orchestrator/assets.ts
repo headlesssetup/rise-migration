@@ -283,23 +283,25 @@ export async function downloadAllAssets(
     onEvent({ kind: 'course', index: i, total: owners.length, courseId: owner.id });
 
     try {
-      const collected = collectAssetKeys(owner.doc, owner.id);
       // Custom-block (mondrian) assets live in the course's archived blockument
-      // graphs, not in the course doc — merge their keys so the same pool
-      // downloads them (served by the plane's usercontent host like any upload).
+      // graphs, not in the course doc — scan a COMPOSITE of both so the same
+      // pool downloads them (served by the plane's usercontent host like any
+      // upload). The composite feeds BOTH the coverage check and the download
+      // itself (downloadAssetsFor re-collects from the doc it is given —
+      // handing it only the course doc silently dropped every mondrian key,
+      // 2026-08-31 `_mercedes2` regression).
+      let scanDoc: unknown = owner.doc;
       if (owner.ownerType === 'course') {
         const braw = await storage.readBlockuments(owner.id);
         if (braw) {
           try {
-            const seen = new Set(collected.map((k) => k.key));
-            for (const ak of collectAssetKeys(JSON.parse(braw), owner.id)) {
-              if (!seen.has(ak.key)) collected.push(ak);
-            }
+            scanDoc = { course: owner.doc, blockuments: JSON.parse(braw) };
           } catch {
             onEvent({ kind: 'log', message: `WARN unreadable blockuments/${owner.id}.json — its Custom-block assets were not collected` });
           }
         }
       }
+      const collected = collectAssetKeys(scanDoc, owner.id);
       const prior = await readPriorManifest(storage, owner);
       const currentByKey = new Map(collected.map((k) => [k.key, k]));
 
@@ -379,7 +381,7 @@ export async function downloadAllAssets(
       const { manifest, stats } = await downloadAssetsFor(
         owner.ownerType,
         owner.id,
-        owner.doc,
+        scanDoc,
         storage,
         downloader,
         {

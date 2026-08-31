@@ -57,6 +57,7 @@ import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
 import { unwrap, type ProgressEvent } from './shared';
 import {
+  courseAssetScanDoc,
   missingAssetKeys,
   readBlockumentGraphs,
   readCourseAssets,
@@ -328,7 +329,9 @@ export async function runImport(
     // (The run-start preflight already scanned this course; recompute the key
     // list only when it found something, to name an example in the error.)
     const absent =
-      missingByCourse.get(courseId) === 0 ? [] : missingAssetKeys(course, courseId, entries);
+      missingByCourse.get(courseId) === 0
+        ? []
+        : missingAssetKeys(await courseAssetScanDoc(storage, courseId, course), courseId, entries);
     if (absent.length && !opts.dryRun) {
       const error =
         `${absent.length} referenced asset(s) are not in the archive (e.g. ${absent[0]}) — ` +

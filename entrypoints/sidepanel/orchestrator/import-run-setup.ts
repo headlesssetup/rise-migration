@@ -31,6 +31,7 @@ import {
   setupFolders,
 } from './import-shared';
 import {
+  courseAssetScanDoc,
   missingAssetKeys,
   readCourseAssets,
   readCourseFolders,
@@ -160,7 +161,7 @@ export async function prepareImportRun(
       if (!raw) continue;
       const doc = unwrap(raw);
       const { entries } = await readCourseAssets(storage, id);
-      const missing = missingAssetKeys(doc, id, entries);
+      const missing = missingAssetKeys(await courseAssetScanDoc(storage, id, doc), id, entries);
       missingByCourse.set(id, missing.length);
       if (missing.length) {
         short.push({

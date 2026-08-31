@@ -116,6 +116,7 @@ function fakeStorage(
   courses: Record<string, unknown>,
   priorManifests: Record<string, AssetManifest> = {},
   preseededBlobs: string[] = [],
+  blockuments: Record<string, unknown> = {},
 ): FakeStore {
   const blobs = new Map<string, Uint8Array>();
   for (const name of preseededBlobs) blobs.set(name, new Uint8Array([0]));
@@ -128,7 +129,8 @@ function fakeStorage(
     readCourse: async (id: string) => JSON.stringify(courses[id]),
     listSavedBanks: async () => [],
     readQuestionBank: async () => null,
-    readBlockuments: async () => null,
+    readBlockuments: async (id: string) =>
+      id in blockuments ? JSON.stringify(blockuments[id]) : null,
     readAssetManifest: async (scope: string, id: string) =>
       manifests.get(`${scope}/${id}`) ?? null,
     writeAssetManifest: async (scope: string, id: string, json: string) => {
@@ -181,6 +183,26 @@ const docWith = (id: string, keys: string[]) => ({
   lessons: keys.map((key) => ({ media: { image: { key } } })),
 });
 
+/** A minimal archived blockument graph carrying one mondrian asset. */
+const blockumentArchiveWith = (bid: string, assetPath: string) => ({
+  courseId: 'c1',
+  generatedAt: '2026-08-31T00:00:00.000Z',
+  blockuments: {
+    [bid]: {
+      blockuments: { [bid]: { id: bid, title: 'CB', children: [], _v: 47 } },
+      items: {
+        img1: {
+          id: 'img1',
+          blockumentId: bid,
+          parentId: bid,
+          type: 'image',
+          assets: { a1: { id: 'a1', path: assetPath, name: 'pic.png', type: 'image' } },
+        },
+      },
+    },
+  },
+});
+
 describe('downloadAllAssets', () => {
   const events: ProgressEvent[] = [];
   const onEvent = (e: ProgressEvent) => events.push(e);
@@ -188,6 +210,41 @@ describe('downloadAllAssets', () => {
     events.filter((e) => e.kind === 'log').map((e) => (e as { message: string }).message);
   afterEach(() => {
     events.length = 0;
+  });
+
+  it('downloads a course\'s BLOCKUMENT assets too (mondrian/… — 2026-08-31 regression)', async () => {
+    const courseKey = 'rise/courses/c1/one.jpg';
+    const mondrianKey =
+      'mondrian/assets/blockument/1133557f-ae63-402e-bdf3-959e5cf4506c/cmtgvpgwa036d073v6gvrao0x.png';
+    const store = fakeStorage(
+      { c1: docWith('c1', [courseKey]) },
+      {},
+      [],
+      { c1: blockumentArchiveWith('1133557f-ae63-402e-bdf3-959e5cf4506c', mondrianKey) },
+    );
+    const fetched: string[] = [];
+    const summary = await downloadAllAssets(store.storage, onEvent, servingDownloader(fetched));
+    expect(fetched).toContain(courseKey);
+    expect(fetched).toContain(mondrianKey);
+    expect(summary.complete).toBe(true);
+    const manifest = JSON.parse(store.manifests.get('courses/c1')!) as AssetManifest;
+    expect(manifest.assets.map((a) => a.key)).toContain(mondrianKey);
+  });
+
+  it('a re-run over a pre-mondrian "complete" manifest backfills just the blockument assets', async () => {
+    const courseKey = 'rise/courses/c1/one.jpg';
+    const mondrianKey =
+      'mondrian/assets/blockument/1133557f-ae63-402e-bdf3-959e5cf4506c/cmtgvpgwa036d073v6gvrao0x.png';
+    const store = fakeStorage(
+      { c1: docWith('c1', [courseKey]) },
+      { c1: completeManifest('c1', [courseKey]) }, // written before 0.9.9's fix
+      ['hash0.jpg'],
+      { c1: blockumentArchiveWith('1133557f-ae63-402e-bdf3-959e5cf4506c', mondrianKey) },
+    );
+    const fetched: string[] = [];
+    const summary = await downloadAllAssets(store.storage, onEvent, servingDownloader(fetched));
+    expect(fetched).toEqual([mondrianKey]); // the course blob is reused, only the gap fetched
+    expect(summary.complete).toBe(true);
   });
 
   it('skips an owner whose complete manifest still covers all keys and blobs', async () => {
