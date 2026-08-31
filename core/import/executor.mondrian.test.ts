@@ -69,6 +69,7 @@ function mondrianCourse(): PlanInput {
         file: 'assets/m.png',
         ext: 'png',
       },
+      { key: 'rise/courses/SRC/bg.png', kind: 'media-image', file: 'assets/bg.png', ext: 'png' },
     ],
     banksById: new Map(),
     blockuments: new Map([[SRC_BID, graph()]]),
@@ -88,6 +89,7 @@ function mondrianCourse(): PlanInput {
               variant: 'mondrian',
               type: 'custom',
               settings: {},
+              background: { media: { image: { key: 'rise/courses/SRC/bg.png', type: 'image' } } },
               blockumentId: SRC_BID,
             },
           ],
@@ -208,6 +210,14 @@ describe('executePlan — mondrian happy path', () => {
     const cb = sent.find((s) => s.url.includes('CREATE_BLOCKS'))!;
     const payload = (cb.body as { payload: { blocks: { blockumentId: string }[] } }).payload;
     expect(payload.blocks[0]!.blockumentId).toBe(NEW_BID);
+
+    // the block's MEDIA PATCH (a full-state UPDATE_BLOCK_DEBOUNCE) must carry
+    // the NEW blockumentId too — the pre-swap normalized block would REVERT it
+    // to the dangling source id (live 2026-08-31, all 11 Spaceship blocks).
+    const patch = sent.find((s) => s.url.includes('UPDATE_BLOCK_DEBOUNCE'))!;
+    const item = (patch.body as { payload: { item: Record<string, unknown> } }).payload.item;
+    expect(item.blockumentId).toBe(NEW_BID);
+    expect(JSON.stringify(item)).not.toContain(SRC_BID);
   });
 
   it('dry-run predicts the same envelopes without sending', async () => {

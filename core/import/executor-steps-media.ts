@@ -3,6 +3,7 @@
 // each case now one `await handleX(ctx, step)`). Bodies are verbatim moves;
 // the characterization test freezes the envelope order they produce.
 
+import { remapBlockumentRefs } from '@/core/mondrian';
 import {
   freshClientIds,
   remapIds,
@@ -330,8 +331,24 @@ export async function handlePatchBlockMedia(
           // Build the patched block FROM THE NORMALIZED (as-created) block:
           // remap ids, then swap source keys → new keys. remapIds over the same
           // normalized doc reproduces the created ids exactly (the shared IdMap
-          // answers the same for every id it minted at create time).
-          const patched = remapMediaKeys(remapIds(norm, ids), keyMap) as Record<string, unknown>;
+          // answers the same for every id it minted at create time). Mondrian
+          // blockumentIds must swap here TOO — UPDATE_BLOCK_DEBOUNCE is a
+          // FULL-STATE item write, and normBlocks predates the create-time swap,
+          // so an unswapped patch REVERTS the block to the dangling source id
+          // (live 2026-08-31: all 11 Spaceship blocks — their background media
+          // patch clobbered the id; CRM's patch-less mondrian block survived).
+          const { doc: withBlockuments, unmapped } = remapBlockumentRefs(
+            remapIds(norm, ids),
+            ctx.blockumentMap,
+          );
+          if (unmapped.length > 0) {
+            throw new WriteError(
+              `Patch for block ${step.sourceBlockId} references blockument(s) with no recreated counterpart: ` +
+                unmapped.map((u) => u.id).join(', '),
+              step.kind,
+            );
+          }
+          const patched = remapMediaKeys(withBlockuments, keyMap) as Record<string, unknown>;
           if (String(patched.id ?? '') !== meta.newId) {
             throw new WriteError(
               `patch payload id ${String(patched.id ?? '(none)')} != created block id ${meta.newId} — id-mint drift (code fault)`,
