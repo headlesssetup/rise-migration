@@ -36,6 +36,7 @@ const storage = {
   readInventory: async () => null,
   readAssetManifest: async () => null,
   readStorylineManifest: async () => null,
+  readBlockuments: async () => null,
   readImportArtifact: async () => null,
   writeImportArtifact: async () => {},
 } as unknown as Storage;

@@ -284,6 +284,22 @@ export async function downloadAllAssets(
 
     try {
       const collected = collectAssetKeys(owner.doc, owner.id);
+      // Custom-block (mondrian) assets live in the course's archived blockument
+      // graphs, not in the course doc — merge their keys so the same pool
+      // downloads them (served by the plane's usercontent host like any upload).
+      if (owner.ownerType === 'course') {
+        const braw = await storage.readBlockuments(owner.id);
+        if (braw) {
+          try {
+            const seen = new Set(collected.map((k) => k.key));
+            for (const ak of collectAssetKeys(JSON.parse(braw), owner.id)) {
+              if (!seen.has(ak.key)) collected.push(ak);
+            }
+          } catch {
+            onEvent({ kind: 'log', message: `WARN unreadable blockuments/${owner.id}.json — its Custom-block assets were not collected` });
+          }
+        }
+      }
       const prior = await readPriorManifest(storage, owner);
       const currentByKey = new Map(collected.map((k) => [k.key, k]));
 

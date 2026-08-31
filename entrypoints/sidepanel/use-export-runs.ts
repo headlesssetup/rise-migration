@@ -250,6 +250,8 @@ export function useExportRuns({
           selectedCourses,
           storage,
           onEvent,
+          undefined,
+          session?.plane ?? null,
         );
 
         // Build the report from EVERY saved course in the folder (not just this

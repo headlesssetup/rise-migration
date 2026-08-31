@@ -13,6 +13,7 @@ import { classifyString } from '@/core/census/scan';
 import { extractUploadedKeys } from '@/core/assets/keys';
 import { looksLikeClientId } from './ids';
 import { orderLessons } from './plan';
+import { remapMediaKeys } from './remap';
 import type { ManualFlag } from './executor';
 
 /** Persisted with each import report. Bump whenever an older "completed"
@@ -296,11 +297,113 @@ function collectLeafDiffs(
  * draw-from-bank) — divergences attributable to them are reported as *expected*
  * rather than failures.
  */
+/** The publish/export-settings fields that must round-trip verbatim (blocker 3,
+ *  2026-08-31). Target-lifecycle fields are deliberately absent: `identifier`
+ *  derives from the new course id, `shareId` is the target's own,
+ *  `activeEdition` advances per publish, `title` is covered by set-title, and
+ *  `locales`/`isTranslated` are stack-lifecycle. `quizId` is handled separately
+ *  (remapped id — value parity is meaningless, target-validity is what counts). */
+const EXPORT_SETTINGS_FIELDS = [
+  'exportType',
+  'target',
+  'targetName',
+  'format',
+  'completeWith',
+  'completionPercentage',
+  'reporting',
+  'loadOnlyInLMS',
+  'hideLmsUi',
+  'isRemotePackage',
+  'disableCoverPage',
+  'enableExitCourse',
+  'enableTelemetryCollection',
+  'notifyLearnersOfUpdates',
+  'resetLearnerData',
+  'localesPackageType',
+  'quizComplete',
+  'storylineComplete',
+] as const;
+
+/** Publish/export settings parity. Only runs when the SOURCE carries a
+ *  non-empty exportSettings (a never-configured course has `{}` and the target
+ *  keeps its own default). `completionPercentage` normalizes number↔string
+ *  (the publish UI writes both `"80"` and `100`). */
+function compareExportSettings(
+  source: GetCourseDocument,
+  target: GetCourseDocument,
+  flags: ManualFlag[],
+  issues: ParityIssue[],
+  expected: ParityIssue[],
+): void {
+  const se = (source.course as Record<string, unknown> | undefined)?.exportSettings as
+    | Record<string, unknown>
+    | undefined;
+  if (!se || typeof se !== 'object' || Array.isArray(se) || Object.keys(se).length === 0) return;
+  const teRaw = (target.course as Record<string, unknown> | undefined)?.exportSettings;
+  const te = (teRaw && typeof teRaw === 'object' && !Array.isArray(teRaw)
+    ? teRaw
+    : {}) as Record<string, unknown>;
+  const norm = (v: unknown): unknown =>
+    v === undefined || v === null || v === '' ? null : typeof v === 'number' ? String(v) : v;
+  const short = (v: unknown): string => JSON.stringify(v ?? null).slice(0, 60);
+  for (const f of EXPORT_SETTINGS_FIELDS) {
+    const a = se[f];
+    const b = te[f];
+    if (a === undefined && b === undefined) continue;
+    if (JSON.stringify(norm(a)) !== JSON.stringify(norm(b))) {
+      issues.push({
+        kind: 'course-field-changed',
+        path: `course.exportSettings.${f}`,
+        detail: `${short(a)} → ${short(b)}`,
+      });
+    }
+  }
+  // quizId: the VALUE legitimately differs (remapped) — what must hold is that
+  // a source binding exists on the target too, and that the target id names a
+  // REAL target lesson. A dropped stale id was flagged → expected divergence.
+  const sq = typeof se.quizId === 'string' && se.quizId !== '';
+  const tq = typeof te.quizId === 'string' && te.quizId !== '';
+  const quizFlagged = flags.some(
+    (f) => f.kind === 'export-settings' && (f.detail ?? '').includes('quizId'),
+  );
+  if (sq && !tq) {
+    (quizFlagged ? expected : issues).push({
+      kind: 'course-field-changed',
+      path: 'course.exportSettings.quizId',
+      detail: 'completion-quiz binding missing on target',
+      ...(quizFlagged ? { expected: true } : {}),
+    });
+  } else if (tq) {
+    const lessonIds = new Set(orderedLessons(target).map((l) => l.id));
+    if (!lessonIds.has(te.quizId as string)) {
+      issues.push({
+        kind: 'course-field-changed',
+        path: 'course.exportSettings.quizId',
+        detail: `target quizId ${String(te.quizId)} names no target lesson`,
+      });
+    }
+  }
+}
+
 export function verifyParity(
   source: GetCourseDocument,
   target: GetCourseDocument,
   flags: ManualFlag[] = [],
+  /** Source keys of capture-confirmed OPTIONAL authoring provenance the import
+   *  intentionally blanked WITHOUT a manual flag (distinct `inputKey`,
+   *  `media.tmp`, `originalImage`, the inactive `key`/`crushedKey` variant —
+   *  the plan's drop-optional-media steps). Pre-blanking them in the SOURCE
+   *  compares what the import deliberately shipped, so an optional omission is
+   *  never a blocking `media-missing` (handover 2026-08-31, blocker 4). The
+   *  final foreign-media-key assertion is untouched — it stays unfiltered. */
+  optionalDroppedKeys: string[] = [],
 ): ParityReport {
+  if (optionalDroppedKeys.length > 0) {
+    source = remapMediaKeys(
+      source,
+      new Map(optionalDroppedKeys.map((k) => [k, ''] as [string, string])),
+    );
+  }
   const sl = orderedLessons(source);
   const tl = orderedLessons(target);
   const issues: ParityIssue[] = [];
@@ -330,6 +433,7 @@ export function verifyParity(
   // Course-level fields first (theme, images, settings, title/description) —
   // the lesson/block walk below never sees them.
   compareCourseFields(source, target, flaggedKeys, issues, expected);
+  compareExportSettings(source, target, flags, issues, expected);
 
   let blocksSource = 0;
   let blocksTarget = 0;

@@ -30,6 +30,11 @@ import {
   pendingKey,
   stackLocales,
 } from '@/core/l10n';
+import {
+  blockumentManifest,
+  collectBlockumentRefs,
+  type BlockumentGraph,
+} from '@/core/mondrian';
 import { pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { GetCourseDocument } from '@/shared/types/rise';
 import { safeJson, type BoundBankMap } from './import-shared';
@@ -52,6 +57,9 @@ export interface ReadBackArgs {
   labelSetCache: Map<string, string>;
   courseId: string;
   report: FidelityReport;
+  /** Archived mondrian graphs (PlanInput.blockuments) — item/asset-count parity
+   *  for the recreated documents. Absent for a mondrian-free course. */
+  blockuments?: Map<string, BlockumentGraph>;
 }
 
 export interface ReadBackResult {
@@ -102,7 +110,13 @@ export async function verifyCourseReadBack(args: ReadBackArgs): Promise<ReadBack
       const rb = await send({ type: 'GET_COURSE', courseId: newCourseId });
       if (rb.type === 'COURSE_RESULT' && rb.result.ok) {
         const targetDoc = unwrap(rb.result.data.raw);
-        parity = verifyParity(course, targetDoc, res.flags);
+        // Optional authoring provenance the plan intentionally blanked (no
+        // manual flag by design) must not read as blocking media-missing.
+        const optionalDropped = steps
+          .filter((s): s is Extract<PlanStep, { kind: 'drop-optional-media' }> =>
+            s.kind === 'drop-optional-media')
+          .map((s) => s.sourceKey);
+        parity = verifyParity(course, targetDoc, res.flags, optionalDropped);
 
         // INVARIANT, measured on the REAL target (CLAUDE.md: "no source media keys
         // may survive"). The executor asserts this against a doc it derived itself,
@@ -114,12 +128,85 @@ export async function verifyCourseReadBack(args: ReadBackArgs): Promise<ReadBack
           const newBankId = res.idMap[sourceBankId] ?? boundBanks.get(sourceBankId)?.newBankId;
           if (newBankId) targetOwners.add(newBankId);
         }
+        // Recreated blockuments count as target owners: their
+        // mondrian/assets/blockument/<newBid>/… keys are target-owned.
+        const newBids = new Set(Object.values(res.blockumentIds ?? {}));
+        for (const bid of newBids) targetOwners.add(bid);
         readBackForeign = [
           ...findForeignMediaKeys(targetDoc, targetOwners),
           ...findLocalAssetRefs(targetDoc).map(
             (ref) => `local-asset:${ref.assetPath}@${ref.path}`,
           ),
+          // Mondrian truth check, part (a): no SOURCE blockumentId may survive
+          // in what Rise actually stored — a dangling id 404s preview/publish
+          // boot for the whole course (2026-08-31 root cause).
+          ...collectBlockumentRefs(targetDoc)
+            .filter((ref) => !newBids.has(ref.id))
+            .map((ref) => `blockument:${ref.id}@${ref.path}`),
         ];
+
+        // Mondrian truth check, part (b): each recreated document must exist on
+        // the TARGET mondrian-api (the exact lookup boot performs) and carry the
+        // archived item count; its asset keys must be target-owned. Paced reads.
+        for (const [srcBid, newBid] of Object.entries(res.blockumentIds ?? {})) {
+          if (!target?.plane) {
+            onEvent({
+              kind: 'log',
+              message: `${pfx} ⚠ blockument read-back skipped for ${newBid} — target plane unknown`,
+            });
+            continue;
+          }
+          await pacedDelay(pacing);
+          const r = await relay(blockumentManifest(target.plane, newBid));
+          if (!r.ok) {
+            parity.issues.push({
+              kind: 'media-missing',
+              path: `blockument ${newBid}`,
+              detail: `target mondrian-api manifest failed (HTTP ${r.status}) — preview/publish boot would 404`,
+            });
+            parity.ok = false;
+            onEvent({
+              kind: 'log',
+              message: `${pfx} ⚠ blockument read-back: ${newBid} manifest HTTP ${r.status}`,
+            });
+            continue;
+          }
+          try {
+            const g = JSON.parse(r.text) as BlockumentGraph;
+            const gotItems = Object.values(g.items ?? {}).filter(
+              (i) => i.blockumentId === newBid,
+            ).length;
+            const srcGraph = args.blockuments?.get(srcBid);
+            const wantItems = srcGraph
+              ? Object.values(srcGraph.items ?? {}).filter((i) => i.blockumentId === srcBid).length
+              : undefined;
+            if (wantItems !== undefined && gotItems !== wantItems) {
+              parity.issues.push({
+                kind: 'content-changed',
+                path: `blockument ${newBid}`,
+                detail: `item count ${gotItems} ≠ archived ${wantItems}`,
+              });
+              parity.ok = false;
+            }
+            const foreignInGraph = findForeignMediaKeys(g, targetOwners);
+            if (foreignInGraph.length) {
+              readBackForeign.push(...foreignInGraph.map((k) => `${k}@blockument ${newBid}`));
+            }
+            if ((wantItems === undefined || gotItems === wantItems) && foreignInGraph.length === 0) {
+              onEvent({
+                kind: 'log',
+                message: `${pfx} blockument read-back OK — ${newBid} (${gotItems} item(s))`,
+              });
+            }
+          } catch {
+            parity.issues.push({
+              kind: 'content-changed',
+              path: `blockument ${newBid}`,
+              detail: 'target manifest unparseable',
+            });
+            parity.ok = false;
+          }
+        }
 
         // Typeface IDENTITY: parity tokenizes ids, so it proves a font is bound
         // but not WHICH — resolve the three binding slots to names on both

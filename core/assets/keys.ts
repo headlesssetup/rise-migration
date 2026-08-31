@@ -17,12 +17,14 @@ export type DownloadableKind =
   | 'media-image'
   | 'media-video'
   | 'media-audio'
+  | 'media-mondrian-asset'
   | 'media-other';
 
 const DOWNLOADABLE = new Set<RefKind>([
   'media-image',
   'media-video',
   'media-audio',
+  'media-mondrian-asset',
   'media-other',
 ]);
 
@@ -59,11 +61,11 @@ export type OptionalAssetReason =
 //    `rise/courses/…` key), and both bounded matches stop at the same trailing
 //    separators (so `key1,key2` srcset-style lists don't fuse into one key).
 const RE_WHOLE_VALUE =
-  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?(rise\/(?:courses|questionBanks)\/\S+)$/i;
+  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?((?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\/\S+)$/i;
 const RE_USERCONTENT_URL =
   /https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/([^\s"'<>\\)=,;]+)/gi;
 const RE_BARE_RISE_KEY =
-  /(?:^|[/"'\s(=,>;])(rise\/(?:courses|questionBanks)\/[^\s"'<>\\)=,;]+)/gi;
+  /(?:^|[/"'\s(=,>;])((?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\/[^\s"'<>\\)=,;]+)/gi;
 
 /** Strip a trailing `?query`/`#fragment` and any trailing punctuation that the
  *  bounded char class may have swept up at a sentence/markup boundary. */
@@ -87,10 +89,12 @@ export function extractUploadedKeys(value: string): string[] {
   if (/^https?:\/\//i.test(trimmed)) {
     try {
       const pathname = new URL(trimmed).pathname.replace(/^\//, '');
-      const start = pathname.search(/(?:^|\/)rise\/(?:courses|questionBanks)\//);
+      const start = pathname.search(
+        /(?:^|\/)(?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\//,
+      );
       if (start >= 0) {
         const key = pathname.slice(start).replace(/^\//, '');
-        if (/^rise\/(?:courses|questionBanks)\//.test(key)) {
+        if (/^(?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\//.test(key)) {
           return [canonicalizeKey(key)];
         }
       }
@@ -111,7 +115,11 @@ export function extractUploadedKeys(value: string): string[] {
     // at a built-in SHARED asset (`assets/rise/...themes/...`) — those are kept
     // as references, never re-uploaded/flagged, so exclude anything that isn't
     // under rise/courses/ or rise/questionBanks/.
-    if (key && /^rise\/(?:courses|questionBanks)\//.test(key) && !seen.has(key)) {
+    if (
+      key &&
+      /^(?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\//.test(key) &&
+      !seen.has(key)
+    ) {
       seen.add(key);
       out.push(key);
     }

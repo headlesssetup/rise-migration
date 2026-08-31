@@ -23,6 +23,7 @@ import {
   type SourceBank,
 } from '@/core/import';
 import { isKnownLegacyStorylineMeta } from '@/core/storyline/compatibility';
+import type { BlockumentArchive, BlockumentGraph } from '@/core/mondrian';
 import type { Storage } from '@/core/storage/storage';
 import type { Block, GetCourseDocument } from '@/shared/types/rise';
 import { unwrap, type ProgressEvent } from './shared';
@@ -148,6 +149,24 @@ export async function readCourseAssets(
     /* tolerate a malformed manifest — treat as no assets */
   }
   return { entries, fileByKey, unresolved };
+}
+
+/** Read a course's archived mondrian (Custom block) blockument graphs →
+ *  `PlanInput.blockuments` (sourceBlockumentId → graph). Returns undefined when
+ *  the archive has no blockuments file — the plan then ABORTS any course that
+ *  still references a `blockumentId` (pre-0.9.9 archive → re-export). */
+export async function readBlockumentGraphs(
+  storage: Storage,
+  courseId: string,
+): Promise<Map<string, BlockumentGraph> | undefined> {
+  const raw = await storage.readBlockuments(courseId);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as BlockumentArchive;
+    return new Map(Object.entries(parsed.blockuments ?? {}));
+  } catch {
+    return undefined; // unreadable → same loud plan abort as absent
+  }
 }
 
 /** Build the storyline attach map for a source course from its storyline

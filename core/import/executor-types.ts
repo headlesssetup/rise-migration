@@ -56,6 +56,10 @@ export interface ExecutorDeps {
   log?: (msg: string) => void;
   dryRun?: boolean;
   mintId?: () => string;
+  /** UUID mint for mondrian blockument ITEM ids (the mondrian service uses
+   *  uuid4-shaped item ids, unlike Rise's cuid-style block ids). Injectable for
+   *  deterministic tests; defaults to crypto.randomUUID. */
+  mintUuid?: () => string;
   /** Poll budget for transcode CHECK_STATUS (default a few tries). */
   maxStatusPolls?: number;
   /** Retries for the post-create GET_COURSE handshake (default 3), each preceded by
@@ -92,6 +96,8 @@ export interface ManualFlag {
   kind:
     | 'storyline'
     | 'draw-from-bank'
+    | 'mondrian'
+    | 'export-settings'
     | 'orphan-media'
     | 'unsupported-media'
     | 'missing-bank-ref'
@@ -141,6 +147,10 @@ export interface ExecResult {
   storylinePrefixes?: string[];
   /** The resumable old→new id map (job log). */
   idMap: Record<string, string>;
+  /** Mondrian: source blockumentId → NEW blockumentId (create-blockument steps).
+   *  The read-back verifies each new document exists on the target mondrian-api
+   *  and that no source id survived in the target course document. */
+  blockumentIds?: Record<string, string>;
   /** STACK (idea 2): source l10nId → target l10nId, from the post-conversion
    *  structural pairing (core/l10n/pair.ts). The orchestrator feeds it to
    *  verifyL10nParity — no source id exists on the target, so parity cannot

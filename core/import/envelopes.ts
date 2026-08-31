@@ -43,6 +43,16 @@ function ducks(domain: string, action: string, payload: unknown): WriteSpec {
   };
 }
 
+/** UPDATE_COURSE_DEBOUNCE {id, exportSettings} — the publish dialog's settings
+ *  write (capture-proven 2026-08-31: `-import_fail2.mitm` 14:20, mercedes
+ *  13:19/13:21, fonts2 15:27). The FULL exportSettings object rides one call. */
+export function updateCourseExportSettings(
+  courseId: string,
+  exportSettings: Record<string, unknown>,
+): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE_DEBOUNCE', { id: courseId, exportSettings });
+}
+
 // --- Course shell + theme (protocol §7) -------------------------------------
 
 /** POST /manage/api/content — create the course shell → {id}. Capture-confirmed:

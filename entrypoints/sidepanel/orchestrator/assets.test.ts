@@ -128,6 +128,7 @@ function fakeStorage(
     readCourse: async (id: string) => JSON.stringify(courses[id]),
     listSavedBanks: async () => [],
     readQuestionBank: async () => null,
+    readBlockuments: async () => null,
     readAssetManifest: async (scope: string, id: string) =>
       manifests.get(`${scope}/${id}`) ?? null,
     writeAssetManifest: async (scope: string, id: string, json: string) => {

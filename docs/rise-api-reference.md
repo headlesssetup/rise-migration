@@ -417,6 +417,55 @@ bundle, so download alone doesn't enable recreation.)
 
 ---
 
+## 8a. Mondrian ("Custom block") blockuments ✅ captured 2026-08-31
+
+UI name **Custom block**; block JSON `{type:"custom", family:"mondrian",
+variant:"mondrian", settings:{…}, blockumentId:"<uuid>"}`. The content lives in
+a per-plane service — **`mondrian-api.articulate.com` (US) /
+`mondrian-api.eu.articulate.com` (EU)** — as a "blockument" **parented to the
+course** (`contentParent → {parentId:<courseId>, parentType:"course"}`). Auth =
+the plane's bearer + first-party cookies (CORS allows the rise origin), same as
+ducks. **Preview/publish boot resolves every referenced blockument server-side
+(`course.mondrian.blockuments` in the boot body) and the WHOLE course 404s when
+one is missing** — the proxied `{"statusCode":404,"error":"Not Found","message":
+"Request failed with status code 404"}` observed on the failed EU imports; the
+editor only fetches lazily (`GET …/manifest` fires when the block scrolls in),
+so a dangling id looks fine in authoring. A source `blockumentId` is therefore a
+CROSS-ACCOUNT REF that must be recreated + remapped, never copied verbatim.
+
+Captured endpoints (`-mondrian{,2,3}.mitm` — EU create/edit + US plane parity):
+
+- `GET /api/blockuments/<id>/manifest` → the FULL graph
+  `{blockuments:{<id>:doc}, items:{<itemId>:item}, fonts?}`; 404 body
+  `Blockuments <id> not found`. Bulk form `GET /api/blockuments/manifests?blockumentId=<id>`
+  returns the same shape (only single-id captured — do not assume multi-id).
+- `POST /api/blockuments/createFromBlank {parentId, parentType:"course"}` →
+  fresh graph: one blockument + its root "Canvas" group item.
+- `POST /api/blockuments/createFromTemplate/<templateId> {parentId, parentType}`
+  → same, with `createdFromTemplateId` + per-item `clonedFromId` provenance.
+- `POST /api/blockuments/<id>/transaction` — **FULL-STATE upsert** of touched
+  entities: body `{blockument:<doc>}` or `{items:{<itemId>:<item>}}`; response
+  is the plain text `OK`. The editor writes ONE entity per call.
+- `POST /api/signed-asset-url {name, blockumentId}` →
+  `{asset:{id,path,name,type}, mimeType, url}` — presigned S3 PUT for
+  `mondrian/assets/blockument/<bid>/<assetId>.<ext>`; followed by the standard
+  ducks `CRUSH_IMAGE {courseId, original:<path>}` (capture-proven for THIS
+  pipeline). Assets are served publicly by the plane's usercontent host.
+- `GET /api/templates/`, `GET /api/templateCategories/` — the Add-block gallery.
+- `GET /api/blockuments/<id>/contentParent` → `{parentId, parentType}`.
+
+Document shape: `blockument {id, title, children:[{id, visualOrder,
+clonedFromId?}], triggers, authoringOpened, createdFromTemplateId?, responsive,
+_v}` (`_v: 47` in every capture); `item {id, blockumentId, parentId, type:
+group|text|shape|image, states:{default:{…, text?:{type:"tiptap", json}, fill?:
+{assetId?, crop?}, …}}, assets?:{<assetId>:{id, path, name, type, width,
+height}}, breakpointOverrides, localeOverrides, clonedFromId?, removed, _v}`.
+The root item's `parentId` is the blockument id itself.
+
+⚠ Opening the Edit canvas on a blockument WRITES auto-normalization
+transactions (text re-measure, sub-pixel rounding) — never open Edit on
+customer content during a capture; scrolling the lesson view only reads.
+
 ## 9. Question banks
 
 A "Quiz" lesson stores its questions inline as blocks (§4). **Reusable question banks** are a

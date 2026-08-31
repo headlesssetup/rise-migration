@@ -185,6 +185,18 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'The source holds translation data for a language that is archived (or has no locale row), so the target cannot have it. To migrate it, restore the language on the source course, re-export, and re-import.',
       };
+    case 'mondrian':
+      return {
+        itemType: 'Custom block (mondrian)',
+        action:
+          'This Custom block’s document could not be recreated on the target — rebuild the block manually in the Rise editor (Add block → Custom).',
+      };
+    case 'export-settings':
+      return {
+        itemType: 'Publish settings',
+        action:
+          'A publish-settings reference (completion quiz / Storyline) could not be mapped to the new course — open Publish settings on the target and select it manually.',
+      };
     default:
       return { itemType: String(kind), action: 'Manual handling required.' };
   }

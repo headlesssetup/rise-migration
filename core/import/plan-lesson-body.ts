@@ -5,6 +5,7 @@
 // characterization test freezes the emitted step order.
 
 import { collectAssetKeys } from '@/core/assets/keys';
+import { collectBlockumentRefs, collectGraphAssets } from '@/core/mondrian';
 import { isKnownLegacyStorylineBlock } from '@/core/storyline/compatibility';
 import type { Block, Lesson } from '@/shared/types/rise';
 import { courseImageKind } from './builtin-assets';
@@ -201,6 +202,43 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
     // No PUT_LOCK/DEL_LOCK: the edit lock is a collaboration guard only; a
     // single-author import doesn't need it, and skipping it removes two paced
     // writes per lesson (protocol §2).
+
+    // 0. Recreate every mondrian (Custom block) blockument the lesson's blocks
+    //    reference BEFORE the blocks ship (editor order: createFromBlank first,
+    //    then CREATE_BLOCKS carries the id). A referenced blockument with NO
+    //    archived graph ABORTS the plan — the ref is a dangling cross-account
+    //    id that 404s preview/publish boot for the whole course (2026-08-31
+    //    root cause). Re-export the course with 0.9.9+ to archive the graphs.
+    for (const [blockIdx, block] of blocks.entries()) {
+      const sourceBlockId = sourceBlockIdOf(block, blockIdx);
+      for (const ref of collectBlockumentRefs(block)) {
+        const graph = input.blockuments?.get(ref.id);
+        if (!graph) {
+          throw new Error(
+            `Mondrian cross-ref not covered by the archive: lesson "${lTitle}" block ` +
+              `${sourceBlockId} references blockument ${ref.id} at ${ref.path}, but ` +
+              `blockuments/${sourceCourseId}.json has no graph for it — re-export the ` +
+              'course with tool 0.9.9+ (aborting this course; never ship a dangling blockumentId)',
+          );
+        }
+        const doc = graph.blockuments?.[ref.id];
+        const items = Object.values(graph.items ?? {}).filter(
+          (i) => i.blockumentId === ref.id,
+        );
+        steps.push({
+          kind: 'create-blockument',
+          sourceLessonId,
+          sourceBlockId,
+          sourceBlockumentId: ref.id,
+          title: typeof doc?.title === 'string' ? doc.title : '',
+          itemCount: items.length,
+          assetCount: collectGraphAssets({ ...graph, items: graph.items }).filter((a) =>
+            items.some((i) => i.assets && a.id in i.assets),
+          ).length,
+          summary: `Recreate Custom block document "${typeof doc?.title === 'string' ? doc.title : ref.id}" (${items.length} item(s))`,
+        });
+      }
+    }
 
     // 1. Create ALL blocks in one ordered batch (preserves order).
     steps.push({

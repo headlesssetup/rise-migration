@@ -583,6 +583,20 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   }
 
+  // Publish/export settings — LAST, so the (possibly quiz) lessons all exist
+  // and `quizId` remaps to a real new lesson id (handover 2026-08-31, blocker 3).
+  {
+    const es = (course as Record<string, unknown>).exportSettings;
+    if (es && typeof es === 'object' && !Array.isArray(es) && Object.keys(es).length > 0) {
+      const quizId = (es as Record<string, unknown>).quizId;
+      steps.push({
+        kind: 'set-export-settings',
+        hasQuizId: typeof quizId === 'string' && quizId !== '',
+        summary: 'Write publish/export settings (completion, LMS reporting, quiz binding)',
+      });
+    }
+  }
+
   return steps;
 }
 

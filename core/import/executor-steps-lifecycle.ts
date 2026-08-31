@@ -4,6 +4,7 @@
 // the characterization test freezes the envelope order they produce.
 
 import {
+  collectStructuralIds,
   freshClientIds,
   remapIds,
   blankUploadedMediaKeys,
@@ -38,6 +39,7 @@ import {
   type L10nChange,
 } from '@/core/l10n';
 import { hasBuiltinRef } from './builtin-assets';
+import { remapBlockumentRefs } from '@/core/mondrian';
 import { legacyStorylinePlaceholderBlock } from '@/core/storyline/compatibility';
 import type { GetCourseDocument } from '@/shared/types/rise';
 import type { ExecCtx } from './executor-run-state';
@@ -191,6 +193,10 @@ export async function handleCreateCourse(
                 log(`${pfx()} OK   GET_COURSE handshake — course ready (attempt ${attempt}/${tries})`);
                 confirmed = true;
                 ctx.materialized = true;
+                // The target's own server-assigned shareId — exportSettings
+                // must carry THIS, never the source's (foreign ref).
+                const share = (rb.course as Record<string, unknown>).shareId;
+                if (typeof share === 'string' && share) ctx.targetShareId = share;
                 // F2: record any PRE-CREATED shell lessons (onePage ships one:
                 // title "", type "blocks", no items) for adoption below. Only
                 // genuinely EMPTY lessons qualify — anything else is unexpected
@@ -603,21 +609,53 @@ export async function handleCreateBlocks(
               typeof src.id === 'string' && src.id !== ''
                 ? entry.block
                 : ({ ...src, id: ref.sourceBlockId } as typeof entry.block);
-            // freshClientIds FIRST: block/item ids that are not cuid-shaped (Rise's
-            // sample courses number them "1","2","3"… in EVERY lesson) get a fresh
-            // per-block id, so two lessons never claim the same block id. Then the
-            // usual IdMap pass handles cuid-shaped ids + refs globally.
-            const normalized = freshClientIds(withId, mint);
+            // freshClientIds FIRST: block/item/answer ids that are not
+            // cuid-shaped (Rise's sample courses number them "1","2","3"… in
+            // EVERY lesson) OR that are REUSED across blocks (copy-paste
+            // provenance carries cuid-shaped duplicates too — Mercedes capture
+            // 2026-08-31) get a fresh per-block id, so two blocks never claim
+            // the same identity. Then the usual IdMap pass handles the
+            // remaining (unique) cuid-shaped ids + refs globally.
+            const normalized = freshClientIds(withId, mint, ctx.dupStructuralIds);
             ctx.normBlocks.set(blockKey(step.sourceLessonId, ref.sourceBlockId), normalized);
             const remappedSource = blankUploadedMediaKeys(
               remapIds(normalized, ids),
             ) as Record<string, unknown>;
+            // Mondrian (Custom block) cross-refs: swap every `blockumentId` to
+            // the blockument recreated by the create-blockument step. A source
+            // id with no recreated counterpart ABORTS — shipping it verbatim is
+            // the dangling ref that 404s preview/publish boot (2026-08-31).
+            const { doc: withBlockuments, unmapped } = remapBlockumentRefs(
+              remappedSource,
+              ctx.blockumentMap,
+            );
+            if (unmapped.length > 0) {
+              throw new WriteError(
+                `Block ${ref.sourceBlockId} references blockument(s) with no recreated target counterpart: ` +
+                  unmapped.map((u) => `${u.id} at ${u.path}`).join(', '),
+                step.kind,
+              );
+            }
             const remapped =
               ref.replacement === 'legacy-storyline'
-                ? legacyStorylinePlaceholderBlock(remappedSource, mint)
-                : remappedSource;
+                ? legacyStorylinePlaceholderBlock(withBlockuments, mint)
+                : withBlockuments;
             const newBlockId = String(remapped.id ?? '');
             newIdToSource.set(newBlockId, ref.sourceBlockId);
+            // Loud-fail assertion (handover 2026-08-31, blocker 1): a generated
+            // structural id claimed by TWO different blocks is a remap code
+            // fault — the exact defect class that silently clobbers content.
+            const bk = blockKey(step.sourceLessonId, ref.sourceBlockId);
+            for (const sid of new Set(collectStructuralIds(remapped))) {
+              const owner = ctx.builtStructuralIds.get(sid);
+              if (owner !== undefined && owner !== bk) {
+                throw new WriteError(
+                  `Generated structural id collision: "${sid}" is claimed by both ${owner} and ${bk} — remap fault, aborting course`,
+                  step.kind,
+                );
+              }
+              ctx.builtStructuralIds.set(sid, bk);
+            }
             built.push(remapped);
             // Provisional mapping (confirmed below in a live run).
             blockMeta.set(blockKey(step.sourceLessonId, ref.sourceBlockId), { newId: newBlockId });

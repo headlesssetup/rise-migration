@@ -58,6 +58,7 @@ import type { Block } from '@/shared/types/rise';
 import { unwrap, type ProgressEvent } from './shared';
 import {
   missingAssetKeys,
+  readBlockumentGraphs,
   readCourseAssets,
   readReferencedBanks,
   readStorylineAttach,
@@ -395,6 +396,10 @@ export async function runImport(
       banksById,
       storylineAttach: storylineManifest?.byBlock,
       storylineAttachL10n: storylineManifest?.byBlockLocale,
+      // Archived mondrian (Custom block) graphs — absent for a mondrian-free
+      // course; a course still referencing a blockumentId without them ABORTS
+      // at buildPlan (loud-fail: re-export with 0.9.9+).
+      blockuments: await readBlockumentGraphs(storage, courseId),
       // The current account-local user (the `_articulate_user_id` owner), NOT the
       // Okta `sub` — same principal the folders API requires. Author of created
       // lessons/locks; keeps every created resource owned by the live account.
@@ -403,7 +408,20 @@ export async function runImport(
       recreateBanks: opts.recreateBanks ?? false,
       boundBanks: boundBanks.size > 0 ? boundBanks : undefined,
     };
-    const steps = buildPlan(input);
+    // Plan build can ABORT a course loudly (e.g. a mondrian `blockumentId`
+    // with no archived graph — the dangling-ref class that 404s target boot).
+    // One course's abort must not kill the queue: record + continue.
+    let steps;
+    try {
+      steps = buildPlan(input);
+    } catch (e) {
+      const error = String(e instanceof Error ? e.message : e);
+      onEvent({ kind: 'log', message: `${pfx} FAILED "${courseTitle ?? courseId}": ${error}` });
+      const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
+      outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
+      csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });
+      continue;
+    }
 
     // Resume: rehydrate the prior id map so a retry never double-creates. The id
     // map now lives nested in the consolidated report.json (`.idMap`); fall back
@@ -507,6 +525,7 @@ export async function runImport(
           labelSetCache,
           courseId,
           report,
+          blockuments: input.blockuments,
         }));
     }
 

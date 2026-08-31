@@ -57,7 +57,7 @@ courses across that library.
 | `interactive-fullscreen/scenario` | 267 blk / 79 crs | 542 (148 core) | image (characters, bg) | — | _TODO_ | seen |
 | `gallery/four column` | 181 blk / 86 crs | 90 (19 core) | image | — | _TODO_ | seen |
 | `gallery/two column` | 169 blk / 87 crs | 73 (17 core) | image | — | _TODO_ | seen |
-| `mondrian/mondrian` | 148 blk / 30 crs | 39 (7 core) | image (collage) | — | _TODO_ | seen |
+| `mondrian/mondrian` | 148 blk / 30 crs | 39 (7 core) | mondrian assets (see below) | **`blockumentId` → mondrian-api blockument** | 2026-08-31 | **cross-ref** |
 | `knowledgeCheck/matching` | 141 blk / 55 crs | 84 (17 core) | — | — | _TODO_ | seen |
 | `multimedia/attachment` | 135 blk / 80 crs | 65 (15 core) | attachment | — | _TODO_ | seen |
 | `impact/c` | 95 blk / 48 crs | 49 (11 core) | — | — | _TODO_ | seen |
@@ -124,6 +124,24 @@ the lesson) — kept here for completeness; copy-faithful handles them.
 These are known Rise block types not yet captured in our traffic. Copy-faithful handles them on sight, but each should be promoted to `documented` once a real example is scanned: `statement`, `quote`, `tabs`, `scenario`, `timeline`, `chart`, `table`, `attachment`, `audio` (and any others surfaced by novelty review). (`gallery` and `accordion` were captured in the 2026-06-19 scrape — see Confirmed.)
 
 > **Field profiles.** A scrape writes `catalog.json`/`catalog.csv` — per-variant field profiles (each field tagged **core**/**optional** with presence %). That is the scalable knowledge base this table summarizes; `novelty.csv` surfaces only **new variants** and (once a variant has a recorded field baseline) **new fields**.
+
+## Mondrian ("Custom block") — cross-ref semantics (2026-08-31)
+
+`mondrian/mondrian` (UI name: **Custom block**) is NOT copy-faithful-complete:
+the block's `blockumentId` references a DOCUMENT in the plane's own
+`mondrian-api.{eu.}articulate.com` service (parented to the course), which the
+course JSON never carries. Preview/publish **boot resolves every referenced
+blockument server-side and 404s the whole course when one is missing** — the
+2026-08-31 EU import failure root cause was this id shipped verbatim.
+Migration (0.9.9+): export archives each graph via
+`GET /api/blockuments/<id>/manifest` → `blockuments/<courseId>.json`; import
+recreates it (`createFromBlank` → asset uploads via `signed-asset-url` +
+S3 PUT + `CRUSH_IMAGE` → full-state `transaction` upserts) and remaps the
+block's `blockumentId`. Item images live under the dedicated media namespace
+`mondrian/assets/blockument/<bid>/<assetId>.<ext>` (public usercontent, both
+planes) and are referenced by `fill.assetId` + an in-item `assets` record map.
+Blockument schema `_v: 47` in every capture — a different `_v` is a novelty
+warning at export. See `docs/rise-api-reference.md` §mondrian.
 
 ## Accepted from novelty review
 

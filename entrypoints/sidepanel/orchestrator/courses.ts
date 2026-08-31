@@ -10,6 +10,12 @@ import {
   listingLocales,
   materializeLocale,
 } from '@/core/l10n';
+import {
+  blockumentManifest,
+  collectBlockumentIds,
+  type BlockumentArchive,
+  type BlockumentGraph,
+} from '@/core/mondrian';
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { GetCourseDocument, SearchResultItem } from '@/shared/types/rise';
@@ -103,15 +109,120 @@ export interface ExportResult {
   stopped?: { courseId: string; remaining: number; reason: string };
 }
 
+/**
+ * Fetch + archive every mondrian (Custom block) blockument a course references
+ * → `blockuments/<courseId>.json`. Paced single-manifest reads on the SOURCE
+ * plane's mondrian-api (docs/rise-api-reference.md §mondrian). Returns true
+ * when the archive now covers every referenced id; false is LOUD — a course
+ * whose blockuments are missing cannot be imported (a dangling `blockumentId`
+ * 404s preview/publish boot on the target, 2026-08-31 root cause).
+ */
+export async function fetchCourseBlockuments(
+  courseId: string,
+  doc: unknown,
+  plane: 'us' | 'eu' | null,
+  storage: Storage,
+  onEvent: (e: ProgressEvent) => void,
+  pacing: PacingConfig,
+  pfx: string,
+): Promise<boolean> {
+  const ids = collectBlockumentIds(doc);
+  if (ids.length === 0) return true;
+
+  // Resume: keep graphs an earlier run already archived; fetch only the rest.
+  const existing: Record<string, BlockumentGraph> = {};
+  try {
+    const prior = await storage.readBlockuments(courseId);
+    if (prior) {
+      const parsed = JSON.parse(prior) as BlockumentArchive;
+      Object.assign(existing, parsed.blockuments ?? {});
+    }
+  } catch {
+    /* unreadable prior file → refetch everything */
+  }
+  const missing = ids.filter((id) => !existing[id]);
+  if (missing.length === 0) {
+    onEvent({
+      kind: 'log',
+      message: `${pfx} Custom-block documents already archived (${ids.length})`,
+    });
+    return true;
+  }
+  if (plane !== 'us' && plane !== 'eu') {
+    onEvent({
+      kind: 'log',
+      message: `${pfx} ERROR: course references ${missing.length} Custom-block document(s) but the Rise plane is unknown — cannot address mondrian-api. Re-run with a logged-in Rise tab.`,
+    });
+    return false;
+  }
+  let failed = 0;
+  for (const [j, bid] of missing.entries()) {
+    await pacedDelay(pacing);
+    onEvent({
+      kind: 'log',
+      message: `${pfx} [${j + 1}/${missing.length} blockuments] fetching ${bid}…`,
+    });
+    const resp = await rpc({ type: 'RELAY_WRITE', spec: blockumentManifest(plane, bid) });
+    if (resp.type !== 'WRITE_RESULT' || !resp.result.ok) {
+      failed += 1;
+      const err =
+        resp.type === 'WRITE_RESULT'
+          ? `HTTP ${resp.result.status}${resp.result.text ? `: ${resp.result.text.slice(0, 120)}` : ''}`
+          : resp.type === 'ERROR'
+            ? resp.error
+            : 'unexpected response';
+      onEvent({
+        kind: 'log',
+        message: `${pfx} ERROR: blockument ${bid} manifest failed (${err}) — the course cannot be imported until this is archived`,
+      });
+      continue;
+    }
+    try {
+      const graph = JSON.parse(resp.result.text) as BlockumentGraph;
+      if (!graph.blockuments?.[bid]) throw new Error('manifest has no blockument doc');
+      existing[bid] = graph;
+      const v = graph.blockuments[bid]?._v;
+      if (v !== undefined && v !== 47) {
+        // Novelty tripwire: every 2026-08-31 capture was `_v: 47`. A different
+        // schema version is archived verbatim but must not pass unnoticed.
+        onEvent({
+          kind: 'log',
+          message: `${pfx} WARN: blockument ${bid} has schema _v=${String(v)} (captures were 47) — review before import`,
+        });
+      }
+    } catch (e) {
+      failed += 1;
+      onEvent({
+        kind: 'log',
+        message: `${pfx} ERROR: blockument ${bid} manifest unparseable (${String(e)})`,
+      });
+    }
+  }
+  const archive: BlockumentArchive = {
+    courseId,
+    generatedAt: new Date().toISOString(),
+    blockuments: existing,
+  };
+  await storage.writeBlockuments(courseId, JSON.stringify(archive));
+  onEvent({
+    kind: 'log',
+    message: `${pfx} Archived ${Object.keys(existing).length}/${ids.length} Custom-block document(s)${failed ? ` — ${failed} FAILED` : ''}`,
+  });
+  return failed === 0;
+}
+
 /** Paced, strictly-sequential GET_COURSE fetch of the selected courses. Only
  *  performs the network fetch + save; census/catalog/novelty are built
  *  afterwards from EVERY saved course (scanSavedCourses), so a partial or
- *  multi-attempt run still yields a complete report. */
+ *  multi-attempt run still yields a complete report. Blockuments (Custom-block
+ *  documents) are fetched right after each course — including as a BACKFILL for
+ *  an already-saved course whose archive predates 0.9.9. */
 export async function exportCourses(
   courses: SearchResultItem[],
   storage: Storage,
   onEvent: (e: ProgressEvent) => void,
   pacing: PacingConfig = DEFAULT_PACING,
+  plane: 'us' | 'eu' | null = null,
 ): Promise<ExportResult> {
   const failed: string[] = [];
   let saved = 0;
@@ -146,6 +257,19 @@ export async function exportCourses(
           kind: 'log',
           message: `${pfx} Skipped (already saved): ${c.title ?? c.id}${mlNote}`,
         });
+        // Backfill: a pre-0.9.9 archive has the course but not its Custom-block
+        // documents — fetch just those so a re-run completes the archive.
+        try {
+          const raw = await storage.readCourse(c.id);
+          if (raw) {
+            const ok = await fetchCourseBlockuments(
+              c.id, unwrap(raw), plane, storage, onEvent, pacing, pfx,
+            );
+            if (!ok) failed.push(c.id);
+          }
+        } catch {
+          /* unreadable archive is reported by the census scan */
+        }
         continue;
       }
       onEvent({
@@ -193,6 +317,18 @@ export async function exportCourses(
     await storage.writeCourse(c.id, resp.result.data.raw);
     saved += 1;
     onEvent({ kind: 'log', message: `${pfx} Saved: ${c.title ?? c.id}${mlNote}` });
+
+    // Custom-block (mondrian) documents ride the course export — without them
+    // the course can never import (dangling blockumentId → boot 404 on target).
+    try {
+      const ok = await fetchCourseBlockuments(
+        c.id, unwrap(resp.result.data.raw), plane, storage, onEvent, pacing, pfx,
+      );
+      if (!ok) failed.push(c.id);
+    } catch (e) {
+      failed.push(c.id);
+      onEvent({ kind: 'log', message: `${pfx} ERROR archiving Custom-block documents: ${String(e)}` });
+    }
   }
 
   return { saved, skipped, failed, ...(stopped ? { stopped } : {}) };

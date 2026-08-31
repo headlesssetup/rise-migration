@@ -129,4 +129,13 @@ export interface Storage {
   writeStorylineManifest(courseId: string, json: string): Promise<void>;
   /** Read a course's storyline manifest, or null. */
   readStorylineManifest(courseId: string): Promise<string | null>;
+
+  // --- Mondrian (Custom block) blockuments (docs/rise-api-reference.md §mondrian) ---
+  /** Write a course's archived blockument graphs → `blockuments/<courseId>.json`
+   *  (a BlockumentArchive: sourceBlockumentId → full manifest graph). Required
+   *  for importing any course with `mondrian/mondrian` blocks — a dangling
+   *  source `blockumentId` 404s preview/publish boot for the whole course. */
+  writeBlockuments(courseId: string, json: string): Promise<void>;
+  /** Read a course's archived blockument graphs, or null (pre-0.9.9 archive). */
+  readBlockuments(courseId: string): Promise<string | null>;
 }

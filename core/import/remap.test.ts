@@ -7,6 +7,7 @@ import {
   findForeignMediaKeys,
   findLocalAssetRefs,
   findSurvivingSourceKeys,
+  collectStructuralIds,
   freshClientIds,
   registerClientIds,
   remapIds,
@@ -373,5 +374,127 @@ describe('freshClientIds — non-cuid block/item ids (Rise sample courses)', () 
   it('is a no-op for a block with no ids at all', () => {
     const b = { family: 'divider', settings: {} };
     expect(freshClientIds(b, mint())).toEqual(b);
+  });
+
+  it('re-mints answer ids and keeps correct/corrects refs valid (any id shape)', () => {
+    const q = {
+      id: '1',
+      type: 'MULTIPLE_RESPONSE',
+      answers: [
+        { id: '1', title: 'A' },
+        { id: '2', title: 'B' },
+      ],
+      correct: '1',
+      corrects: ['1', '2'],
+    };
+    const out = freshClientIds(q, mint()) as typeof q;
+    const a0 = out.answers[0]!.id;
+    const a1 = out.answers[1]!.id;
+    expect(a0).toMatch(/^cfresh/);
+    expect(a1).toMatch(/^cfresh/);
+    // block id "1" and answer id "1" are the same source string → same new id
+    // within this block (per-block map), and the refs follow it.
+    expect(out.correct).toBe(a0);
+    expect(out.corrects).toEqual([a0, a1]);
+  });
+});
+
+describe('freshClientIds — reused cuid-shaped ids (forceRemint)', () => {
+  const mint = () => {
+    let n = 0;
+    return () => `cfresh${String(++n).padStart(19, '0')}`;
+  };
+  const DUP = 'cloo788ep003c3573x7mc76j2'; // reused across blocks (Mercedes capture)
+
+  it('re-mints a forceRemint cuid per block; refs inside the block follow', () => {
+    const block = {
+      id: 'cmsahv00e002j3b7vsfxtdddt',
+      items: [{ id: DUP, refs: [`items:${DUP}/paragraph`] }],
+      trackingId: DUP,
+    };
+    const m = mint();
+    const out = freshClientIds(block, m, new Set([DUP])) as typeof block;
+    // the unique cuid block id stays (global IdMap pass owns it) …
+    expect(out.id).toBe(block.id);
+    // … the reused item id is re-minted, and both ref styles follow
+    const fresh = out.items[0]!.id;
+    expect(fresh).toMatch(/^cfresh/);
+    expect(out.items[0]!.refs).toEqual([`items:${fresh}/paragraph`]);
+    expect(out.trackingId).toBe(fresh); // exact-value ref (long id → safe)
+  });
+
+  it('gives the SAME reused cuid different values per block (the dedup)', () => {
+    const m = mint();
+    const blk = { id: DUP, items: [] };
+    const a = freshClientIds(blk, m, new Set([DUP])) as typeof blk;
+    const b = freshClientIds(blk, m, new Set([DUP])) as typeof blk;
+    expect(a.id).not.toBe(DUP);
+    expect(b.id).not.toBe(DUP);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('re-mints reused cuid answer ids and remaps corrects', () => {
+    const q = {
+      id: 'cunique0000000000000000aa',
+      answers: [
+        { id: 'cmeijcssu02aq3j7hvyimqky5', title: 'A' },
+        { id: 'cmeijcssu02ar3j7h7ifv30wm', title: 'B' },
+      ],
+      corrects: ['cmeijcssu02aq3j7hvyimqky5'],
+    };
+    const out = freshClientIds(
+      q,
+      mint(),
+      new Set(['cmeijcssu02aq3j7hvyimqky5', 'cmeijcssu02ar3j7h7ifv30wm']),
+    ) as typeof q;
+    expect(out.answers[0]!.id).toMatch(/^cfresh/);
+    expect(out.corrects).toEqual([out.answers[0]!.id]);
+  });
+
+  it('never rewrites a SHORT id by string equality outside id positions', () => {
+    const block = {
+      id: '2',
+      items: [{ id: '1', paragraph: 'x' }],
+      settings: { columns: '2', rows: '1' }, // ordinary values, not refs
+    };
+    const out = freshClientIds(block, mint()) as typeof block;
+    expect(out.settings.columns).toBe('2');
+    expect(out.settings.rows).toBe('1');
+  });
+
+  it('leaves scenario/library ids alone even when duplicated (non-structural)', () => {
+    const block = {
+      id: 'cunique0000000000000000ab',
+      items: [
+        {
+          id: 'cunique0000000000000000ac',
+          character: { poses: { '19030': { id: '19030' }, asking: { id: '19030' } } },
+          slides: [{ id: 'cslideaaaaaaaaaaaaaaaaaaa', responses: [{ id: 'cRespDup' }] }],
+        },
+      ],
+    };
+    const out = freshClientIds(block, mint(), new Set(['19030'])) as typeof block;
+    const item = out.items[0]!;
+    expect(item.character.poses['19030']!.id).toBe('19030');
+    expect(item.slides[0]!.id).toBe('cslideaaaaaaaaaaaaaaaaaaa');
+    expect(item.slides[0]!.responses[0]!.id).toBe('cRespDup');
+  });
+});
+
+describe('collectStructuralIds', () => {
+  it('collects block/item/answer ids, skips questions/slides/pose ids', () => {
+    const block = {
+      id: 'B',
+      items: [
+        {
+          id: 'I1',
+          answers: [{ id: 'A1' }, { id: 'A2' }],
+          slides: [{ id: 'S1' }],
+          questions: [{ id: 'Q1' }],
+        },
+      ],
+      answers: [{ id: 'A0' }],
+    };
+    expect(collectStructuralIds(block).sort()).toEqual(['A0', 'A1', 'A2', 'B', 'I1']);
   });
 });

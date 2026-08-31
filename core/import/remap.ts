@@ -51,33 +51,82 @@ export function registerClientIds(doc: Json, ids: IdMap): IdMap {
   return ids;
 }
 
+/** The structural array keys: objects reached through these carry the block's
+ *  own client-generated identities (items, quiz/KC answers). `questions[]` is
+ *  deliberately NOT structural — a draw-from-bank block embeds BANK questions
+ *  whose ids must keep matching the bank's own records. */
+const STRUCTURAL_ARRAYS = ['items', 'answers'] as const;
+
+/** Ref-value rewriting by string equality is only safe for long, high-entropy
+ *  ids (cuid/uuid class). A short id like "1" must never be replaced by
+ *  equality — it would also hit ordinary values ("columns": "2"). */
+const SAFE_EXACT_REF_LEN = 20;
+
+/**
+ * Collect every id at a STRUCTURAL position of one block — the block's own
+ * `id` plus the `id` of objects reachable through `items[]`/`answers[]`
+ * (any shape, cuid or not). Used course-wide to find ids REUSED across blocks
+ * (copy-paste provenance) and to assert the built payloads are collision-free.
+ */
+export function collectStructuralIds(block: Json): string[] {
+  const out: string[] = [];
+  const walk = (node: Json): void => {
+    if (!isObject(node)) return;
+    if (typeof node.id === 'string' && node.id !== '') out.push(node.id);
+    for (const k of STRUCTURAL_ARRAYS) {
+      const arr = node[k];
+      if (Array.isArray(arr)) arr.forEach(walk);
+    }
+  };
+  walk(block);
+  return out;
+}
+
 /**
  * Give a BLOCK's structural client ids fresh values, positionally.
  *
- * Why this exists: `remapIds` only re-mints ids that LOOK like Rise cuids
- * (`looksLikeClientId`). Real courses carry other shapes — Rise's own sample
- * courses number their blocks and items `"1"`, `"2"`, `"3"` and reuse those ids
- * in EVERY lesson (one captured course: 40 blocks, 14 distinct ids). Sending the
- * same block id for five lessons made the server clobber them: blocks landed in
- * the wrong lesson, and on a stack their translation cells vanished with them.
+ * Why this exists: `remapIds` re-mints ids that LOOK like Rise cuids via ONE
+ * global map — equal source strings map to ONE equal target string. That is
+ * wrong twice over for ids REUSED across blocks:
+ *  - Rise's own sample courses number their blocks and items `"1"`, `"2"`,
+ *    `"3"` and reuse those ids in EVERY lesson (one captured course: 40 blocks,
+ *    14 distinct ids). Sending the same block id for five lessons made the
+ *    server clobber them: blocks landed in the wrong lesson, and on a stack
+ *    their translation cells vanished with them.
+ *  - Real customer courses ALSO reuse cuid-shaped ids across blocks/lessons
+ *    (copy-paste provenance — Mercedes capture, 2026-08-31: 18/8 reused nested
+ *    cuids per course). The global map preserved those as target collisions.
  *
- * A block id is ours to choose, so any id that is not cuid-shaped is replaced
- * with a fresh one. The rewrite is:
+ * A block/item/answer id is ours to choose, so it is replaced per block when
+ *  - it is not cuid-shaped (the sample-course case), OR
+ *  - it is listed in `forceRemint` — the course-wide set of structural ids
+ *    that appear in MORE THAN ONE block (computed by the executor via
+ *    `collectStructuralIds`). A cross-block "ref" to such an id was ambiguous
+ *    at the source already, so nothing valid is lost by splitting it.
+ * The rewrite is:
  *  - POSITIONAL — only the block's own `id` and the `id` of objects reachable
- *    through `items` arrays. Ids nested elsewhere (`media.storyline.meta.slides[].id`,
- *    bank `questions[].id`) are left alone; a short id like "1" must never be
- *    replaced by string-equality, which would also hit ordinary values.
- *  - PER BLOCK — the map is local to this call, so `"1"` in lesson 2 and `"1"`
- *    in lesson 3 get DIFFERENT new ids (the whole point).
- * `items:<oldId>` ref strings inside the same block are rewritten to match.
+ *    through `items[]`/`answers[]` arrays. Ids nested elsewhere
+ *    (`media.storyline.meta.slides[].id`, bank `questions[].id`, scenario
+ *    slide/pose records) are left alone.
+ *  - PER BLOCK — the map is local to this call, so a reused id in lesson 2 and
+ *    in lesson 3 gets DIFFERENT new ids (the whole point).
+ * Local references follow the remint: `items:<oldId>` ref strings, the
+ * `correct`/`corrects` answer refs (field-targeted, any id shape), and — for
+ * long high-entropy ids only — any string value exactly equal to a reminted id
+ * (mirrors `remapIds`' exact-value semantics, covers `trackingId` and friends).
  *
- * Blocks whose ids are already cuid-shaped come back untouched (the global
- * `remapIds` pass handles those, keeping cross-block refs consistent).
+ * Blocks whose ids are cuid-shaped AND course-unique come back untouched (the
+ * global `remapIds` pass handles those, keeping cross-block refs consistent).
  */
-export function freshClientIds<T extends Json>(block: T, mint: () => string): T {
+export function freshClientIds<T extends Json>(
+  block: T,
+  mint: () => string,
+  forceRemint?: ReadonlySet<string>,
+): T {
   const local = new Map<string, string>();
   const claim = (id: unknown): string | undefined => {
-    if (typeof id !== 'string' || id === '' || looksLikeClientId(id)) return undefined;
+    if (typeof id !== 'string' || id === '') return undefined;
+    if (looksLikeClientId(id) && !forceRemint?.has(id)) return undefined;
     let next = local.get(id);
     if (!next) {
       next = mint();
@@ -89,14 +138,20 @@ export function freshClientIds<T extends Json>(block: T, mint: () => string): T 
   const collect = (node: Json): void => {
     if (!isObject(node)) return;
     claim(node.id);
-    const items = node.items;
-    if (Array.isArray(items)) items.forEach(collect);
+    for (const k of STRUCTURAL_ARRAYS) {
+      const arr = node[k];
+      if (Array.isArray(arr)) arr.forEach(collect);
+    }
   };
   collect(block);
   if (local.size === 0) return block;
+  const isStructuralKey = (k: string): boolean =>
+    (STRUCTURAL_ARRAYS as readonly string[]).includes(k);
   // Pass 2 — clone, substituting ids at those positions and inside ref strings.
   const clone = (node: Json, structural: boolean): Json => {
     if (typeof node === 'string') {
+      const exact = local.get(node);
+      if (exact !== undefined && node.length >= SAFE_EXACT_REF_LEN) return exact;
       return node.replace(/items:([^/\s"']+)/g, (m, id: string) => {
         const next = local.get(id);
         return next ? `items:${next}` : m;
@@ -108,8 +163,12 @@ export function freshClientIds<T extends Json>(block: T, mint: () => string): T 
     for (const [k, v] of Object.entries(node)) {
       if (k === 'id' && structural && typeof v === 'string' && local.has(v)) {
         out[k] = local.get(v)!;
-      } else if (k === 'items') {
+      } else if (isStructuralKey(k)) {
         out[k] = Array.isArray(v) ? v.map((child) => clone(child, true)) : clone(v, false);
+      } else if (k === 'correct' && typeof v === 'string' && local.has(v)) {
+        out[k] = local.get(v)!;
+      } else if (k === 'corrects' && Array.isArray(v)) {
+        out[k] = v.map((x) => (typeof x === 'string' && local.has(x) ? local.get(x)! : clone(x, false)));
       } else {
         out[k] = clone(v, false);
       }
@@ -167,7 +226,7 @@ export function remapIds<T extends Json>(doc: T, ids: IdMap): T {
 // A string value that IS one bare key / usercontent-URL key (no surrounding
 // authored text) — blanking such a value empties the whole slot.
 const RE_WHOLE_MEDIA_VALUE =
-  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?rise\/(?:courses|questionBanks)\/\S+$/i;
+  /^(?:https?:\/\/(?:www\.)?articulateusercontent\.(?:com|eu)\/)?(?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\/\S+$/i;
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -297,8 +356,17 @@ export function blankForeignMediaKeys<T extends Json>(
   return transform(doc) as T;
 }
 
-/** Walk a doc and collect every uploaded media key, keyed by owner id (the 3rd
- *  path segment of `rise/{courses|questionBanks}/<ownerId>/…`). */
+/** The OWNER of an uploaded key — the id segment whose account-space the key
+ *  lives in: `rise/{courses|questionBanks}/<ownerId>/…` (3rd segment) or
+ *  `mondrian/assets/blockument/<blockumentId>/…` (4th segment). */
+export function ownerOfUploadedKey(key: string): string {
+  const seg = key.split('/');
+  if (seg[0] === 'mondrian') return seg[3] ?? '';
+  return seg[2] ?? '';
+}
+
+/** Walk a doc and collect every uploaded media key, keyed by owner id (see
+ *  `ownerOfUploadedKey`). */
 function collectUploadedKeysByOwner(doc: Json): { key: string; ownerId: string }[] {
   const out: { key: string; ownerId: string }[] = [];
   // Path-aware so storyline media (under `media.storyline.*`) is recognised as
@@ -312,8 +380,7 @@ function collectUploadedKeysByOwner(doc: Json): { key: string; ownerId: string }
       // "no source key survives" invariant (else every Storyline course fails).
       if (kind && kind.startsWith('media-') && kind !== 'media-storyline') {
         for (const key of extractUploadedKeys(node)) {
-          const ownerId = key.split('/')[2] ?? '';
-          out.push({ key, ownerId });
+          out.push({ key, ownerId: ownerOfUploadedKey(key) });
         }
       }
       return;

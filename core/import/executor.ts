@@ -44,6 +44,9 @@ import {
   handleAttachStorylineL10n,
   handleFlagL10nStoryline,
 } from './executor-steps-storyline';
+import { handleCreateBlockument } from './executor-steps-mondrian';
+import { handleSetExportSettings } from './executor-steps-settings';
+import { collectBlockumentRefs } from '@/core/mondrian';
 import {
   handleSetCourseDescription,
   handleConvertStack,
@@ -167,6 +170,14 @@ export async function executePlan(
         }
         case 'unlock-lesson': {
           await handleUnlockLesson(ctx, step);
+          break;
+        }
+        case 'set-export-settings': {
+          await handleSetExportSettings(ctx, step);
+          break;
+        }
+        case 'create-blockument': {
+          await handleCreateBlockument(ctx, step);
           break;
         }
         case 'create-blocks': {
@@ -302,6 +313,13 @@ export async function executePlan(
     result.survivingKeys = [
       ...findForeignMediaKeys(rebuilt, targetOwners),
       ...findLocalAssetRefs(rebuilt).map((ref) => `local-asset:${ref.assetPath}@${ref.path}`),
+      // Mondrian cross-refs: every source `blockumentId` must have a recreated
+      // target counterpart — a dangling id 404s preview/publish boot for the
+      // whole course (2026-08-31 root cause), so it fails the run like a
+      // surviving media key.
+      ...collectBlockumentRefs(deps.input.course)
+        .filter((ref) => !ctx.blockumentMap.has(ref.id))
+        .map((ref) => `blockument:${ref.id}@${ref.path}`),
     ];
 
     result.ok = result.survivingKeys.length === 0;
@@ -309,6 +327,9 @@ export async function executePlan(
       result.error = `Foreign or unresolved media references ${dryRun ? 'would survive (dry-run prediction)' : 'survived'}: ${result.survivingKeys.slice(0, 5).join(', ')}`;
     }
     result.idMap = ids.toJSON();
+    if (ctx.blockumentMap.size > 0) {
+      result.blockumentIds = Object.fromEntries(ctx.blockumentMap);
+    }
     return result;
   } catch (e) {
     result.ok = false;

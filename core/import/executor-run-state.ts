@@ -9,7 +9,7 @@ import {
   materializeLocale,
   type L10nChange,
 } from '@/core/l10n';
-import { remapMediaKeys } from './remap';
+import { collectStructuralIds, remapMediaKeys } from './remap';
 import { collectBuiltinRefs, probeBuiltinRefs } from './builtin-assets';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
@@ -57,6 +57,9 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   // never gets set (handshake failed / skipped), the rollback treats the shell as
   // suspect rather than reporting a hollow success.
   let materialized = false;
+  // The TARGET course's server-assigned shareId, read at the create handshake —
+  // exportSettings must carry the target's own, never the source's.
+  let targetShareId = '';
   // Pre-created SHELL lessons observed on the create-course handshake GET_COURSE
   // (F2, capture-proven: a `onePage` shell ships WITH one empty-titled `blocks`
   // lesson the editor writes straight into; regular/aiOutline shells are
@@ -75,6 +78,14 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   const normBlocks = new Map<string, Block>();
   // sourceKey → new target key (after upload) for media patches.
   const keyMap = new Map<string, string>();
+  // source blockumentId → NEW blockumentId (created on the target mondrian-api
+  // by create-blockument steps; consumed by create-blocks to swap block refs).
+  const blockumentMap = new Map<string, string>();
+  const mintUuid =
+    deps.mintUuid ??
+    (() =>
+      (globalThis.crypto?.randomUUID?.() as string | undefined) ??
+      `${mint()}-${mint()}`.slice(0, 36));
   // sourceBankId → ordered new question ids (for INSERT_QUESTION_BANK_QUESTIONS).
   const bankQuestionIds = new Map<string, string[]>();
 
@@ -96,6 +107,27 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   const matDoc = stack ? materializeLocale(deps.input.course).doc : deps.input.course;
   // Content index over the doc the build ships (materialized for stacks).
   const { lessons: srcLessons, blocks: srcBlocks } = indexSource(matDoc);
+
+  // Structural ids REUSED across blocks (copy-paste provenance — Mercedes
+  // capture 2026-08-31: 18/8 reused nested cuids per course). Shipping one
+  // shared target id for them preserves the collision, so freshClientIds
+  // re-mints these per block regardless of shape (see remap.ts).
+  const dupStructuralIds = (() => {
+    const owner = new Map<string, string>(); // structural id → first blockKey
+    const dups = new Set<string>();
+    for (const [key, entry] of srcBlocks) {
+      for (const id of new Set(collectStructuralIds(entry.block))) {
+        const prev = owner.get(id);
+        if (prev === undefined) owner.set(id, key);
+        else if (prev !== key) dups.add(id);
+      }
+    }
+    return dups;
+  })();
+  // Structural ids of BUILT CREATE_BLOCKS payloads → owning blockKey. The
+  // handover-mandated assertion: no generated structural id may appear in two
+  // different blocks (a collision here is a code fault, never shippable).
+  const builtStructuralIds = new Map<string, string>();
 
   // Source refs with NO counterpart on the converted target (pairing gaps,
   // flagged l10n-ref at await-stack). Their cells are skipped: the target has
@@ -293,6 +325,10 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
     matDoc,
     srcLessons,
     srcBlocks,
+    dupStructuralIds,
+    builtStructuralIds,
+    blockumentMap,
+    mintUuid,
     unmatchedCourseRefs,
     total,
     pfx,
@@ -305,6 +341,8 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
     set newCourseId(v: string) { newCourseId = v; },
     get materialized() { return materialized; },
     set materialized(v: boolean) { materialized = v; },
+    get targetShareId() { return targetShareId; },
+    set targetShareId(v: string) { targetShareId = v; },
     get targetStackDoc() { return targetStackDoc; },
     set targetStackDoc(v: GetCourseDocument | null) { targetStackDoc = v; },
     get stepIdx() { return stepIdx; },

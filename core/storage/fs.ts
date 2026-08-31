@@ -537,4 +537,25 @@ export class FileSystemStorage implements Storage {
       return null;
     }
   }
+
+  // --- Mondrian blockuments (blockuments/<courseId>.json) ---
+
+  private blockumentsDir(create = false): Promise<FileSystemDirectoryHandle> {
+    return this.root.getDirectoryHandle('blockuments', { create });
+  }
+
+  async writeBlockuments(courseId: string, json: string): Promise<void> {
+    const dir = await this.blockumentsDir(true);
+    await this.writeFile(dir, `${courseId}.json`, json);
+  }
+
+  async readBlockuments(courseId: string): Promise<string | null> {
+    try {
+      const dir = await this.blockumentsDir();
+      const handle = await dir.getFileHandle(`${courseId}.json`);
+      return await (await handle.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
 }

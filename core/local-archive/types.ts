@@ -13,6 +13,10 @@ export interface LocalArchiveCourseEntryV1 {
   sha256: string;
   assetManifest?: string;
   assetManifestSha256?: string;
+  /** `blockuments/<id>.json` — archived mondrian (Custom block) graphs; present
+   *  (0.9.9+) whenever the course references any `blockumentId`. */
+  blockuments?: string;
+  blockumentsSha256?: string;
 }
 
 export interface LocalArchiveManifestV1 {

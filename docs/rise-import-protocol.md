@@ -866,6 +866,42 @@ its own dry-run + live run. They share state through small id-map artifacts unde
   folders-inventory); recreating bank folders on import isn't built yet (banks are
   created at the bank root, `folderId:null`).
 
+## 10f. Mondrian ("Custom block") blockuments ✅ captured 2026-08-31
+
+The 2026-08-31 EU import failure root cause: `mondrian/mondrian` blocks carried
+the SOURCE account's `blockumentId` verbatim; target preview/publish boot
+resolves blockuments server-side → proxied 404 for the whole course, while the
+editor (lazy fetch) looked fine. Protocol details in `rise-api-reference.md`
+§8a; policy:
+
+- **Export** (`fetchCourseBlockuments`, rides the course export + backfills on a
+  re-run of an already-saved course): paced `GET …/<id>/manifest` per referenced
+  blockument on the SOURCE plane → `blockuments/<courseId>.json`
+  (`BlockumentArchive`, checksummed in the archive manifest as
+  `blockuments`/`blockumentsSha256`); the graphs' `mondrian/assets/blockument/…`
+  keys join the course's asset manifest + content-addressed store (a NEW media
+  namespace; owner = the blockumentId path segment). A blockument `_v` ≠ 47 is
+  a loud novelty warning. A failed/missing manifest marks the course failed —
+  its import would ship a dangling ref.
+- **Import** (plan `create-blockument`, BEFORE the lesson's create-blocks,
+  mirroring the editor's createFromBlank→CREATE_BLOCKS order): createFromBlank
+  {parentId: NEW courseId} → ADOPT the returned root canvas item (the shell-
+  lesson adoption pattern) + mint fresh uuids for all other items → per asset:
+  signed-asset-url {name, blockumentId:new} → presigned S3 PUT (ACL echo rides
+  isPresignedPut) → CRUSH_IMAGE {courseId:new, original:newPath} → rewrite
+  `assets` records + `fill.assetId` → transactions: doc first, then items
+  parents-first, one entity per call. `create-blocks` swaps every block's
+  `blockumentId` through the run map; an unmapped id ABORTS the course (plan-
+  time when the archive lacks the graph; executor-time as belt-and-suspenders).
+- **Verification**: the executor's final assertion counts an unmapped
+  `blockumentId` as a surviving foreign ref; the read-back (a) rejects any
+  source blockumentId in the target GET_COURSE, (b) paced-GETs each NEW
+  blockument's manifest on the TARGET plane (the exact lookup boot performs)
+  and compares item counts to the archive, (c) runs the foreign-media-key scan
+  over the fetched graph (owners = new course + new blockument ids).
+- Provenance fields (`clonedFromId`, `createdFromTemplateId`) ship VERBATIM —
+  boot inlines them unresolved (capture-confirmed); smoke boot verifies.
+
 ## 11. Safe-import gates (required UX, enforced before any write)
 
 1. **Write mode is never the default.** A distinct Import/write-mode entry, separate

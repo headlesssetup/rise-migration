@@ -24,6 +24,7 @@ function fakeStorage(initialLock?: string) {
     readAssetManifest: async () => null,
     hasAsset: async () => false,
     readAsset: async () => null,
+    readBlockuments: async () => null,
     writeCreatorArtifact: async (name: string, contents: string) =>
       void artifacts.set(name, contents),
     readCreatorArtifact: async (name: string) => artifacts.get(name) ?? null,

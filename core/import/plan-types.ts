@@ -5,6 +5,7 @@
 // a cohesive protocol module under the ~700-line allowance.
 
 import type { OptionalAssetReason } from '@/core/assets/keys';
+import type { BlockumentGraph } from '@/core/mondrian';
 import type { GetCourseDocument } from '@/shared/types/rise';
 
 export interface AssetEntry {
@@ -91,6 +92,12 @@ export interface PlanInput {
     string,
     { locale: string; l10nId?: string; reviewPrefix: string; meta?: unknown; title?: string }
   >;
+  /** Archived mondrian (Custom block) blockument graphs, keyed by SOURCE
+   *  blockumentId — from `blockuments/<courseId>.json` (0.9.9+ export). A
+   *  course block referencing a blockument with NO archived graph ABORTS the
+   *  plan (loud-fail: the ref is a dangling cross-account id that 404s
+   *  preview/publish boot; re-export the course with 0.9.9+). */
+  blockuments?: Map<string, BlockumentGraph>;
 }
 
 export type PlanStep =
@@ -164,6 +171,32 @@ export type PlanStep =
         /** Known-incompatible Storyline packages become a visible text donor. */
         replacement?: 'legacy-storyline';
       }[];
+      summary: string;
+    }
+  | {
+      // Recreate one mondrian (Custom block) blockument on the TARGET before
+      // its block ships: createFromBlank (parented to the new course) → asset
+      // uploads (signed-asset-url → S3 PUT → CRUSH_IMAGE) → full-state
+      // transactions (doc, then items, parents first). Records source→new
+      // blockumentId so create-blocks swaps the block's reference.
+      kind: 'create-blockument';
+      sourceLessonId: string;
+      sourceBlockId: string;
+      sourceBlockumentId: string;
+      title: string;
+      itemCount: number;
+      assetCount: number;
+      summary: string;
+    }
+  | {
+      // Publish/export settings (completion mode + %, LMS reporting, resume,
+      // exit, telemetry, packaging, quiz binding) via
+      // UPDATE_COURSE_DEBOUNCE {id, exportSettings} — capture-proven
+      // 2026-08-31 (publish dialog). Written LAST: the quiz lesson must exist
+      // so `quizId` can be remapped to the new lesson id. `identifier` derives
+      // from the new course id; `shareId`/`activeEdition` are target lifecycle.
+      kind: 'set-export-settings';
+      hasQuizId: boolean;
       summary: string;
     }
   | {

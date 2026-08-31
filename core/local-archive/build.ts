@@ -32,6 +32,7 @@ export async function buildCourseEntry(
       ? doc.course.type
       : undefined;
   const assetRaw = await storage.readAssetManifest('courses', id);
+  const blockumentsRaw = await storage.readBlockuments(id);
   return {
     id,
     ...(resolvedTitle ? { title: resolvedTitle } : {}),
@@ -42,6 +43,12 @@ export async function buildCourseEntry(
       ? {
           assetManifest: `courses/${id}.assets.json`,
           assetManifestSha256: await hashText(assetRaw),
+        }
+      : {}),
+    ...(blockumentsRaw
+      ? {
+          blockuments: `blockuments/${id}.json`,
+          blockumentsSha256: await hashText(blockumentsRaw),
         }
       : {}),
   };

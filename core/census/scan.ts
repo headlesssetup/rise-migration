@@ -14,11 +14,13 @@ export type RefKind =
   | 'media-video'
   | 'media-audio'
   | 'media-storyline' // Storyline bundle bytes (under media.storyline)
+  | 'media-mondrian-asset' // mondrian/assets/blockument/<bid>/… (Custom-block asset)
   | 'media-other' // uploaded key we couldn't type
   | 'cdn' // cdn.articulate.com — kept as-is, not re-uploaded
   | 'embed' // YouTube/Vimeo — plain URL, not re-uploaded
   | 'storyline-crossref' // Storyline block → Review 360 item
-  | 'draw-from-bank-crossref'; // draw-from-bank block → question-bank id
+  | 'draw-from-bank-crossref' // draw-from-bank block → question-bank id
+  | 'mondrian-crossref'; // Custom block `blockumentId` → mondrian-api blockument
 
 export interface RefOccurrence {
   kind: RefKind;
@@ -85,6 +87,10 @@ const RE_EMBED = /(?:youtube\.com|youtu\.be|vimeo\.com)/i;
 // way a key gets embedded in rich text: `(` (CSS url()), `=` (unquoted attr),
 // `,`/`>` (lists, markup), `;` (entity-escaped quote &quot;).
 const RE_RISE_KEY = /(?:^|[/"'\s(=,>;])rise\/(?:courses|questionBanks)\/[^/\s"']+\//i;
+// Mondrian ("Custom block") asset keys — mondrian/assets/blockument/<bid>/<file>.
+// They live inside blockument manifests (never in the course doc itself) and are
+// served by the plane's usercontent host like other uploads (2026-08-31 capture).
+const RE_MONDRIAN_KEY = /(?:^|[/"'\s(=,>;])mondrian\/assets\/blockument\/[^/\s"']+\//i;
 
 const RE_IMG = /\.(?:jpe?g|png|gif|svg|webp|bmp|avif|tiff?)(?:[?#]|$)/i;
 const RE_VID = /\.(?:mp4|webm|mov|m4v|ogv|avi|mkv)(?:[?#]|$)/i;
@@ -112,6 +118,7 @@ export function classifyString(value: string, path = ''): RefKind | null {
   // precedence over the host rules: a real upload on the usercontent host is media,
   // while a built-in on the same host falls through to cdn.
   if (RE_RISE_KEY.test(value)) return mediaSubtype(path, value);
+  if (RE_MONDRIAN_KEY.test(value)) return 'media-mondrian-asset';
   if (RE_EMBED.test(value)) return 'embed';
   // cdn.articulate.com / cdn.eu.articulate.com, or a usercontent host serving a
   // built-in shared asset (/assets/rise/… theme covers, default block media) → kept.
@@ -170,6 +177,19 @@ export function scanRefs(
           kind: 'storyline-crossref',
           path: childPath,
           value: truncate(JSON.stringify(v), max),
+          courseId: ownerId,
+        });
+      }
+      // Custom (mondrian) block → mondrian-api blockument. The field NAME is
+      // the contract: any string-valued `blockumentId` points at a document in
+      // the SOURCE account's mondrian service — a cross-account ref that must
+      // be recreated + remapped, never shipped verbatim (a dangling id 404s
+      // preview/publish boot for the whole course; 2026-08-31 root cause).
+      if (k === 'blockumentId' && typeof v === 'string' && v !== '') {
+        refs.push({
+          kind: 'mondrian-crossref',
+          path: childPath,
+          value: truncate(v, max),
           courseId: ownerId,
         });
       }
