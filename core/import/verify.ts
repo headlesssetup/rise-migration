@@ -278,6 +278,44 @@ const LEGACY_MIRROR_FIELDS: ReadonlySet<string> = new Set([
   'color',
 ]);
 
+/** Provenance CONTAINERS optional omissions live under (capture-confirmed
+ *  non-rendering: abandoned staging, uncropped originals) and provenance
+ *  STRING fields (pre-transcode inputs, inactive image variants) —
+ *  see core/assets/keys.ts optionalAssetPaths. */
+const PROVENANCE_CONTAINERS = new Set(['tmp', 'originalImage']);
+const PROVENANCE_STRINGS = new Set(['inputKey', 'key', 'crushedKey']);
+const RE_ANY_UPLOAD_KEY = /(?:rise\/(?:courses|questionBanks)|mondrian\/assets\/blockument)\//;
+
+/** Remove, from a deep clone, provenance whose content referenced one of the
+ *  intentionally dropped optional keys — SYMMETRICALLY: the target's twin was
+ *  already blanked at write time, so a container with NO uploaded key left
+ *  (a dead husk) and an EMPTY provenance string strip too, on either side.
+ *  Migrated provenance (bytes were available, a live key remains) keeps
+ *  comparing normally. */
+function stripDroppedProvenance(doc: unknown, droppedKeys: string[]): unknown {
+  if (droppedKeys.length === 0) return doc;
+  const refsDropped = (v: unknown): boolean => {
+    const raw = typeof v === 'string' ? v : JSON.stringify(v ?? null);
+    return droppedKeys.some((k) => raw.includes(k));
+  };
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!node || typeof node !== 'object') return node;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (PROVENANCE_CONTAINERS.has(k) && v && typeof v === 'object') {
+        if (refsDropped(v) || !RE_ANY_UPLOAD_KEY.test(JSON.stringify(v))) continue;
+      }
+      if (PROVENANCE_STRINGS.has(k) && typeof v === 'string') {
+        if (v === '' || refsDropped(v)) continue;
+      }
+      out[k] = walk(v);
+    }
+    return out;
+  };
+  return walk(doc);
+}
+
 /** Feature-toggle object normalization: drop explicit `false` booleans so an
  *  absent toggle compares equal to an explicitly-off one. */
 function normalizeToggleObject(v: unknown): unknown {
@@ -437,6 +475,13 @@ export function verifyParity(
   optionalDroppedKeys: string[] = [],
 ): ParityReport {
   if (optionalDroppedKeys.length > 0) {
+    // Strip the dropped PROVENANCE CONTAINERS whole, then blank any remaining
+    // dropped key. Blanking alone leaves a husk (`media.tmp` keeps its
+    // width/height/type after its keys blank) that blocks against a target
+    // which legitimately has no such slot at all (live 2026-08-31: the one
+    // blocking divergence on an otherwise perfect CRM import).
+    source = stripDroppedProvenance(source, optionalDroppedKeys) as GetCourseDocument;
+    target = stripDroppedProvenance(target, optionalDroppedKeys) as GetCourseDocument;
     source = remapMediaKeys(
       source,
       new Map(optionalDroppedKeys.map((k) => [k, ''] as [string, string])),

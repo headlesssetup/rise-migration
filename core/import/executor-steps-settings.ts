@@ -85,7 +85,7 @@ export async function handleSetExportSettings(
           `exportSettings.quizId ${String((src as Record<string, unknown>).quizId)} has no imported ` +
           'counterpart (stale archive id?) — select the completion quiz manually in Publish settings',
       });
-      log(`${pfx} ⚠ FLAG exportSettings.quizId not mappable — completion quiz must be selected manually`);
+      log(`${pfx()} ⚠ FLAG exportSettings.quizId not mappable — completion quiz must be selected manually`);
     }
   }
   // `storylineId` (completion via a Storyline block) — same rule.
@@ -104,5 +104,5 @@ export async function handleSetExportSettings(
   }
 
   await send(env.updateCourseExportSettings(ctx.newCourseId, es), step.kind);
-  log(`${pfx} OK   publish/export settings written${es.quizId ? ` (quizId → ${String(es.quizId)})` : ''}`);
+  log(`${pfx()} OK   publish/export settings written${es.quizId ? ` (quizId → ${String(es.quizId)})` : ''}`);
 }

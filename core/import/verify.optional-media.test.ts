@@ -105,4 +105,40 @@ describe('verifyParity — optional provenance omissions (CRM six-key regression
     const p = verifyParity(sourceDoc(), targetDoc(), []);
     expect(p.issues.some((i) => i.kind === 'media-missing')).toBe(true);
   });
+
+  it('a dropped course-level media.tmp HUSK does not block against an empty target slot (live 2026-08-31)', () => {
+    // The target legitimately has course.media = {} (staging is never written);
+    // blanking only the KEY left {tmp:{image:{width,height,…}}} in the source
+    // comparison — the husk itself must strip when its key was dropped.
+    const t = targetDoc();
+    (t.course as Record<string, unknown>).media = {};
+    const src = sourceDoc();
+    (src.course as Record<string, unknown>).media = {
+      tmp: {
+        image: {
+          key: 'rise/courses/SRC/tmp-1.png',
+          crushedKey: 'rise/courses/SRC/tmp-2.png',
+          width: 173,
+          height: 40,
+          type: 'image',
+          useCrushedKey: true,
+          originalUrl: 'Bild2.png',
+        },
+      },
+    };
+    const p = verifyParity(src, t, [], OPTIONAL_KEYS);
+    expect(p.issues.filter((i) => i.path === 'course.media')).toEqual([]);
+    expect(p.ok).toBe(true);
+  });
+
+  it('MIGRATED provenance (keys not in the dropped list) still compares', () => {
+    const src = sourceDoc();
+    (src.course as Record<string, unknown>).media = {
+      tmp: { image: { key: 'rise/courses/SRC/live-tmp.png', width: 10 } },
+    };
+    const t = targetDoc();
+    (t.course as Record<string, unknown>).media = {}; // migration failed to carry it
+    const p = verifyParity(src, t, [], OPTIONAL_KEYS); // live-tmp.png NOT dropped
+    expect(p.issues.some((i) => i.path === 'course.media')).toBe(true);
+  });
 });
