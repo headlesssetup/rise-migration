@@ -25,6 +25,7 @@ export interface BlueprintIssue {
     | 'html'
     | 'kc'
     | 'sorting'
+    | 'table'
     | 'origin'
     | 'assets';
   path: string;
@@ -48,6 +49,10 @@ const KNOWN_KINDS: readonly BlockIntentKind[] = [
   'timeline',
   'sorting',
   'knowledge-check',
+  'fill-in-the-blank',
+  'matching',
+  'table',
+  'labeled-graphic',
   'note',
   'links',
   'video-placeholder',
@@ -243,6 +248,7 @@ function checkIntent(issues: BlueprintIssue[], path: string, value: unknown): vo
     case 'tabs':
     case 'flashcards':
     case 'process':
+    case 'labeled-graphic':
       noUnknownKeys(issues, path, intent, [...common, 'items']);
       strArray(issues, `${path}.intro`, intent.intro, { required: true, html: true });
       checkItems(issues, `${path}.items`, intent.items);
@@ -343,6 +349,74 @@ function checkIntent(issues: BlueprintIssue[], path: string, value: unknown): vo
             'kc',
             `${qPath}.options`,
             'No option is marked correct. If the source does not evidence a correct answer, move this question to unresolved[] instead.',
+          );
+        }
+      });
+      break;
+    }
+    case 'fill-in-the-blank': {
+      noUnknownKeys(issues, path, intent, [...common, 'questions']);
+      strArray(issues, `${path}.intro`, intent.intro, { required: true, html: true });
+      if (!Array.isArray(intent.questions) || intent.questions.length === 0) {
+        issue(issues, 'error', 'empty', `${path}.questions`, 'Needs at least one {stem, answers, feedback?} question.');
+        break;
+      }
+      intent.questions.forEach((v, i) => {
+        const q = object(v);
+        const qPath = `${path}.questions[${i}]`;
+        if (!q) {
+          issue(issues, 'error', 'shape', qPath, 'Question must be an object {stem, answers, feedback?}.');
+          return;
+        }
+        noUnknownKeys(issues, qPath, q, ['stem', 'answers', 'feedback']);
+        str(issues, `${qPath}.stem`, q.stem, { required: true, nonEmpty: true, html: true });
+        if (q.feedback !== undefined) str(issues, `${qPath}.feedback`, q.feedback, { html: true });
+        const ok = strArray(issues, `${qPath}.answers`, q.answers, { required: true, nonEmpty: true });
+        if (ok && (q.answers as unknown[]).some((a) => typeof a === 'string' && a.trim() === '')) {
+          issue(issues, 'error', 'kc', `${qPath}.answers`, 'Accepted answers must not be empty strings. If the source does not evidence the answer, move the question to unresolved[] instead.');
+        }
+      });
+      break;
+    }
+    case 'matching': {
+      noUnknownKeys(issues, path, intent, [...common, 'stem', 'pairs', 'feedback']);
+      strArray(issues, `${path}.intro`, intent.intro, { required: true, html: true });
+      str(issues, `${path}.stem`, intent.stem, { required: true, nonEmpty: true, html: true });
+      if (intent.feedback !== undefined) str(issues, `${path}.feedback`, intent.feedback, { html: true });
+      if (!Array.isArray(intent.pairs) || intent.pairs.length < 2) {
+        issue(issues, 'error', 'kc', `${path}.pairs`, 'A matching activity needs at least two {left, right} pairs.');
+        break;
+      }
+      intent.pairs.forEach((v, i) => {
+        const pair = object(v);
+        if (!pair) {
+          issue(issues, 'error', 'shape', `${path}.pairs[${i}]`, 'Pair must be an object {left, right}.');
+          return;
+        }
+        noUnknownKeys(issues, `${path}.pairs[${i}]`, pair, ['left', 'right']);
+        str(issues, `${path}.pairs[${i}].left`, pair.left, { required: true, nonEmpty: true });
+        str(issues, `${path}.pairs[${i}].right`, pair.right, { required: true, nonEmpty: true });
+      });
+      break;
+    }
+    case 'table': {
+      noUnknownKeys(issues, path, intent, [...common, 'columns', 'rows']);
+      strArray(issues, `${path}.intro`, intent.intro, { required: true, html: true });
+      const colsOk = strArray(issues, `${path}.columns`, intent.columns, { required: true, nonEmpty: true, html: true });
+      const width = colsOk ? (intent.columns as string[]).length : 0;
+      if (!Array.isArray(intent.rows) || intent.rows.length === 0) {
+        issue(issues, 'error', 'empty', `${path}.rows`, 'Needs at least one row (an array of cell strings).');
+        break;
+      }
+      intent.rows.forEach((row, i) => {
+        const rowOk = strArray(issues, `${path}.rows[${i}]`, row, { required: true, html: true });
+        if (rowOk && width > 0 && (row as string[]).length !== width) {
+          issue(
+            issues,
+            'error',
+            'table',
+            `${path}.rows[${i}]`,
+            `Row has ${(row as string[]).length} cell(s) but the table has ${width} column(s) — every row must match; use "" for an empty cell.`,
           );
         }
       });
@@ -543,6 +617,15 @@ export function validateBlueprint(text: string): BlueprintValidation {
   if (!Array.isArray(root.production)) {
     issue(issues, 'error', 'shape', 'blueprint.production', 'production must be an array.');
   } else {
+    if (root.production.length > 0) {
+      issue(
+        issues,
+        'warning',
+        'shape',
+        'blueprint.production',
+        `${root.production.length} narration entr${root.production.length === 1 ? 'y' : 'ies'} — narration scripts are not needed for Rise (the source document is the producers' script) and bloat the JSON. Ask the AI to return "production": [] and keep only the video-placeholder blocks.`,
+      );
+    }
     root.production.forEach((pv, i) => {
       const p = object(pv);
       const pPath = `blueprint.production[${i}]`;

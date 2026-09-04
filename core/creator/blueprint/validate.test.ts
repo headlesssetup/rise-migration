@@ -112,6 +112,55 @@ describe('validateBlueprint', () => {
     expect(v.issues.some((i) => i.code === 'sorting')).toBe(true);
   });
 
+  it('rejects a matching block with fewer than two pairs', () => {
+    const v = validateBlueprint(
+      mutated((r) => {
+        const m = r.lessons.flatMap((l: any) => l.blocks).find((b: any) => b.intent.kind === 'matching');
+        m.intent.pairs = [m.intent.pairs[0]];
+      }),
+    );
+    expect(v.issues.some((i) => i.code === 'kc' && /two/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a fill-in question with an empty accepted answer', () => {
+    const v = validateBlueprint(
+      mutated((r) => {
+        const f = r.lessons
+          .flatMap((l: any) => l.blocks)
+          .find((b: any) => b.intent.kind === 'fill-in-the-blank');
+        f.intent.questions[0].answers = ['ok', ''];
+      }),
+    );
+    expect(v.issues.some((i) => i.code === 'kc' && /empty strings/.test(i.message))).toBe(true);
+  });
+
+  it('rejects a ragged table row with a path-addressed error', () => {
+    const v = validateBlueprint(
+      mutated((r) => {
+        const t = r.lessons.flatMap((l: any) => l.blocks).find((b: any) => b.intent.kind === 'table');
+        t.intent.rows[0] = ['only one cell'];
+      }),
+    );
+    const hit = v.issues.find((i) => i.code === 'table');
+    expect(hit?.path).toMatch(/intent\.rows\[0\]$/);
+  });
+
+  it('accepts sourceRef.row (table storyboards) and rejects a non-numeric one', () => {
+    expect(validateBlueprint(mutated((r) => (r.lessons[0].blocks[0].sourceRef.row = 12))).ready).toBe(true);
+    const bad = validateBlueprint(mutated((r) => (r.lessons[0].blocks[0].sourceRef.row = '12')));
+    expect(bad.issues.some((i) => i.path.endsWith('sourceRef.row'))).toBe(true);
+  });
+
+  it('warns (does not block) when narration was copied into production', () => {
+    const v = validateBlueprint(goldenJson()); // golden carries one narration entry
+    const hit = v.issues.find((i) => i.path === 'blueprint.production');
+    expect(hit?.severity).toBe('warning');
+    expect(hit?.message).toMatch(/"production": \[\]/);
+    expect(v.ready).toBe(true);
+    const clean = validateBlueprint(mutated((r) => (r.production = [])));
+    expect(clean.issues.some((i) => i.path === 'blueprint.production')).toBe(false);
+  });
+
   it('rejects non-empty assets (chat paste carries no binaries)', () => {
     const v = validateBlueprint(
       mutated((r) => r.assets.push({ kind: 'local-asset', path: 'assets/x.png' })),

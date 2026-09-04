@@ -187,6 +187,10 @@ describe('compileCourseBlueprint — golden fixture (every intent kind)', () => 
       'timeline',
       'sorting',
       'knowledge-check',
+      'fill-in-the-blank',
+      'matching',
+      'table',
+      'labeled-graphic',
       'note',
       'links',
       'video-placeholder',
@@ -199,6 +203,21 @@ describe('compileCourseBlueprint — golden fixture (every intent kind)', () => 
 
     // The pasted blueprint (incl. origin marks) persists verbatim in the plan.
     expect(plan.blueprint.lessons[1].blocks.at(-1).origin).toBe('suggested');
+  });
+
+  it('ships the labeled-graphic placeholder as a LIBRARY key — no upload, no media step', () => {
+    const built = compileCourseBlueprint(goldenBlueprint(), '2026-08-16T00:00:00Z', mints());
+    const doc = JSON.parse(built.raw);
+    const lg = doc.lessons
+      .flatMap((l: { items: Record<string, unknown>[] }) => l.items)
+      .find((b: Record<string, unknown>) => b.variant === 'labeledgraphic');
+    expect(lg.media).toEqual({ image: { key: 'assets/rise/assets/map-balloon.jpg', type: 'image' } });
+    // A built-in reference is not an uploaded-media key: the clean-document
+    // gate passes and the import planner emits no media patch for it.
+    expect(() => assertCleanDocument(doc)).not.toThrow();
+    const steps = buildPlan({ course: doc, assets: [], banksById: new Map(), author: 'a' });
+    for (const k of steps.map((s) => s.kind)) expect(k).not.toMatch(/media/);
+    expect(built.notes.some((n) => /placeholder image/.test(n))).toBe(true);
   });
 
   it('golden fixture still feeds the import planner', () => {

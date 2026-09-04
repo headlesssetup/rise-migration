@@ -408,6 +408,11 @@ textarea {
   width: 110px;
 }
 
+.data-table th p,
+.data-table td p {
+  margin: 0;
+}
+
 .kc-question {
   margin: 8px 0;
 }

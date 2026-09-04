@@ -15,7 +15,7 @@ The documented understanding of Rise block types and their options. **Seeded fro
 | `image/hero` | Hero image | media ref | image key | — | _TODO_ | documented |
 | `multimedia/video` | Video block | media ref | video key (transcoded) | — | _TODO_ | documented |
 | `flashcard/flashcard` | Flashcard grid | card items | per-card media keys | — | _TODO_ | seen |
-| `interactive-fullscreen/labeledgraphic` | Labeled graphic | markers w/ positions | base + per-marker media | — | _TODO_ | seen |
+| `interactive-fullscreen/labeledgraphic` | Labeled graphic | `items[]{x,y (percent strings), icon ('01' default glyph), title, isActive, description, hasMedia?}`; block-level `media.image` = base picture; fresh blocks sit on Rise's default `assets/rise/assets/map-balloon.jpg` (library key) — the Creator compiler's placeholder donor | base + per-marker media | — | 2026-09-03 (598 blocks / rise-dump) | documented |
 | `interactive-fullscreen/process` | Process | step items | per-step media | — | _TODO_ | seen |
 | `interactive-fullscreen/sorting` | Sorting activity | cards/buckets | per-card media | — | _TODO_ | seen |
 | `continue/continue` | Continue / gating | settings | — | — | _TODO_ | documented |
@@ -87,8 +87,8 @@ Counts from the 581-course library scan.
 |---|---|---|---|
 | `MULTIPLE_CHOICE` | answers carry `correct` flag | 291 | documented |
 | `MULTIPLE_RESPONSE` | answers carry `correct` flag | 209 | documented |
-| `MATCHING` | `answers:[{id,title,matchTitle}]` | 67 | documented |
-| `FILL_IN_THE_BLANK` | text answer(s); blanks in `title` | 6 | seen |
+| `MATCHING` | `answers:[{id,title,matchTitle,correct}]` — `title` = draggable, `matchTitle` = its match; a clean item carries `correct:true` on every answer (110/141 rise-dump items; mixed flags are authoring residue). Optional `feedback`, `feedbackType:'CORRECT_INCORRECT'`, `feedbackCorrect`, `feedbackIncorrect`. Creator donor. | 141 blk | documented |
+| `FILL_IN_THE_BLANK` | `title` = the question/sentence HTML (NO in-text blank marker syntax — the learner types into one field); `answers:[{id,title,correct}]` = the ACCEPTED plain-text answers, `correct:true` each; optional `feedback`. Creator donor. | 4 blk (rise-dump) | documented |
 
 > The earlier `FILL_IN_BLANK` was a guess — the real type string is
 > **`FILL_IN_THE_BLANK`**.
@@ -142,6 +142,18 @@ block's `blockumentId`. Item images live under the dedicated media namespace
 planes) and are referenced by `fill.assetId` + an in-item `assets` record map.
 Blockument schema `_v: 47` in every capture — a different `_v` is a novelty
 warning at export. See `docs/rise-api-reference.md` §mondrian.
+
+## Creator compiler donors added 2026-09-03 (docx storyboards)
+
+Read from real exported blocks in the operator's `rise-dump` archive (581
+courses); the Creator mapper (`core/storyboard/map.ts`) emits these shapes.
+
+| family/variant | Donor shape used | Notes |
+|---|---|---|
+| `text/table` | `text` block, `items[0].paragraph` = `<table>…</table>` HTML (266 blocks) | Compiler builds `<thead><tr><th>` + `<tbody><tr><td>` without the editor's inline width/colour styles. |
+| `knowledgeCheck/fillin` | see `FILL_IN_THE_BLANK` above | Settings = editor KC payload (`{}`), like multiple choice. |
+| `knowledgeCheck/matching` | see `MATCHING` above | Settings = editor KC payload (`{}`). |
+| `interactive-fullscreen/labeledgraphic` | the 4 identical map-balloon blocks: settings `{backgroundColor:'#ffffff', entranceAnimation:true, mediaWidth:'1', paddingBottom:3, paddingTop:3, zoomOnClick:true}`; `media.image` `{key,type}` | Donor also carried `src: https://articulateusercontent.com/assets/rise/assets/map-balloon.jpg` — a plane-specific runtime URL, deliberately NOT emitted (the runtime derives it from `key`). Built-in library keys seen across the archive: `assets/rise/assets/themes/example-header-image.jpg` (2417), `block-defaults/mountains.jpg` (653), `block-defaults/paraglide.jpg` (367), `block-defaults/quote_background.jpg` (252), `themes/classic/cover-image/*.jpg`. |
 
 ## Accepted from novelty review
 

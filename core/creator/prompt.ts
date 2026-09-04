@@ -52,14 +52,7 @@ export const PROMPT_EXAMPLE_BLUEPRINT = `{
       "reason": "Diagram cannot be represented in the supported blocks; needs manual authoring."
     }
   ],
-  "production": [
-    {
-      "kind": "narration",
-      "lesson": "1. First section title",
-      "sourceRef": { "label": "Slide 3 speaker notes", "slideNo": 3, "excerpt": "VO: welcome the learner" },
-      "text": "Voice-over script taken from the speaker notes."
-    }
-  ]
+  "production": []
 }`;
 
 /** Build the copyable prompt; `deckInstructions` is the operator's per-deck note. */
@@ -70,6 +63,7 @@ export function creatorPrompt(deckInstructions?: string): string {
 ## Output contract
 
 - Return EXACTLY ONE fenced \`\`\`json code block containing the blueprint, and nothing else. No prose before or after, no comments inside the JSON.
+- Emit COMPACT JSON: no indentation, no line breaks between fields (one long line, or one line per block at most). Pretty-printing wastes a third of the message budget and long courses get cut off.
 - The schema is CLOSED: any field not listed below fails validation. Do not add fields.
 - Keep ALL content in the SOURCE DOCUMENT'S LANGUAGE. Do not translate.
 - One source file = one course.
@@ -82,11 +76,12 @@ export function creatorPrompt(deckInstructions?: string): string {
 - NEVER invent facts, quiz answers, dates, captions, alt text, or attributions.
 - A quiz question is only valid if the source clearly evidences which answer is correct. If it does not, put the question into "unresolved" instead of guessing. If the source evidences NO quiz at all, emit ZERO "knowledge-check" blocks — do not add practice questions on your own.
 - Author DIRECTIVES may appear ANYWHERE in the source: small on-slide label boxes naming a block type (e.g. a colored box saying "Tabs" or "Flipcards"), speaker notes, or comments. A directive is a BINDING instruction naming the block to use; the label box itself is an instruction, never content to place. Map directive wording through the alias table below.
-- SPEAKER NOTES have NO fixed role — never assume they are guidance. Classify each note by what it actually contains: a block directive (binding, see above); narration / voice-over / filming script (goes to "production", never into course content); substantive content that the slide itself lacks (treat as source content and cite the note in sourceRef); or irrelevant working remarks (ignore).
+- SPEAKER NOTES have NO fixed role — never assume they are guidance. Classify each note by what it actually contains: a block directive (binding, see above); narration / voice-over / filming script (NOT copied anywhere — see the narration rule below); substantive content that the slide itself lacks (treat as source content and cite the note in sourceRef); or irrelevant working remarks (ignore).
 - COMMENTS: an open/unaddressed comment is never content — record it in "unresolved" (include the author in sourceRef.label). A resolved comment is ignored, UNLESS its content never made it onto the slide — then treat it as source content and cite the comment in sourceRef.
 - CONTRADICTIONS: when slide text, speaker notes, and comments disagree (different counts, different dates, a heading that says "four" above a list of five), use the slide text for the block and record the discrepancy in "unresolved". Never silently pick one version or reconcile them yourself.
 - Material you cannot place (unsupported media, illegible diagrams, ambiguous fragments) goes into "unresolved" with the reason. Nothing may be silently dropped.
-- Images and binary media cannot travel through this chat: "assets" must stay []. Where an image or video is essential, use a placeholder block and add an "unresolved" entry describing it.
+- Images and binary media cannot travel through this chat: "assets" must stay []. Where an image or video is essential, use a placeholder block and add an "unresolved" entry describing it. EXCEPTION — a "labeled-graphic" needs no unresolved entry for its picture: it is built on Rise's built-in placeholder image; describe the intended image (from the source) in that block's "notes" instead.
+- NARRATION / voice-over / audio scripts are NEVER copied into the blueprint. The source document stays the producers' script; Rise only needs to know WHERE the video goes. Emit a "video-placeholder" whose label identifies the video (type, speaker, duration — e.g. "Video: Eksperta video lekcija (~3 min), Viktorija"), and leave "production" as [] — do not paste the script into it. Copying scripts makes the JSON many times larger for no benefit.
 - TITLES: the course title comes from the title slide (or the file name if there is none). Lesson titles come from section-divider / agenda text. When you must derive a title because the source names none, keep it short, in the source language, and add the note "title derived — no title in source" to that lesson's first block (titles have no origin field).
 
 ## Blueprint schema
@@ -100,22 +95,22 @@ Top level:
   "lessons": [ { "title": "<lesson title>", "blocks": [ <block>... ] } ],
   "assets": [],
   "unresolved": [ { "sourceRef": <sourceRef>, "reason": "<why this material could not be placed>" } ],
-  "production": [ { "kind": "narration", "lesson": "<lesson title>", "sourceRef": <sourceRef>, "text": "<narration text>" } ]
+  "production": []
 }
 
-"production[].kind" is ALWAYS the literal "narration" — no other value exists.
+"production" is kept for schema compatibility and is ALWAYS []. (If an operator instruction ever asks for it, an entry is { "kind": "narration", "lesson": "<lesson title>", "sourceRef": <sourceRef>, "text": "<text>" } — "kind" is ALWAYS the literal "narration".)
 
 Every block is an object whose block-type fields live INSIDE the "intent" OBJECT — "intent" is never a string label. Worked example of one complete block:
 
 {
   "intent": { "kind": "text", "heading": "Welcome", "paragraphs": ["<p>Exact source text.</p>"] },
-  "sourceRef": { "label": "Slide 7", "slideNo": 7, "excerpt": "Exact source text." },
+  "sourceRef": { "label": "Slide 7", "slideNo": 7, "excerpt": "Exact source" },
   "notes": [],
   "origin": "source"
 }
 
 Every sourceRef (provenance — required on every block, unresolved item, and production item):
-{ "label": "<human-readable location, e.g. 'Slide 7' or 'Slide 7, comment by J. Doe'>", "slideNo": <number or null>, "excerpt": "<short verbatim snippet of the source element, at most ~200 characters>" }
+{ "label": "<human-readable location, e.g. 'Slide 7', 'Row 12' or 'Slide 7, comment by J. Doe'>", "slideNo": <the slide number for a deck; null for a table-based storyboard unless it has a real slide/screen-number column — NEVER put a table row number here>, "row": <table row number — TABLE-BASED STORYBOARDS ONLY, omit for decks>, "excerpt": "<OPTIONAL — omit it on table-based storyboards ("row" is exact provenance); for decks, a verbatim snippet of at most ~60 characters>" }
 
 Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, <i>, <a href>, <ul>, <ol>, <li>, <br>. Paragraph-level HTML fields are strings like "<p>…</p>". No other tags, no style attributes, no event handlers.
 
@@ -130,12 +125,16 @@ Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, 
 7. "timeline" — dated events in order. { "kind": "timeline", "heading": optional, "intro": [], "events": [{ "date": "<text, e.g. '2010' or 'May 3'>", "title": "<plain>", "body": "<p>…</p>" (HTML, may be "") }, …] }. Only for genuinely dated/sequenced events from the source.
 8. "sorting" — drag cards into category piles. { "kind": "sorting", "heading": optional, "intro": [], "piles": ["<pile title>", …], "cards": [{ "title": "<card text>", "pile": <1-based index into piles> }, …] }. Use when the source presents a classification exercise.
 9. "knowledge-check" — quiz questions. { "kind": "knowledge-check", "heading": optional, "intro": [], "questions": [{ "stem": "<p>…</p>" (HTML), "options": [{ "text": "<plain>", "correct": true|false, "feedback": "<plain, optional>" }, …], "feedback": "<p>…</p>" (HTML, optional question-level feedback) }] }. At least 2 options; at least 1 correct (several correct = multiple-response). Correctness MUST be evidenced by the source.
-10. "note" — a highlighted callout. { "kind": "note", "paragraphs": ["<p>…</p>", …] (HTML) }. For warnings, key takeaways, "remember" boxes.
-11. "links" — a stack of link buttons. { "kind": "links", "heading": optional, "intro": [], "buttons": [{ "label": "<plain>", "destination": "<https URL>", "description": "<plain, may be "">" }, …], "trailing": optional HTML array }.
-12. "video-placeholder" — where the source has/needs a video. { "kind": "video-placeholder", "label": "<what belongs here, e.g. 'Video: intro interview (~3 min)'>" }.
-13. "storyline-placeholder" — where an interactive activity beyond this vocabulary is required. { "kind": "storyline-placeholder", "label": "<what belongs here>" }.
-14. "attachment-placeholder" — where a downloadable file belongs. { "kind": "attachment-placeholder", "label": "<file and purpose>" }.
-15. "continue" — a "continue" gate button between sections. { "kind": "continue", "label": "<button text>" }.
+10. "fill-in-the-blank" — the learner TYPES the answer. { "kind": "fill-in-the-blank", "heading": optional, "intro": [], "questions": [{ "stem": "<p>…</p>" (HTML; write the gap as _____ if the source shows one), "answers": ["<accepted answer>", …] (plain text; any one counts as correct), "feedback": "<p>…</p>" (HTML, optional) }] }. Use ONLY when the source gives the exact expected word(s); otherwise it belongs in "unresolved". One Rise block per question.
+11. "matching" — drag items onto their matches. { "kind": "matching", "heading": optional, "intro": [], "stem": "<p>…</p>" (HTML instruction), "pairs": [{ "left": "<plain>", "right": "<plain>" }, …] (at least 2), "feedback": "<p>…</p>" (HTML, optional) }. "left" is the draggable, "right" its correct match; every pair must be evidenced by the source.
+12. "table" — a data/comparison table. { "kind": "table", "heading": optional, "intro": [], "columns": ["<header cell>", …] (inline HTML allowed), "rows": [["<cell>", …], …] } — EVERY row has exactly columns.length cells; use "" for an empty cell. Use for genuinely tabular source content (comparisons, specifications), never as a layout trick.
+13. "labeled-graphic" — an image with clickable markers that pop up text. { "kind": "labeled-graphic", "heading": optional, "intro": [], "items": [{ "title": "<marker label, short>", "body": "<p>…</p>" (HTML popup text) }, …] }. The picture itself is a built-in placeholder and marker positions are generated — describe the intended image in the block's "notes" (see the image rule above). Use when the source presents labelled parts/areas of one picture or scheme.
+14. "note" — a highlighted callout. { "kind": "note", "paragraphs": ["<p>…</p>", …] (HTML) }. For warnings, key takeaways, "remember" boxes.
+15. "links" — a stack of link buttons. { "kind": "links", "heading": optional, "intro": [], "buttons": [{ "label": "<plain>", "destination": "<https URL>", "description": "<plain, may be "">" }, …], "trailing": optional HTML array }.
+16. "video-placeholder" — where the source has/needs a video. { "kind": "video-placeholder", "label": "<what belongs here, e.g. 'Video: intro interview (~3 min)'>" }.
+17. "storyline-placeholder" — where an interactive activity beyond this vocabulary is required. { "kind": "storyline-placeholder", "label": "<what belongs here>" }.
+18. "attachment-placeholder" — where a downloadable file belongs. { "kind": "attachment-placeholder", "label": "<file and purpose>" }.
+19. "continue" — a "continue" gate button between sections. { "kind": "continue", "label": "<button text>" }.
 
 ## Directive alias table (authors write Rise's UI names — map them)
 
@@ -149,11 +148,25 @@ Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, 
 - button / button stack / links / resources → "links"
 - continue / divider → "continue"
 - multiple choice / multiple response / quiz / knowledge check → "knowledge-check" (only with evidenced answers)
+- fill in the blank / fill-in / type the answer → "fill-in-the-blank" · matching / match the pairs / drag to match → "matching"
+- labeled graphic / labelled graphic / hotspots / markers / clickable image / image with pop-ups → "labeled-graphic"
+- table / comparison table / matrix → "table"
 - video / embed → "video-placeholder" · attachment / download → "attachment-placeholder"
-- storyline / mighty / scenario / labeled graphic / matching / fill-in-the-blank / any interactive not listed above → "storyline-placeholder"
+- storyline / mighty / horizontal accordion / scenario / any interactive not listed above → "storyline-placeholder"
 - image / image and text / image centered / gallery / images with notes → "text" carrying the text content, plus an "unresolved" entry for the visual part
 
-A directive NOT in this table: use the nearest listed block that can carry the TEXT, add a block note naming the original directive verbatim, and add an "unresolved" entry if any part (visuals, interaction) cannot be represented. Never bury source text inside a placeholder label — placeholders are only for video, attachments, and interactives.
+A directive naming TWO blocks ("Knowledge check + table", "Text + links", "Labeled graphic, Flipcards") means BOTH: emit each block in the order named, splitting the row's text between them by content. A directive NOT in this table: use the nearest listed block that can carry the TEXT, add a block note naming the original directive verbatim, and add an "unresolved" entry if any part (visuals, interaction) cannot be represented. Never bury source text inside a placeholder label — placeholders are only for video, attachments, and interactives.
+
+## Table-based storyboards (Word documents)
+
+Many source documents are not decks but a storyboard TABLE: one row per screen/block, with columns such as screen number, block/experience type, narration, on-screen text, and comments.
+
+- The ROW is the unit of conversion. Each row usually yields one block (or the two a combined directive names); adjacent rows may still be merged or split by meaning.
+- A "block type" / "learning experience" column IS the directive column: its value is BINDING for that row — map it through the alias table.
+- Provenance: put the table row number in "sourceRef.row" (1-based, counting the header row as row 1) on EVERY block and unresolved item, and OMIT "excerpt" — the row number locates the source exactly, and 60+ excerpts of 200 characters are what pushes a course past the message limit. "slideNo" is null UNLESS the document has a filled-in slide/screen-number column — a row number is NEVER a slideNo. "label" reads like "Row 12".
+- A NARRATION / audio / voice-over column is never content and is never copied (see the narration rule). A row whose directive is a video lecture / interview becomes ONE "video-placeholder" whose label names the video (type, speaker, duration); its script stays in the source document.
+- Storyboards often OPEN WITH A LEGEND explaining their own conventions (e.g. "italic text is not shown on screen", "text in [square brackets] is a button or clickable element", "the comments column is internal"). READ the legend and OBEY it: text the legend marks as not-on-screen (designer notes, feedback labels like "Feedback:") never becomes course content — feedback text goes into the block's "feedback" fields, notes into "notes". A bracketed button such as [NEXT] / [CONTINUE] / [TĀLĀK] at the end of a row is a "continue" block, not text. Internal-comment columns are never content; treat them like comments (see above).
+- Rows explicitly marked as "to be completed later" / placeholder text are recorded in "unresolved", not emitted as blocks.
 
 ## Shaping heuristics
 
@@ -169,7 +182,7 @@ A directive NOT in this table: use the nearest listed block that can carry the T
 ${PROMPT_EXAMPLE_BLUEPRINT}
 \`\`\`
 
-Before answering, verify: every block has a sourceRef with a real slide/page reference; every invented or rephrased text is marked "origin": "suggested"; every directive was mapped through the alias table; open comments and contradictions are in "unresolved"; there are no knowledge checks the source does not evidence; "assets" is []; nothing from the source is silently missing (used, in unresolved, or in production).${
+Before answering, verify: every block has a sourceRef with a real slide/page reference (or "row" for a table-based storyboard); every invented or rephrased text is marked "origin": "suggested"; every directive was mapped through the alias table; open comments and contradictions are in "unresolved"; there are no knowledge checks the source does not evidence; "assets" is [] and "production" is []; no narration script was copied; nothing else from the source is silently missing (used or in unresolved); table-storyboard refs carry "row", never a row number in "slideNo".${
     extra
       ? `
 

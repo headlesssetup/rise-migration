@@ -393,7 +393,9 @@ export function App() {
                 <p className="hint">
                   Next: side panel → <b>Import Data</b> — point the archive folder at this
                   Creator folder; the course appears in C · Courses. Placeholders (video,
-                  Storyline/Mighty, attachments) must be filled in manually after import.
+                  Storyline/Mighty, attachments) must be filled in manually after import; a
+                  labeled graphic ships on Rise's built-in placeholder image — swap it and place
+                  the markers in Rise.
                 </p>
               </div>
             )}
