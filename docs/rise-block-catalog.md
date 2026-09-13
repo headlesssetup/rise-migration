@@ -58,6 +58,7 @@ courses across that library.
 | `gallery/four column` | 181 blk / 86 crs | 90 (19 core) | image | — | _TODO_ | seen |
 | `gallery/two column` | 169 blk / 87 crs | 73 (17 core) | image | — | _TODO_ | seen |
 | `mondrian/mondrian` | 148 blk / 30 crs | 39 (7 core) | mondrian assets (see below) | **`blockumentId` → mondrian-api blockument** | 2026-08-31 | **cross-ref** |
+| `ai-scenario/ai-scenario` | 1 blk / 1 crs | 30 (30 core) | background image (AI-generated, ordinary course key) | **⚠ `scenarioId` → UNCAPTURED scenario service — NOT migratable** (see below + `findings-2026-09-13-ai-scenario.md`) | 2026-09-13 (`_export1309`) | **cross-ref / UNCAPTURED** |
 | `knowledgeCheck/matching` | 141 blk / 55 crs | 84 (17 core) | — | — | _TODO_ | seen |
 | `multimedia/attachment` | 135 blk / 80 crs | 65 (15 core) | attachment | — | _TODO_ | seen |
 | `impact/c` | 95 blk / 48 crs | 49 (11 core) | — | — | _TODO_ | seen |
@@ -142,6 +143,23 @@ block's `blockumentId`. Item images live under the dedicated media namespace
 planes) and are referenced by `fill.assetId` + an in-item `assets` record map.
 Blockument schema `_v: 47` in every capture — a different `_v` is a novelty
 warning at export. See `docs/rise-api-reference.md` §mondrian.
+
+## ⚠ AI Scenario (`ai-scenario/ai-scenario`) — UNCAPTURED cross-ref, NOT migratable (2026-09-13)
+
+UI: the AI Assistant's "scenario" (a conversational practice with a Character,
+Response options, numbered Goals, a Passing threshold and a score). The block
+is a POINTER only — `{type:"interactive", family:"ai-scenario",
+variant:"ai-scenario", settings{v:2, padding*, backgroundType, marker/snippet
+ColorContrast}, background.media.image{key, crushedKey, …, sourcedFrom:"AI",
+aiImageGenSettings}, scenarioId:<uuid>, globalBlockId}`. The scenario DOCUMENT
+lives in a separate, never-captured service (mondrian pattern). It arrives as a
+new COURSE type too: `course.type:"scenario"`, `metadata.createdVia:"ai"`, one
+titleless lesson with the single block. **An export containing this variant is
+INCOMPLETE regardless of its `complete` flag; do not import; consult the
+operator.** The generic scanner does not yet know `scenarioId` (TODO T1) and a
+mitm capture is pending (TODO T2) — both in `docs/findings-2026-09-13-ai-scenario.md`.
+The classic branching `interactive-fullscreen/scenario` block is unrelated and
+stays copy-faithful.
 
 ## Accepted from novelty review
 

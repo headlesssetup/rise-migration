@@ -500,6 +500,27 @@ The root item's `parentId` is the blockument id itself.
 transactions (text re-measure, sub-pixel rounding) — never open Edit on
 customer content during a capture; scrolling the lesson view only reads.
 
+## 8b. AI Scenario (`ai-scenario/ai-scenario`) ⚠ UNCAPTURED — TODO mitm session
+
+Block JSON `{type:"interactive", family:"ai-scenario", variant:"ai-scenario",
+settings:{v:2,…}, background:{media:{image:…}}, scenarioId:"<uuid>", globalBlockId}`;
+arrives as a new course type `course.type:"scenario"` (AI Assistant flow,
+`metadata.createdVia:"ai"`, one titleless lesson, one block). **`scenarioId` is a
+CROSS-ACCOUNT REF into a service we have never captured** — host, auth, document
+schema, create/upsert endpoints, asset namespace, boot resolution and EU
+availability are all UNKNOWN. Player labels (`aiScenario*`) describe a Character
+chat with Response options, Goals, a Passing threshold and a score, plus
+"not available yet / getting set up" and "validation errors" states that imply an
+external, asynchronously prepared document. Sibling translation bucket
+`translationUpdates.aiScenarioUpdates`; permissions `scenario_block:create|edit`;
+runtime bundle pin `ai_scenario`.
+
+**Until captured: an export containing this block is INCOMPLETE and the course
+must NOT be imported** (a verbatim `scenarioId` renders a dead block at best,
+404s the boot at worst; `POST /manage/api/content {type:"scenario"}` shell
+semantics are unknown). Flagging requirements + capture checklist:
+`docs/findings-2026-09-13-ai-scenario.md`.
+
 ## 9. Question banks
 
 A "Quiz" lesson stores its questions inline as blocks (§4). **Reusable question banks** are a
