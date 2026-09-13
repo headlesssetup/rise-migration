@@ -14,6 +14,19 @@
 
 import { newId } from '@/core/import/ids';
 import { riseTemplateFor } from '@/core/rise-format';
+import {
+  TEXT_SETTINGS,
+  LIST_SETTINGS,
+  INTERACTIVE_SETTINGS,
+  FLASHCARD_SETTINGS,
+  SORTING_SETTINGS,
+  TIMELINE_SETTINGS,
+  KC_SETTINGS,
+  NOTE_SETTINGS,
+  BUTTON_STACK_SETTINGS,
+  VIDEO_SETTINGS,
+  LABELED_GRAPHIC_SETTINGS,
+} from './map-settings';
 import type { Block } from '@/shared/types/rise';
 import type { BlockIntent, BlueprintBlock } from '@/core/creator/blueprint';
 
@@ -46,82 +59,6 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// Donor-verbatim settings (see file header for provenance).
-const TEXT_SETTINGS = {};
-const LIST_SETTINGS = { paddingTop: 0 };
-const INTERACTIVE_SETTINGS = {
-  audioPosition: 'bottom',
-  markerColorContrast: 'AUTO',
-  paddingBottom: 3,
-  paddingLinked: true,
-  paddingTop: 0,
-  snippetColorContrast: 'AUTO',
-  v: 2,
-  zoomOnClick: true,
-};
-const FLASHCARD_SETTINGS = { paddingTop: 0 };
-const SORTING_SETTINGS = {
-  backgroundColor: '#f5f5f5',
-  markerColorContrast: 'AUTO',
-  mediaWidth: '1',
-  paddingBottom: 3,
-  paddingLinked: true,
-  paddingTop: 3,
-  quotesInline: false,
-  snippetColorContrast: 'AUTO',
-  zoomOnClick: true,
-};
-const TIMELINE_SETTINGS = {
-  attachedToNextBlock: false,
-  audioPosition: 'bottom',
-  backgroundType: 'LIGHT',
-  markerColorContrast: 'AUTO',
-  mediaWidth: '1',
-  paddingBottom: 0,
-  paddingLinked: true,
-  paddingTop: 0,
-  quotesInline: false,
-  snippetColorContrast: 'AUTO',
-  v: 2,
-  zoomOnClick: true,
-};
-const KC_SETTINGS = {};
-// Donor: operator's hand-made export (QLklxuftEPP… "Quick Test", 2026-08-10).
-const NOTE_SETTINGS = {
-  paddingTop: 3,
-  quotesInline: false,
-  audioPosition: 'bottom',
-  paddingBottom: 3,
-  paddingLinked: true,
-  markerColorContrast: 'AUTO',
-  snippetColorContrast: 'AUTO',
-};
-const BUTTON_STACK_SETTINGS = {
-  paddingTop: 3,
-  quotesInline: false,
-  paddingBottom: 3,
-  paddingLinked: true,
-  markerColorContrast: 'AUTO',
-  snippetColorContrast: 'AUTO',
-};
-const VIDEO_SETTINGS = {
-  accentColor: null,
-  backgroundColor: null,
-  backgroundType: 'ACCENT',
-  cardMode: 'WHITE',
-  customBackgroundColorContrast: 'AUTO',
-  customPaddingBottom: 3,
-  customPaddingLinked: false,
-  customPaddingTop: 2,
-  entranceAnimation: true,
-  markerColorContrast: 'AUTO',
-  paddingBottom: 3,
-  paddingLinked: false,
-  paddingTop: 2,
-  snippetColorContrast: 'AUTO',
-  v: 2,
-};
-
 function textBlock(mint: Mints, heading: string | undefined, paragraphsHtml: string): Block {
   if (heading !== undefined && heading !== '') {
     return {
@@ -147,6 +84,42 @@ function textBlock(mint: Mints, heading: string | undefined, paragraphsHtml: str
     items: [{ id: mint.cuid(), paragraph: paragraphsHtml }],
     settings: { ...TEXT_SETTINGS },
   };
+}
+
+/**
+ * Rise's OWN default labeled-graphic image — the picture every fresh labeled
+ * graphic shows before the author picks one (10 archived blocks still carry
+ * it). A host-RELATIVE library key: shipped verbatim, never uploaded (the
+ * import probes it on the target plane and flags it if absent — CLAUDE.md
+ * "built-in assets"). The operator replaces it in Rise after import.
+ */
+export const LABELED_GRAPHIC_PLACEHOLDER_IMAGE = 'assets/rise/assets/map-balloon.jpg';
+
+/** Evenly spread marker positions (percent strings, as the donor stores them)
+ *  on a near-square grid, so N markers never overlap on the placeholder. */
+export function markerPositions(count: number): { x: string; y: string }[] {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const rows = Math.max(1, Math.ceil(count / cols));
+  const out: { x: string; y: string }[] = [];
+  for (let i = 0; i < count; i++) {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    out.push({
+      x: (((c + 0.5) / cols) * 100).toFixed(2),
+      y: (((r + 0.5) / rows) * 100).toFixed(2),
+    });
+  }
+  return out;
+}
+
+/** `<table>` HTML for the text/table donor: one `<thead>` row of `<th>`, body
+ *  rows of `<td>`. Cells are validated inline HTML and are inserted as-is. */
+function tableHtml(columns: string[], rows: string[][]): string {
+  const head = `<thead><tr>${columns.map((c) => `<th>${c}</th>`).join('')}</tr></thead>`;
+  const body = `<tbody>${rows
+    .map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`)
+    .join('')}</tbody>`;
+  return `<table>${head}${body}</table>`;
 }
 
 /** Optional lead-in text block for interactives that carry heading/intro. */
@@ -322,6 +295,107 @@ export function mapIntent(intent: BlockIntent, mint: Mints): MappedRow {
           settings: { ...KC_SETTINGS },
         });
       }
+      return { blocks, notes };
+    }
+
+    case 'fill-in-the-blank': {
+      // Donor: exported knowledgeCheck/fillin blocks — one FILL_IN_THE_BLANK
+      // item whose answers are the ACCEPTED typed answers (plain text, all
+      // correct:true). One Rise block per question, like knowledge-check.
+      const blocks = leadIn(mint, intent.heading, intent.intro);
+      for (const q of intent.questions) {
+        blocks.push({
+          id: mint.cuid(),
+          type: 'knowledgeCheck',
+          family: 'knowledgeCheck',
+          variant: 'fillin',
+          items: [
+            {
+              id: mint.uuid(),
+              type: 'FILL_IN_THE_BLANK',
+              title: q.stem,
+              answers: q.answers.map((a) => ({ id: mint.uuid(), title: a, correct: true })),
+              ...(q.feedback ? { feedback: q.feedback } : {}),
+            },
+          ],
+          settings: { ...KC_SETTINGS },
+        });
+      }
+      return { blocks, notes };
+    }
+
+    case 'matching': {
+      // Donor: exported knowledgeCheck/matching blocks — one MATCHING item,
+      // answers[{title = draggable, matchTitle = its match, correct:true}]
+      // (110/141 archived items carry all-true; the mixed ones are authoring residue).
+      const blocks = leadIn(mint, intent.heading, intent.intro);
+      blocks.push({
+        id: mint.cuid(),
+        type: 'knowledgeCheck',
+        family: 'knowledgeCheck',
+        variant: 'matching',
+        items: [
+          {
+            id: mint.uuid(),
+            type: 'MATCHING',
+            title: intent.stem,
+            answers: intent.pairs.map((p) => ({
+              id: mint.uuid(),
+              title: p.left,
+              matchTitle: p.right,
+              correct: true,
+            })),
+            ...(intent.feedback ? { feedback: intent.feedback } : {}),
+          },
+        ],
+        settings: { ...KC_SETTINGS },
+      });
+      return { blocks, notes };
+    }
+
+    case 'table': {
+      // Donor: exported text/table block — a text-family block whose single
+      // item's `paragraph` IS the <table> HTML.
+      const blocks = leadIn(mint, intent.heading, intent.intro);
+      blocks.push({
+        id: mint.cuid(),
+        type: 'text',
+        family: 'text',
+        variant: 'table',
+        items: [{ id: mint.cuid(), paragraph: tableHtml(intent.columns, intent.rows) }],
+        settings: { ...TEXT_SETTINGS },
+      });
+      return { blocks, notes };
+    }
+
+    case 'labeled-graphic': {
+      // Donor: the map-balloon labeled graphics (see LABELED_GRAPHIC_PLACEHOLDER_IMAGE).
+      // Item key set = the 832-instance archive shape {x,y,id,icon,title,isActive,
+      // description}; icon '01' is the default marker glyph (1952 of 2500 items).
+      // media.image carries {key,type} only — the donor's `src` is a plane-specific
+      // usercontent URL the runtime derives itself.
+      notes.push(
+        'Labeled graphic ships on Rise\'s built-in placeholder image with generated marker positions — replace the image and place the markers in Rise after import',
+      );
+      const blocks = leadIn(mint, intent.heading, intent.intro);
+      const positions = markerPositions(intent.items.length);
+      blocks.push({
+        id: mint.cuid(),
+        type: 'interactive',
+        family: 'interactive-fullscreen',
+        variant: 'labeledgraphic',
+        items: intent.items.map((it, i) => ({
+          x: positions[i]!.x,
+          y: positions[i]!.y,
+          id: mint.cuid(),
+          icon: '01',
+          title: it.title,
+          isActive: false,
+          description: it.body,
+        })),
+        media: { image: { key: LABELED_GRAPHIC_PLACEHOLDER_IMAGE, type: 'image' } },
+        settings: { ...LABELED_GRAPHIC_SETTINGS },
+      });
       return { blocks, notes };
     }
 

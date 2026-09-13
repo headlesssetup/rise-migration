@@ -1,6 +1,7 @@
 // TEST-ONLY golden Course Blueprint: a realistic multi-lesson course covering
-// EVERY block intent kind, one `origin: 'suggested'` block, per-answer KC
-// feedback, unresolved material, and a production narration entry. It is the
+// EVERY block intent kind (incl. the docx-storyboard additions: fill-in,
+// matching, table, labeled graphic), one `origin: 'suggested'` block, per-answer
+// KC feedback, unresolved material, and a production narration entry. It is the
 // compiler's regression anchor and the validator's golden "valid" input.
 // Never import from production code.
 
@@ -145,6 +146,20 @@ export function goldenBlueprint(): CourseBlueprint {
           },
           {
             intent: {
+              kind: 'labeled-graphic',
+              heading: 'Parts of the machine',
+              intro: ['<p>Click each marker.</p>'],
+              items: [
+                { title: 'Lever', body: '<p>Moves the arm.</p>' },
+                { title: 'Dial', body: '<p>Sets the speed.</p>' },
+                { title: 'Switch', body: '<p>Powers it on.</p>' },
+              ],
+            },
+            sourceRef: ref(9, 'Slide 9 (diagram with labels)'),
+            notes: ['Intended image: cutaway of the machine, labels on the lever, dial and switch.'],
+          },
+          {
+            intent: {
               kind: 'links',
               heading: 'Read more',
               intro: [],
@@ -199,6 +214,50 @@ export function goldenBlueprint(): CourseBlueprint {
               ],
             },
             sourceRef: ref(11),
+            notes: [],
+          },
+          {
+            intent: {
+              kind: 'fill-in-the-blank',
+              intro: [],
+              questions: [
+                {
+                  stem: '<p>The first stage is called _____.</p>',
+                  answers: ['Start', 'start'],
+                  feedback: '<p>It is the Start stage.</p>',
+                },
+              ],
+            },
+            sourceRef: ref(11, 'Slide 11 (type-in question)'),
+            notes: [],
+          },
+          {
+            intent: {
+              kind: 'matching',
+              heading: 'Match them',
+              intro: [],
+              stem: '<p>Drag each item to its category.</p>',
+              pairs: [
+                { left: 'Apple', right: 'Fruit' },
+                { left: 'Carrot', right: 'Vegetable' },
+              ],
+              feedback: '<p>Well matched.</p>',
+            },
+            sourceRef: ref(11, 'Slide 11 (matching)'),
+            notes: [],
+          },
+          {
+            intent: {
+              kind: 'table',
+              heading: 'Compare',
+              intro: ['<p>Side by side:</p>'],
+              columns: ['<strong>Fruit</strong>', 'Vegetable'],
+              rows: [
+                ['Apple', 'Carrot'],
+                ['Pear', ''],
+              ],
+            },
+            sourceRef: ref(11, 'Slide 11 (table)'),
             notes: [],
           },
           {

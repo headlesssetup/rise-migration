@@ -22,6 +22,10 @@ export const KIND_LABEL: Record<BlockIntent['kind'], string> = {
   timeline: 'Timeline',
   sorting: 'Sorting',
   'knowledge-check': 'Knowledge check',
+  'fill-in-the-blank': 'Fill in the blank',
+  matching: 'Matching',
+  table: 'Table',
+  'labeled-graphic': 'Labeled graphic (placeholder image)',
   note: 'Note',
   links: 'Buttons (links)',
   'video-placeholder': 'Video — placeholder',
@@ -255,6 +259,104 @@ function IntentContent({ intent }: { intent: BlockIntent }) {
         </>
       );
 
+    case 'fill-in-the-blank':
+      return (
+        <>
+          {intent.heading && <p className="blk-heading">{intent.heading}</p>}
+          <Html html={intent.intro.join('')} />
+          {intent.questions.map((q, i) => (
+            <div className="kc-question" key={i}>
+              <Html html={q.stem} className="kc-stem" />
+              <p className="kc-options kc-correct">
+                ✓ Accepted: {q.answers.map((a) => `“${a}”`).join(' · ')}
+              </p>
+              {q.feedback && (
+                <div className="kc-feedback">
+                  <span className="kc-feedback-label">Feedback: </span>
+                  <Html html={q.feedback} />
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      );
+
+    case 'matching':
+      return (
+        <>
+          {intent.heading && <p className="blk-heading">{intent.heading}</p>}
+          <Html html={intent.intro.join('')} />
+          <Html html={intent.stem} className="kc-stem" />
+          <table className="plan-table pair-table">
+            <thead>
+              <tr>
+                <th>Drag</th>
+                <th>Matches</th>
+              </tr>
+            </thead>
+            <tbody>
+              {intent.pairs.map((p, i) => (
+                <tr key={i}>
+                  <td className="pair-front">{p.left}</td>
+                  <td>{p.right}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {intent.feedback && (
+            <div className="kc-feedback">
+              <span className="kc-feedback-label">Feedback: </span>
+              <Html html={intent.feedback} />
+            </div>
+          )}
+        </>
+      );
+
+    case 'table':
+      return (
+        <>
+          {intent.heading && <p className="blk-heading">{intent.heading}</p>}
+          <Html html={intent.intro.join('')} />
+          <table className="plan-table data-table">
+            <thead>
+              <tr>
+                {intent.columns.map((c, i) => (
+                  <th key={i}>
+                    <Html html={c} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {intent.rows.map((r, i) => (
+                <tr key={i}>
+                  {r.map((c, j) => (
+                    <td key={j}>
+                      <Html html={c} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      );
+
+    case 'labeled-graphic':
+      return (
+        <>
+          {intent.heading && <p className="blk-heading">{intent.heading}</p>}
+          <Html html={intent.intro.join('')} />
+          <p className="placeholder-label">
+            🖼 Built-in placeholder image · {intent.items.length} marker(s) at generated positions
+            — replace the image and place the markers in Rise after import
+          </p>
+          <StackedItems
+            items={intent.items.map((it) => ({ title: `📍 ${it.title}`, body: it.body }))}
+          />
+        </>
+      );
+
     case 'note':
       return (
         <div className="note-box">
@@ -300,10 +402,16 @@ function IntentContent({ intent }: { intent: BlockIntent }) {
 /* --- block card + lesson + summary --------------------------------------- */
 
 function refText(ref: BlueprintSourceRef): string {
-  const where = ref.slideNo != null ? `slide ${ref.slideNo}` : ref.label;
-  return ref.slideNo != null && ref.label && !new RegExp(`^slide\\s*${ref.slideNo}$`, 'i').test(ref.label)
-    ? `${where} — ${ref.label}`
-    : where;
+  // Slide-based decks locate by slideNo; table-based storyboards by row.
+  const where =
+    ref.slideNo != null ? `slide ${ref.slideNo}` : ref.row != null ? `row ${ref.row}` : ref.label;
+  const redundant =
+    ref.slideNo != null
+      ? new RegExp(`^slide\\s*${ref.slideNo}$`, 'i').test(ref.label)
+      : ref.row != null
+        ? new RegExp(`^row\\s*${ref.row}$`, 'i').test(ref.label)
+        : true;
+  return ref.label && !redundant ? `${where} — ${ref.label}` : where;
 }
 
 function BlockCard({ block, ordinal }: { block: BlueprintBlock; ordinal: number }) {
@@ -352,21 +460,27 @@ export function formatRanges(nums: number[]): string {
   return parts.join(', ');
 }
 
-export function slideCoverage(bp: CourseBlueprint): { referenced: string; missing: string } | null {
-  const nums: number[] = [];
-  for (const lesson of bp.lessons) {
-    for (const block of lesson.blocks) {
-      if (block.sourceRef.slideNo != null) nums.push(block.sourceRef.slideNo);
-    }
-  }
-  for (const u of bp.unresolved) if (u.sourceRef.slideNo != null) nums.push(u.sourceRef.slideNo);
-  for (const p of bp.production) if (p.sourceRef.slideNo != null) nums.push(p.sourceRef.slideNo);
+/** Which source units the blueprint references — slides when any sourceRef
+ *  carries a slideNo, else table rows (docx storyboards); null when neither. */
+export function slideCoverage(
+  bp: CourseBlueprint,
+): { unit: 'slide' | 'row'; referenced: string; missing: string } | null {
+  const refs: BlueprintSourceRef[] = [
+    ...bp.lessons.flatMap((lesson) => lesson.blocks.map((block) => block.sourceRef)),
+    ...bp.unresolved.map((u) => u.sourceRef),
+    ...bp.production.map((p) => p.sourceRef),
+  ];
+  const slides = refs.map((r) => r.slideNo).filter((n): n is number => n != null);
+  const rows = refs.map((r) => r.row).filter((n): n is number => n != null);
+  const unit: 'slide' | 'row' = slides.length > 0 ? 'slide' : 'row';
+  const nums = unit === 'slide' ? slides : rows;
   if (nums.length === 0) return null;
   const seen = new Set(nums);
   const max = Math.max(...nums);
   const missing: number[] = [];
-  for (let n = 1; n <= max; n++) if (!seen.has(n)) missing.push(n);
-  return { referenced: formatRanges(nums), missing: formatRanges(missing) };
+  // Row 1 of a storyboard table is its header — never content to reference.
+  for (let n = unit === 'row' ? 2 : 1; n <= max; n++) if (!seen.has(n)) missing.push(n);
+  return { unit, referenced: formatRanges(nums), missing: formatRanges(missing) };
 }
 
 export function Preview({ blueprint }: { blueprint: CourseBlueprint }) {
@@ -376,7 +490,7 @@ export function Preview({ blueprint }: { blueprint: CourseBlueprint }) {
       <p className="course-title">{blueprint.title}</p>
       {coverage && (
         <p className="hint">
-          Slides referenced: {coverage.referenced}
+          {coverage.unit === 'slide' ? 'Slides' : 'Table rows'} referenced: {coverage.referenced}
           {coverage.missing && (
             <>
               {' '}

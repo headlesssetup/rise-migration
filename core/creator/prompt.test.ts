@@ -19,6 +19,10 @@ const ALL_KINDS: BlockIntentKind[] = [
   'timeline',
   'sorting',
   'knowledge-check',
+  'fill-in-the-blank',
+  'matching',
+  'table',
+  'labeled-graphic',
   'note',
   'links',
   'video-placeholder',
@@ -54,6 +58,14 @@ describe('creatorPrompt', () => {
     expect(prompt).toContain('"production"');
   });
 
+  it('forbids copying narration scripts and pins production to []', () => {
+    expect(prompt).toMatch(/NARRATION \/ voice-over \/ audio scripts are NEVER copied/);
+    expect(prompt).toMatch(/"production" is kept for schema compatibility and is ALWAYS \[\]/);
+    expect(PROMPT_EXAMPLE_BLUEPRINT).toMatch(/"production": \[\]/);
+    expect(prompt).toMatch(/a row number is NEVER a slideNo/);
+    expect(prompt).toMatch(/NEVER put a table row number here/);
+  });
+
   it('makes author directives binding, wherever they appear', () => {
     expect(prompt).toMatch(/BINDING/);
     expect(prompt).toMatch(/on-slide label boxes/);
@@ -84,6 +96,26 @@ describe('creatorPrompt', () => {
     expect(prompt).toMatch(/Never bury source text inside a placeholder label/);
   });
 
+  it('moves labeled graphic / matching / fill-in out of the storyline bucket', () => {
+    const storylineLine = prompt.split('\n').find((l) => /→ "storyline-placeholder"/.test(l))!;
+    expect(storylineLine).not.toMatch(/labeled graphic|matching|fill-in/);
+    expect(storylineLine).toMatch(/horizontal accordion/); // a Mighty block — stays a placeholder
+    expect(prompt).toMatch(/labeled graphic .*→ "labeled-graphic"/);
+    expect(prompt).toMatch(/matching .*→ "matching"/);
+    expect(prompt).toMatch(/fill in the blank .*→ "fill-in-the-blank"/);
+    expect(prompt).toMatch(/table .*→ "table"/);
+    expect(prompt).toMatch(/A directive naming TWO blocks/);
+  });
+
+  it('explains table-based (docx) storyboards: row provenance, legend, narration column', () => {
+    expect(prompt).toMatch(/## Table-based storyboards/);
+    expect(prompt).toContain('"sourceRef.row"');
+    expect(prompt).toMatch(/counting the header row as row 1/);
+    expect(prompt).toMatch(/READ the legend and OBEY it/);
+    expect(prompt).toMatch(/\[TĀLĀK\]/);
+    expect(prompt).toMatch(/built-in placeholder image/);
+  });
+
   it('states the comment, contradiction, title, and no-invented-quiz rules', () => {
     expect(prompt).toMatch(/open\/unaddressed comment is never content/i);
     expect(prompt).toMatch(/CONTRADICTIONS/);
@@ -92,7 +124,9 @@ describe('creatorPrompt', () => {
     expect(prompt).toMatch(/emit ZERO "knowledge-check" blocks/);
     expect(prompt).toMatch(/formatting, NOT "suggested"/);
     expect(prompt).toMatch(/ALWAYS the literal "narration"/);
-    expect(prompt).toMatch(/~200 characters/);
+    expect(prompt).toMatch(/~60 characters/);
+    expect(prompt).toMatch(/Emit COMPACT JSON/);
+    expect(prompt).toMatch(/OMIT "excerpt"/);
   });
 
   it('appends operator per-deck instructions when given', () => {

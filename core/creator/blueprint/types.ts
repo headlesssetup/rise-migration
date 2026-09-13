@@ -43,6 +43,14 @@ export interface KcQuestion {
   feedback?: string;
 }
 
+export interface FillInQuestion {
+  /** Sentence/question as sanitized HTML; the gap may be written as `_____`. */
+  stem: string;
+  /** Accepted answers (plain text, any one counts as correct). */
+  answers: string[];
+  feedback?: string;
+}
+
 /**
  * Semantic block vocabulary accepted by the deterministic compiler. It does
  * not expose raw Rise JSON fields, donor settings, ids, or media keys.
@@ -58,7 +66,10 @@ export type BlockIntent =
       outro?: string[];
     }
   | {
-      kind: 'accordion' | 'tabs' | 'flashcards' | 'process';
+      /** `labeled-graphic`: each item is one marker (title = short label,
+       *  body = its popup text) on the built-in placeholder image; positions
+       *  are compiler-generated. */
+      kind: 'accordion' | 'tabs' | 'flashcards' | 'process' | 'labeled-graphic';
       heading?: string;
       intro: string[];
       items: IntentItem[];
@@ -81,6 +92,30 @@ export type BlockIntent =
       heading?: string;
       intro: string[];
       questions: KcQuestion[];
+    }
+  | {
+      /** One Rise fill-in block per question; `answers` = accepted typed answers. */
+      kind: 'fill-in-the-blank';
+      heading?: string;
+      intro: string[];
+      questions: FillInQuestion[];
+    }
+  | {
+      /** One Rise matching block: `pairs[].left` is the draggable, `right` its match. */
+      kind: 'matching';
+      heading?: string;
+      intro: string[];
+      stem: string;
+      pairs: { left: string; right: string }[];
+      feedback?: string;
+    }
+  | {
+      /** `text/table` — one header row + body rows; every row has columns.length cells. */
+      kind: 'table';
+      heading?: string;
+      intro: string[];
+      columns: string[];
+      rows: string[][];
     }
   | { kind: 'note'; paragraphs: string[] }
   | {

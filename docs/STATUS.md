@@ -1,6 +1,37 @@
 # Project Status
 
-_Last updated: 2026-08-21 (v0.9.8: fix invalid docx from v0.9.7 image dedup). Keep this current at each phase boundary._
+_Last updated: 2026-09-03 (v0.9.10: Creator docx-storyboard intents). Keep this current at each phase boundary._
+
+## v0.9.10 (2026-09-03) — Creator: docx storyboards, four new intents
+
+Driven by the INTEA "SD" Word storyboard (M1 2. nodaļa, 68 table rows):
+~55 rows already mapped; 6 labeled-graphic rows and 1 table row were being
+downgraded to Storyline placeholders.
+
+- **Four blueprint intents with archive donors** (`~/Downloads/rise-dump`,
+  581 courses): `fill-in-the-blank` → `knowledgeCheck/fillin`, `matching` →
+  `knowledgeCheck/matching`, `table` → `text/table`, `labeled-graphic` →
+  `interactive-fullscreen/labeledgraphic`. The labeled graphic ships on Rise's
+  OWN default image `assets/rise/assets/map-balloon.jpg` (library key: copied
+  verbatim, probed on the target plane, never uploaded) with generated marker
+  positions; the operator swaps the image in Rise. Registry revision
+  `2026-09-03.1`; `table`/`labeled-graphic` are `derived` donors until one
+  live import confirms them. Donor shapes recorded in `rise-block-catalog.md`.
+- **Prompt: table-based storyboards.** Row = unit; the block-type column is the
+  binding directive; `sourceRef.row` (header = row 1) is the provenance and a
+  row number is NEVER a `slideNo`; legend obedience (italic / `[brackets]` /
+  comments column); `[TĀLĀK]` → `continue`; a directive naming two blocks
+  emits both; `horizontal accordion` is a Mighty block → placeholder.
+- **Narration is NOT carried.** Video rows become one `video-placeholder`
+  naming the video; the script stays in the source document. `production`
+  is pinned to `[]` (validator warns, non-blocking, when an AI still copies
+  scripts). Compact JSON + no excerpts on table storyboards, to fit the chat
+  message limit (this course's on-screen text alone is ~60K chars of Latvian).
+- **Embedded docx/pptx images are deliberately ignored** at this stage: in
+  the sample they lived in the internal-comments column as reference shots
+  and design briefs (one Alamy-watermarked stock photo).
+- Preview renders the new intents and reports coverage by table rows;
+  `map.ts` donor settings split into `map-settings.ts`.
 
 ## v0.9.8 patch (2026-08-21) — HOTFIX for v0.9.7
 

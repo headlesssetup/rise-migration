@@ -1,6 +1,6 @@
 import type { BlockIntentKind } from '@/core/creator/blueprint';
 
-export const RISE_TEMPLATE_REGISTRY_REVISION = '2026-08-14.1' as const;
+export const RISE_TEMPLATE_REGISTRY_REVISION = '2026-09-03.1' as const;
 
 export type TemplateVerification = 'compiler-tested' | 'live-verified' | 'disabled';
 export type DonorConfidence = 'captured' | 'derived';
@@ -85,6 +85,39 @@ export const RISE_TEMPLATE_REGISTRY: Readonly<
     donor: 'capture_creation4aug editor payload and exported knowledge-check blocks',
     donorConfidence: 'captured',
     verification: 'compiler-tested',
+  },
+  'fill-in-the-blank': {
+    intent: 'fill-in-the-blank',
+    outputs: ['knowledgeCheck / fillin'],
+    donor:
+      'rise-dump archive exported fillin blocks (items[].type FILL_IN_THE_BLANK, answers[{title,correct}]); settings = editor KC payload',
+    donorConfidence: 'captured',
+    verification: 'compiler-tested',
+  },
+  matching: {
+    intent: 'matching',
+    outputs: ['knowledgeCheck / matching'],
+    donor:
+      'rise-dump archive exported matching blocks (items[].type MATCHING, answers[{title,matchTitle,correct}]); settings = editor KC payload',
+    donorConfidence: 'captured',
+    verification: 'compiler-tested',
+  },
+  table: {
+    intent: 'table',
+    outputs: ['text / table'],
+    donor: 'rise-dump archive exported text/table block (items[].paragraph = <table> HTML); settings = editor text payload',
+    donorConfidence: 'derived',
+    verification: 'compiler-tested',
+    note: 'Table HTML is compiler-built (th/td, no inline styles); the donor carried editor-authored widths/colors.',
+  },
+  'labeled-graphic': {
+    intent: 'labeled-graphic',
+    outputs: ['interactive-fullscreen / labeledgraphic'],
+    donor:
+      'rise-dump archive exported labeled-graphic blocks on Rise\'s own default image assets/rise/assets/map-balloon.jpg (10 blocks); items {x,y,icon,title,isActive,description}',
+    donorConfidence: 'derived',
+    verification: 'compiler-tested',
+    note: 'Ships the built-in placeholder image (library key, never uploaded); marker positions are generated, the plane-specific media.image.src of the donor is omitted. Operator swaps the image in Rise.',
   },
   note: {
     intent: 'note',

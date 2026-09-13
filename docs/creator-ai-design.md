@@ -14,6 +14,31 @@
 > is too unreliable as deterministic input without an AI cleanup stage), so
 > this pipeline is the only doc → Rise route.
 >
+> **v0.9.10 (2026-09-03): docx-storyboard additions.** Four intents joined
+> the vocabulary with archive donors (`~/Downloads/rise-dump`, 581 courses):
+> `fill-in-the-blank` (`knowledgeCheck/fillin`), `matching`
+> (`knowledgeCheck/matching`), `table` (`text/table`) and `labeled-graphic`
+> (`interactive-fullscreen/labeledgraphic`). The labeled graphic ships on
+> Rise's OWN default image `assets/rise/assets/map-balloon.jpg` — a host-relative
+> library key that is copied verbatim and probed on the target plane, never
+> uploaded — with generated marker positions; the operator swaps the image in
+> Rise. This is the only image the compiler ever emits: provider/source images
+> still cannot travel (chat paste is text-only; `assets` stays `[]`), and
+> images embedded in the source docx/pptx are deliberately IGNORED at this
+> stage (operator decision 2026-09-03 — in the sample SD they were reference
+> shots and briefs in the comments column, one an Alamy-watermarked stock
+> photo). The prompt gained a table-based-storyboard section (`sourceRef.row`
+> provenance, directive column, legend obedience, narration column →
+> production) and "directive naming two blocks → emit both".
+>
+> **Narration is NOT carried (operator decision 2026-09-03).** Video-lecture
+> rows become a `video-placeholder` whose label names the video; the script
+> stays in the source document, which is the producers' working copy. The
+> prompt pins `"production": []`, the validator raises a non-blocking warning
+> when an AI still copies scripts, and `sourceRef.row` (never `slideNo`) is
+> the provenance on table storyboards. The `production` field, the companion
+> `production.md` and its preview section remain for schema compatibility.
+>
 > **v0.9.0: the flow is now TWO pages.** `creator.html` (prompt pack + paste +
 > validate) hands off to `review.html` (re-validate + preview + unresolved ack
 > + package write) via a `chrome.storage.session` slot holding the RAW pasted
