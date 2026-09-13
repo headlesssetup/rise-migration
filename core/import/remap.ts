@@ -325,6 +325,61 @@ export function remapMediaKeys<T extends Json>(
   return transform(doc) as T;
 }
 
+/**
+ * Re-point a plane-specific media host at the TARGET plane.
+ *
+ * `remapMediaKeys` swaps the key INSIDE a value but leaves the host alone, and
+ * two of Rise's media hosts are per-plane: the `images…` render-transform host
+ * and the `articulateusercontent…` origin. A US→EU import therefore produced
+ * `images.articulate.com/f:png,…/rise/courses/<EU-id>/<EU-key>` — a US service
+ * asked for an EU-bucket key, which 404s. Live 2026-08-31: both Mercedes CRM
+ * videos lost their poster frame that way (`media.video.poster` renders through
+ * the transform host; `thumbnail` is the SAME underlying still behind a
+ * different prefix, so it was equally dead — it only looked intact because the
+ * web exporter copies it verbatim instead of resolving it).
+ *
+ * The EU shape is capture-confirmed — `docs/rise-mitm-sample-edit-media-theme.md`
+ * §media shows the editor itself writing `images.eu.articulate.com` for both
+ * `poster` and `thumbnail`.
+ *
+ * Only urls carrying an ACCOUNT-UPLOADED key are rewritten. A built-in library
+ * asset on `cdn…`/`images…` is left completely alone: it has no account copy to
+ * follow, plane parity of the two libraries is unverified, and rewriting its
+ * host without a passing probe is exactly what `builtinProbeUrl` exists to
+ * prevent. No plane (`undefined`) means no rewrite — never guess a plane.
+ */
+export function retargetMediaHosts<T extends Json>(
+  doc: T,
+  plane: 'us' | 'eu' | undefined,
+): T {
+  if (!plane) return doc;
+  const eu = plane === 'eu';
+  const rewriteUrl = (url: string): string =>
+    url
+      .replace(
+        /\bimages(?:\.eu)?\.articulate\.com\b/gi,
+        eu ? 'images.eu.articulate.com' : 'images.articulate.com',
+      )
+      .replace(
+        /\barticulateusercontent\.(?:com|eu)\b/gi,
+        eu ? 'articulateusercontent.eu' : 'articulateusercontent.com',
+      );
+  const transform = (node: Json): Json => {
+    if (typeof node === 'string') {
+      // Gate on an uploaded key so built-ins (`assets/rise/…`, library CDN urls)
+      // and ordinary prose are never touched.
+      if (extractUploadedKeys(node).length === 0) return node;
+      return rewriteUrl(node);
+    }
+    if (Array.isArray(node)) return node.map(transform);
+    if (!isObject(node)) return node;
+    const out: Record<string, Json> = {};
+    for (const [k, v] of Object.entries(node)) out[k] = transform(v);
+    return out;
+  };
+  return transform(doc) as T;
+}
+
 /** Blank uploaded-media keys whose owner is NOT a target owner — keeps
  *  already-remapped (target-owned) keys, blanks leftover SOURCE keys. Used for the
  *  lesson payload after a header/media upload: `remapMediaKeys` swaps the uploaded

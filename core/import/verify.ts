@@ -9,6 +9,9 @@
 // Pure + deterministic; the orchestrator feeds it the two docs + the import flags.
 
 import type { GetCourseDocument, Lesson, Block } from '@/shared/types/rise';
+// --- Intra-course lesson links — split to ./verify-links (v0.9.10) ----------
+import { compareLessonLinks } from './verify-links';
+export { compareLessonLinks } from './verify-links';
 import { classifyString } from '@/core/census/scan';
 import { extractUploadedKeys } from '@/core/assets/keys';
 import { looksLikeClientId } from './ids';
@@ -517,6 +520,7 @@ export function verifyParity(
   // the lesson/block walk below never sees them.
   compareCourseFields(source, target, flaggedKeys, issues, expected);
   compareExportSettings(source, target, flags, issues, expected);
+  compareLessonLinks(source, target, flags, issues, expected);
 
   let blocksSource = 0;
   let blocksTarget = 0;

@@ -6,7 +6,7 @@
 // envelopes still need the focused Settings-panel capture before implementation.
 
 import * as env from './envelopes';
-import { remapMediaKeys } from './remap';
+import { remapMediaKeys, retargetMediaHosts } from './remap';
 import type { PlanStep } from './plan';
 import type { ExecCtx } from './executor-run-state';
 
@@ -42,7 +42,10 @@ export async function handleSetAiTutorConfig(
   for (const key of step.sourceKeys) {
     await uploadOne(key, key.split('/').pop() ?? 'avatar', step.kind);
   }
-  const config = remapMediaKeys(src as Record<string, unknown>, keyMap);
+  const config = retargetMediaHosts(
+    remapMediaKeys(src as Record<string, unknown>, keyMap),
+    deps.targetPlane,
+  );
   await send(env.updateCourseAiTutorConfig(ctx.newCourseId, config), step.kind);
   log(`${pfx()} OK   AI-tutor configuration written`);
 }

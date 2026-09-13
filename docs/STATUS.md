@@ -1,6 +1,35 @@
 # Project Status
 
-_Last updated: 2026-09-03 (v0.9.10: Creator docx-storyboard intents). Keep this current at each phase boundary._
+_Last updated: 2026-09-13 (v0.9.11: forward lesson links + per-plane media hosts). Keep this current at each phase boundary._
+
+## v0.9.11 (2026-09-13) — import: forward lesson links, per-plane media hosts
+
+Two cross-plane survivors from the 2026-08-31 Mercedes CRM EU import (work
+dated 2026-09-01, reviewed and committed 2026-09-13).
+
+- **Intra-course lesson links.** A `type: "lesson"` sub-item's `destination`
+  names another lesson. Lessons are created interleaved with their blocks, so
+  a FORWARD link shipped the SOURCE lesson id verbatim (the CRM "Impressum"
+  button, lesson 2 → 27). New deferred `patch-lesson-links` plan step
+  (`plan-helpers.ts` `collectLessonLinks`/`lessonLinkPatchSteps`,
+  `executor-steps-links.ts`): emitted per branch right after that branch's
+  lesson loop — pre-conversion for a stack — and re-sends the block once via
+  `UPDATE_BLOCK_DEBOUNCE` with every remap reapplied. Unresolvable →
+  `lesson-link` manual flag. Parity check `compareLessonLinks`
+  (`verify-links.ts`): `canonicalize` tokenises ids, so a dead lesson id used
+  to compare equal to a live one; flagged blocks are expected divergences.
+- **Per-plane media hosts.** `remapMediaKeys` swapped the key but left
+  `images.articulate.com` / `articulateusercontent.com` on the SOURCE plane,
+  so a US→EU import asked a US service for an EU-bucket key (404; both CRM
+  video posters emptied — `poster` and `thumbnail` are the same frame-0
+  still). `retargetMediaHosts` (`remap.ts`) re-points both hosts on any value
+  carrying an uploaded key, at every remap site (l10n cells, stack titles,
+  lesson headers, course images, block media patch, AI-tutor config, link
+  patch). Built-ins are never rewritten; unknown plane → no rewrite.
+- CLAUDE.md: cross-ref list and media-key invariant updated. 11 new tests
+  (`links.test.ts`). Open review points: live re-import of Mercedes CRM not
+  yet recorded; `UPDATE_BLOCK_DEBOUNCE` on run-authored blocks is treated as
+  create-then-attach completion (same as `patch-block-media`), not an edit.
 
 ## v0.9.10 (2026-09-03) — Creator: docx storyboards, four new intents
 

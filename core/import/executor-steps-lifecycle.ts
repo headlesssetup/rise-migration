@@ -10,6 +10,7 @@ import {
   blankUploadedMediaKeys,
   blankForeignMediaKeys,
   remapMediaKeys,
+  retargetMediaHosts,
 } from './remap';
 import * as env from './envelopes';
 import { findBankRef, type PlanStep } from './plan';
@@ -460,7 +461,7 @@ export async function handleUpdateLesson(
           // key; anything NOT uploaded (oversize/orphan/none) is blanked so a dead
           // source key is never written to the target lesson.
           const safeExtra = blankForeignMediaKeys(
-            remapMediaKeys(extra, keyMap),
+            retargetMediaHosts(remapMediaKeys(extra, keyMap), deps.targetPlane),
             new Set(ctx.newCourseId ? [ctx.newCourseId] : []),
           ) as Record<string, unknown>;
           await send(

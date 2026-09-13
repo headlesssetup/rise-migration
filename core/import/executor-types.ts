@@ -104,6 +104,10 @@ export interface ManualFlag {
     | 'orphan-bank'
     | 'title'
     | 'typeface'
+    // An intra-course button link whose target lesson has no target counterpart
+    // (source lesson deleted / never created) — the deferred link patch could
+    // not resolve it, so the operator re-links it by hand.
+    | 'lesson-link'
     // Multi-language stacks (docs/rise-multilang.md):
     | 'locale-selector' // learner language selector must be enabled manually
     | 'l10n-storyline' // stack cell holds a Storyline package → manual per-language attach

@@ -3,6 +3,7 @@
 // re-exports the previously-public names, so import sites are unchanged).
 
 import { isL10nRef } from '@/core/l10n';
+import type { PlanStep } from './plan-types';
 import type { Lesson, Block } from '@/shared/types/rise';
 
 export const STORYLINE = new Set(['360/storyline']);
@@ -118,6 +119,96 @@ export function findBankRef(b: Block): {
     }
   }
   return { bankId, drawCount, questionDrawType };
+}
+
+/** One block that points at ANOTHER lesson, plus the source lesson ids it names. */
+export interface LessonLinkRef {
+  sourceLessonId: string;
+  sourceBlockId: string;
+  /** Source lesson ids this block's `destination` fields name (deduped). */
+  destinations: string[];
+}
+
+/**
+ * Find every block carrying an intra-course lesson link.
+ *
+ * A `buttons`/`interactive` block can hold sub-items of `type: "lesson"` whose
+ * `destination` is a LESSON id — the one cross-ref that is neither a media key
+ * nor a blockument, and the one the remap plan used to miss entirely. Sibling
+ * `type`s put a URL (`link`) or the literal `exit-course` in the same field, so
+ * pairing on `type === 'lesson'` is what separates a real cross-ref from text.
+ *
+ * Detection is a generic recursive walk (protocol §3: never a per-family
+ * switch) and only accepts destinations that name a lesson of THIS course — an
+ * external url or a stale id is left alone for the read-back to judge.
+ */
+export function collectLessonLinks(
+  lessons: Lesson[],
+  knownLessonIds: ReadonlySet<string>,
+  blockIdOf: (block: Block, index: number) => string,
+): LessonLinkRef[] {
+  const out: LessonLinkRef[] = [];
+  for (const lesson of lessons) {
+    const sourceLessonId = typeof lesson.id === 'string' ? lesson.id : '';
+    if (!sourceLessonId) continue;
+    (lesson.items ?? []).forEach((block, i) => {
+      const found = new Set<string>();
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          node.forEach(walk);
+          return;
+        }
+        if (!node || typeof node !== 'object') return;
+        const o = node as Record<string, unknown>;
+        if (
+          o.type === 'lesson' &&
+          typeof o.destination === 'string' &&
+          knownLessonIds.has(o.destination)
+        ) {
+          found.add(o.destination);
+        }
+        for (const v of Object.values(o)) walk(v);
+      };
+      walk(block);
+      if (found.size > 0) {
+        out.push({
+          sourceLessonId,
+          sourceBlockId: blockIdOf(block, i),
+          destinations: [...found],
+        });
+      }
+    });
+  }
+  return out;
+}
+
+/**
+ * The deferred link-repair steps for one ordered lesson list.
+ *
+ * Emitted right after the branch's lesson loop — NOT at the end of the plan: a
+ * stack converts after that loop, and `patch-lesson-links` is a full-state
+ * block write, so running it post-conversion would flatten the l10n refs the
+ * conversion just minted.
+ */
+export function lessonLinkPatchSteps(
+  ordered: Lesson[],
+  blockIdOf: (block: Block, index: number) => string,
+): PlanStep[] {
+  const knownLessonIds = new Set(
+    ordered.map((l) => (typeof l.id === 'string' ? l.id : '')).filter(Boolean),
+  );
+  const titleOf = new Map(
+    ordered.map((l) => [typeof l.id === 'string' ? l.id : '', lessonTitle(l)]),
+  );
+  return collectLessonLinks(ordered, knownLessonIds, blockIdOf).map((link) => ({
+    kind: 'patch-lesson-links' as const,
+    sourceLessonId: link.sourceLessonId,
+    sourceBlockId: link.sourceBlockId,
+    destinations: link.destinations,
+    summary: `Re-link block ${link.sourceBlockId} → ${link.destinations
+      .map((d) => `"${titleOf.get(d) ?? d}"`)
+      .join(', ')} (lesson ids are only complete now)`,
+  }));
 }
 
 /**

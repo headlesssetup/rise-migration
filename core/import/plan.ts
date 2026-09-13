@@ -60,6 +60,7 @@ import {
   fileBasename,
   findBankRef,
   isDrawFromBank,
+  lessonLinkPatchSteps,
   lessonTitle,
   orderLessons,
   storylineCellId,
@@ -232,6 +233,14 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     icon: typeof lesson.icon === 'string' ? lesson.icon : null,
   });
 
+  // Intra-course lesson links, re-patched AFTER the lesson loop that owns them.
+  // Called from inside each branch (never at the very end) so a stack's blocks
+  // are rewritten while they are still monolingual — post-conversion, a
+  // full-state block write would flatten the l10n refs the conversion minted.
+  const pushLessonLinkPatches = (): void => {
+    steps.push(...lessonLinkPatchSteps(ordered, sourceBlockIdOf));
+  };
+
   if (!stack) {
     ordered.forEach((lesson, idx) => {
       const { sourceLessonId, lType, icon } = lessonMeta(lesson, idx);
@@ -268,6 +277,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
 
       planLessonBody(lesson, sourceLessonId, lTitle, lType, icon);
     });
+    pushLessonLinkPatches();
 
     // Title for a lesson-less course (the per-first-lesson write above never
     // fired). A confirmed bare shell is a real course, so titling it is safe.
@@ -322,6 +332,7 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       }
       planLessonBody(matLessons[idx] ?? lesson, sourceLessonId, lTitle, lType, icon);
     });
+    pushLessonLinkPatches();
     if (ordered.length === 0) {
       steps.push({
         kind: 'set-title',

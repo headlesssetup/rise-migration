@@ -45,6 +45,7 @@ import {
   handleFlagL10nStoryline,
 } from './executor-steps-storyline';
 import { handleCreateBlockument } from './executor-steps-mondrian';
+import { handlePatchLessonLinks } from './executor-steps-links';
 import {
   handleSetAiTutorConfig,
   handleSetCourseSettings,
@@ -210,6 +211,10 @@ export async function executePlan(
         }
         case 'patch-block-media': {
           await handlePatchBlockMedia(ctx, step);
+          break;
+        }
+        case 'patch-lesson-links': {
+          await handlePatchLessonLinks(ctx, step);
           break;
         }
         case 'attach-storyline': {

@@ -10,6 +10,7 @@ import {
   blankUploadedMediaKeys,
   blankForeignMediaKeys,
   remapMediaKeys,
+  retargetMediaHosts,
 } from './remap';
 import * as env from './envelopes';
 import { findBankRef, type PlanStep } from './plan';
@@ -192,7 +193,7 @@ export async function handleSetCourseImages(
             // Every key orphaned → ship the course without this image entirely
             // (flagged), not an image object full of empty keys.
             if (![...km.values()].some(Boolean)) return undefined;
-            return remapMediaKeys(img, km);
+            return retargetMediaHosts(remapMediaKeys(img, km), deps.targetPlane);
           };
           const coverImage = step.hasCover
             ? await build(course.coverImage, 'course cover image')
@@ -348,7 +349,14 @@ export async function handlePatchBlockMedia(
               step.kind,
             );
           }
-          const patched = remapMediaKeys(withBlockuments, keyMap) as Record<string, unknown>;
+          // Re-point the plane-specific media hosts too: remapMediaKeys swaps the
+          // KEY but leaves `images.articulate.com` / `articulateusercontent.com`
+          // pointing at the SOURCE plane, which 404s for a target-bucket key.
+          // That is what emptied both CRM video posters (2026-08-31).
+          const patched = retargetMediaHosts(
+            remapMediaKeys(withBlockuments, keyMap),
+            deps.targetPlane,
+          ) as Record<string, unknown>;
           if (String(patched.id ?? '') !== meta.newId) {
             throw new WriteError(
               `patch payload id ${String(patched.id ?? '(none)')} != created block id ${meta.newId} — id-mint drift (code fault)`,

@@ -155,6 +155,12 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
       return { itemType: 'Course title', action: 'Set the course title manually in the Rise editor.' };
     case 'typeface':
       return { itemType: 'Missing font', action: 'Provision or select this font manually on the target account.' };
+    case 'lesson-link':
+      return {
+        itemType: 'Broken lesson link',
+        action:
+          'This button points at another lesson that has no counterpart on the target. Open the block and pick the correct lesson from the destination list.',
+      };
     case 'locale-selector':
       return {
         itemType: 'Language selector',

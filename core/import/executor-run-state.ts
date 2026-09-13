@@ -9,7 +9,7 @@ import {
   materializeLocale,
   type L10nChange,
 } from '@/core/l10n';
-import { collectStructuralIds, remapMediaKeys } from './remap';
+import { collectStructuralIds, remapMediaKeys, retargetMediaHosts } from './remap';
 import { collectBuiltinRefs, probeBuiltinRefs } from './builtin-assets';
 import * as env from './envelopes';
 import type { WriteSpec } from './envelopes';
@@ -150,14 +150,20 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
         action: 'update',
         l10nId,
         locale,
-        value: remapMediaKeys(value as never, keyMap) as typeof value,
+        value: retargetMediaHosts(
+          remapMediaKeys(value as never, keyMap),
+          deps.targetPlane,
+        ) as typeof value,
       };
     }
     return {
       action: 'update',
       l10nId: targetId,
       locale,
-      value: remapMediaKeys(value as never, keyMap) as typeof value,
+      value: retargetMediaHosts(
+        remapMediaKeys(value as never, keyMap),
+        deps.targetPlane,
+      ) as typeof value,
     };
   };
 

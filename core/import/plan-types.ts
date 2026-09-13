@@ -250,6 +250,24 @@ export type PlanStep =
       sourceKeys: string[];
       summary: string;
     }
+  | {
+      // DEFERRED intra-course link repair. A `type: "lesson"` sub-item's
+      // `destination` names another LESSON, but lessons are created interleaved
+      // with their own blocks, so a FORWARD link (lesson 2 → lesson 27) is
+      // written while its target does not exist yet and the IdMap cannot answer
+      // for it — the SOURCE lesson id ships verbatim and names nothing on the
+      // target (live 2026-08-31: the Mercedes CRM "Impressum" button). Re-patch
+      // the block ONCE after every lesson exists, when the map is complete.
+      // Emitted per branch right after that branch's lesson loop — for a stack
+      // that keeps it PRE-conversion, so a full-state block write can never
+      // clobber l10n refs.
+      kind: 'patch-lesson-links';
+      sourceLessonId: string;
+      sourceBlockId: string;
+      /** Source lesson ids this block links to (for the summary + the flag). */
+      destinations: string[];
+      summary: string;
+    }
   | { kind: 'unlock-lesson'; sourceLessonId: string; summary: string }
   | {
       kind: 'flag-storyline';

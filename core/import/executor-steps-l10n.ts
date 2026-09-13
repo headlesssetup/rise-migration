@@ -9,6 +9,7 @@ import {
   blankUploadedMediaKeys,
   blankForeignMediaKeys,
   remapMediaKeys,
+  retargetMediaHosts,
 } from './remap';
 import * as env from './envelopes';
 import { findBankRef, type PlanStep } from './plan';
@@ -472,7 +473,10 @@ export async function handleSetStackTitles(
                 action: 'update',
                 l10nId: target ?? ref.l10nId,
                 locale,
-                value: remapMediaKeys(value as never, keyMap) as typeof value,
+                value: retargetMediaHosts(
+                  remapMediaKeys(value as never, keyMap),
+                  deps.targetPlane,
+                ) as typeof value,
               });
             }
             if (changes.length > 0) {
