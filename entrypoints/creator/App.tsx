@@ -11,7 +11,7 @@
 //     stays open as the paste/fix surface.
 // No auth, no network: this page never contacts Rise.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   blueprintErrorReport,
   creatorPrompt,
@@ -19,6 +19,63 @@ import {
   type BlueprintValidation,
 } from '@/core/creator';
 import { putPendingBlueprint } from '@/shared/creator-handoff';
+import { listFolderFiles, type FolderListing } from '../review/asset-folder';
+import {
+  ASSET_FOLDER_KEY,
+  loadDirHandle,
+  saveDirHandle,
+  verifyReadPermission,
+} from '../sidepanel/folder-store';
+
+type DirPicker = (opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+
+/** The designer's asset folder (read-only). Its file names go into the
+ *  prompt so the AI can place pictures by exact name; the Review page reads
+ *  the same folder (same handle key) at compile time. */
+function useAssetFolder(): {
+  folder: FileSystemDirectoryHandle | null;
+  listing: FolderListing | null;
+  needsGrant: boolean;
+  connect: () => Promise<void>;
+  error: string | null;
+} {
+  const [folder, setFolder] = useState<FileSystemDirectoryHandle | null>(null);
+  const [listing, setListing] = useState<FolderListing | null>(null);
+  const [needsGrant, setNeedsGrant] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void (async () => {
+      const h = await loadDirHandle(ASSET_FOLDER_KEY);
+      if (!h) return;
+      setFolder(h);
+      if (await verifyReadPermission(h, false)) setListing(await listFolderFiles(h));
+      else setNeedsGrant(true);
+    })();
+  }, []);
+  const connect = useCallback(async () => {
+    setError(null);
+    try {
+      if (folder && needsGrant && (await verifyReadPermission(folder, true))) {
+        setNeedsGrant(false);
+        setListing(await listFolderFiles(folder));
+        return;
+      }
+      const picker = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker;
+      if (!picker) {
+        setError('File System Access API is not available in this browser.');
+        return;
+      }
+      const h = await picker({ mode: 'read' });
+      await saveDirHandle(h, ASSET_FOLDER_KEY);
+      setFolder(h);
+      setNeedsGrant(false);
+      setListing(await listFolderFiles(h));
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError')) setError(errText(e));
+    }
+  }, [folder, needsGrant]);
+  return { folder, listing, needsGrant, connect, error };
+}
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -38,7 +95,15 @@ function useCopy(): [copied: boolean, copy: (text: string) => void] {
 function PromptStep() {
   const [deckInstructions, setDeckInstructions] = useState('');
   const [copied, copy] = useCopy();
-  const prompt = useMemo(() => creatorPrompt(deckInstructions), [deckInstructions]);
+  const assets = useAssetFolder();
+  const imageNames = useMemo(
+    () => (assets.listing ? [...assets.listing.files.keys()].sort() : []),
+    [assets.listing],
+  );
+  const prompt = useMemo(
+    () => creatorPrompt(deckInstructions, { imageNames }),
+    [deckInstructions, imageNames],
+  );
   return (
     <section className="card">
       <h2>1 · Prompt for the AI chat</h2>
@@ -46,6 +111,23 @@ function PromptStep() {
         Open your AI chat, attach the source document (PPTX / DOCX / PDF), paste this prompt, and
         send. The AI returns one JSON block — that is the input for step 2.
       </p>
+      <div className="row">
+        <button onClick={() => void assets.connect()}>
+          {assets.folder
+            ? assets.needsGrant
+              ? `Restore access: ${assets.folder.name}`
+              : `Asset folder: ${assets.folder.name} (change…)`
+            : 'Connect asset folder (pictures the AI may place)…'}
+        </button>
+        {assets.listing && (
+          <span className="hint">
+            {assets.listing.files.size} media file(s) listed in the prompt
+            {assets.listing.duplicates.length > 0 &&
+              ` · ${assets.listing.duplicates.length} ambiguous name(s) skipped: ${assets.listing.duplicates.slice(0, 5).join(', ')}`}
+          </span>
+        )}
+      </div>
+      {assets.error && <p className="error">⚠ {assets.error}</p>}
       <label className="field-label" htmlFor="deck-instructions">
         Instructions for this document (optional — appended to the copied prompt)
       </label>

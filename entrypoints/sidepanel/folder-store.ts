@@ -15,6 +15,10 @@ const KEY = 'destFolder';
  * steers operators toward a dedicated Creator folder (v0.9.0).
  */
 export const CREATOR_FOLDER_KEY = 'creatorFolder';
+/** v0.9.12 — the designer's asset folder (read-only pictures/PDFs the AI may
+ *  name) and the rise-export archive a style profile is harvested from. */
+export const ASSET_FOLDER_KEY = 'creatorAssetFolder';
+export const STYLE_SOURCE_FOLDER_KEY = 'creatorStyleSourceFolder';
 
 type DirHandleWithPermissions = FileSystemDirectoryHandle & {
   queryPermission?(d: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
@@ -78,6 +82,18 @@ export async function verifyPermission(
 ): Promise<boolean> {
   const h = handle as DirHandleWithPermissions;
   const opts = { mode: 'readwrite' as const };
+  if ((await h.queryPermission?.(opts)) === 'granted') return true;
+  if (request && (await h.requestPermission?.(opts)) === 'granted') return true;
+  return false;
+}
+
+/** Read-only variant for folders we never write (asset folder, style source). */
+export async function verifyReadPermission(
+  handle: FileSystemDirectoryHandle,
+  request = false,
+): Promise<boolean> {
+  const h = handle as DirHandleWithPermissions;
+  const opts = { mode: 'read' as const };
   if ((await h.queryPermission?.(opts)) === 'granted') return true;
   if (request && (await h.requestPermission?.(opts)) === 'granted') return true;
   return false;

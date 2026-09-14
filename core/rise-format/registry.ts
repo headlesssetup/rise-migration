@@ -1,6 +1,6 @@
 import type { BlockIntentKind } from '@/core/creator/blueprint';
 
-export const RISE_TEMPLATE_REGISTRY_REVISION = '2026-09-03.1' as const;
+export const RISE_TEMPLATE_REGISTRY_REVISION = '2026-09-14.1' as const;
 
 export type TemplateVerification = 'compiler-tested' | 'live-verified' | 'disabled';
 export type DonorConfidence = 'captured' | 'derived';
@@ -157,10 +157,28 @@ export const RISE_TEMPLATE_REGISTRY: Readonly<
   },
   'attachment-placeholder': {
     intent: 'attachment-placeholder',
-    outputs: ['text / paragraph warning'],
-    donor: 'capture_creation4aug exported text block; placeholder is escaped text only',
+    outputs: ['text / paragraph warning', 'multimedia / attachment (style profile + file)'],
+    donor: 'capture_creation4aug exported text block; placeholder is escaped text only. With a style profile and a resolved folder file: the profile\'s exported attachment donor (file item + icon item + Mighty appearance mods).',
     donorConfidence: 'captured',
     verification: 'compiler-tested',
+  },
+  quote: {
+    intent: 'quote',
+    outputs: ['quote / d (style profile)', 'text / heading paragraph (no profile)'],
+    donor:
+      'Style profile motif: the style source\'s exported quote/d deep-dive block (avatar icon + default quote background), VAS 1.2/1.3 2026-09-14. Without a profile the text ships as a plain heading + paragraph.',
+    donorConfidence: 'captured',
+    verification: 'compiler-tested',
+    note: 'The styled card needs a harvested style profile; the fallback is plain text.',
+  },
+  banner: {
+    intent: 'banner',
+    outputs: ['image / text overlay (style profile)', 'text / heading (no profile)'],
+    donor:
+      'Style profile motif: the style source\'s exported image/text overlay banners keyed by label (Kopsavilkums, Uzdevums, …), VAS 1.2/1.3 2026-09-14. Without a profile the label ships as a heading block.',
+    donorConfidence: 'captured',
+    verification: 'compiler-tested',
+    note: 'The styled banner needs a harvested style profile; the fallback is a heading.',
   },
 };
 

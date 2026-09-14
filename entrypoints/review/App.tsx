@@ -6,6 +6,10 @@
 // "Approve → save package to disk" (compile + writeBuiltCourse, with the
 // creator-manifest merge/refuse guard).
 //
+// v0.9.12 adds the STYLE card (`./style-card.tsx`): a harvested style profile
+// + the operator's asset folder, applied by the compiler (core/style) so the
+// package carries the referenced media.
+//
 // The folder handle is the CREATOR key (folder-store CREATOR_FOLDER_KEY) — a
 // dedicated staging folder, never silently the panel's archive. The panel's
 // folder can be adopted with an explicit one-click seed.
@@ -23,6 +27,7 @@ import {
 } from '@/core/creator';
 import { registryWarnings as templateRegistryWarnings } from '@/core/rise-format';
 import { FileSystemStorage } from '@/core/storage/fs';
+import type { ResolvedFile } from '@/core/style';
 import {
   getPendingBlueprint,
   removePendingBlueprint,
@@ -40,13 +45,15 @@ import {
   writeBuiltCourse,
   type WrittenFiles,
 } from '../creator/write';
-
-type DirPicker = (opts?: {
-  mode?: 'read' | 'readwrite';
-}) => Promise<FileSystemDirectoryHandle>;
+import { resolveFiles } from './asset-folder';
+import { StyleCard, pickDirectory, useStyle } from './style-card';
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function isAbort(e: unknown): boolean {
+  return e instanceof DOMException && e.name === 'AbortError';
 }
 
 function slotIdFromLocation(): string | null {
@@ -75,7 +82,14 @@ export function App() {
   const [writing, setWriting] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
   const [written, setWritten] = useState<
-    (WrittenFiles & { courseId: string; title: string; registryWarnings: string[] }) | null
+    | (WrittenFiles & {
+        courseId: string;
+        title: string;
+        registryWarnings: string[];
+        notes: string[];
+        styleName: string | null;
+      })
+    | null
   >(null);
 
   // Load the staged text and re-validate it.
@@ -134,15 +148,10 @@ export function App() {
           return;
         }
       }
-      const picker = (window as unknown as { showDirectoryPicker?: DirPicker }).showDirectoryPicker;
-      if (!picker) {
-        setWriteError('File System Access API is not available in this browser.');
-        return;
-      }
-      const handle = await picker({ mode: 'readwrite' });
+      const handle = await pickDirectory('readwrite');
       await adoptFolder(handle);
-    } catch {
-      /* user cancelled */
+    } catch (e) {
+      if (!isAbort(e)) setWriteError(errText(e));
     }
   }, [folder, folderNeedsGrant, adoptFolder]);
 
@@ -160,6 +169,8 @@ export function App() {
   }, [panelFolder, adoptFolder]);
 
   const blueprint = validation?.ready ? validation.blueprint : null;
+  const folderReady = !!folder && !folderNeedsGrant;
+  const style = useStyle(folder, folderReady, blueprint);
 
   const stats = useMemo(() => {
     if (!blueprint) return null;
@@ -183,10 +194,17 @@ export function App() {
         throw new Error('No write permission for the Creator folder.');
       }
       const generatedAt = new Date().toISOString();
-      const built = compileCourseBlueprint(blueprint, generatedAt);
+      let files = new Map<string, ResolvedFile>();
+      if (style.selectedStyle && style.assetListing && style.fileCheck && style.fileCheck.names.length > 0) {
+        files = (await resolveFiles(style.assetListing, style.fileCheck.names)).resolved;
+      }
+      const built = compileCourseBlueprint(blueprint, generatedAt, undefined, undefined, {
+        style: style.selectedStyle,
+        files,
+      });
       const storage = new FileSystemStorage(folder);
       const manifest = browser.runtime.getManifest();
-      const files = await writeBuiltCourse(
+      const result = await writeBuiltCourse(
         storage,
         built,
         generatedAt,
@@ -197,10 +215,12 @@ export function App() {
       );
       setFolderBuildWarning(null);
       setWritten({
-        ...files,
+        ...result,
         courseId: built.courseId,
         title: blueprint.title,
         registryWarnings: built.registryWarnings,
+        notes: built.notes,
+        styleName: built.styleName,
       });
       // The slot is consumed; a re-review starts from the entry page.
       if (slotId) await removePendingBlueprint(slotId);
@@ -209,7 +229,7 @@ export function App() {
     } finally {
       setWriting(false);
     }
-  }, [blueprint, folder, writing, pending, slotId]);
+  }, [blueprint, folder, writing, pending, slotId, style.selectedStyle, style.assetListing, style.fileCheck]);
 
   const errors = validation?.issues.filter((i) => i.severity === 'error') ?? [];
   const canApprove =
@@ -324,6 +344,8 @@ export function App() {
 
           <Preview blueprint={blueprint} />
 
+          <StyleCard s={style} folderReady={folderReady} />
+
           <section className="card">
             <h2>Approve and save the package</h2>
             {!folder && (
@@ -364,22 +386,40 @@ export function App() {
               </label>
             )}
             <button className="approve" onClick={approve} disabled={!canApprove}>
-              {writing ? 'Writing…' : 'Approve → save package to disk'}
+              {writing
+                ? 'Writing…'
+                : style.selectedStyle
+                  ? `Approve → save package with style "${style.selectedStyle.name}"`
+                  : 'Approve → save package to disk'}
             </button>
             {writeError && <p className="error">⚠ {writeError}</p>}
             {written && (
               <div className="done">
                 <p>
                   ✔ Written: <b>{written.title}</b> ({written.courseId})
+                  {written.styleName && <> · style: <b>{written.styleName}</b></>}
                 </p>
                 <ul>
                   <li>{written.courseFile}</li>
+                  {written.assetManifestFile && (
+                    <li>{written.assetManifestFile} — media the import uploads (pictures, banners, logo)</li>
+                  )}
                   <li>{written.manifestFile}</li>
                   <li>{written.planFile} — the pasted blueprint, verbatim</li>
                   {written.productionFile && (
                     <li>{written.productionFile} — narration scripts for production</li>
                   )}
                 </ul>
+                {written.notes.length > 0 && (
+                  <details>
+                    <summary className="hint">{written.notes.length} compiler note(s)</summary>
+                    <ul className="notes">
+                      {written.notes.map((n, i) => (
+                        <li key={i}>{n}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 {written.priorBuildWarning && (
                   <p className="error">⚠ {written.priorBuildWarning}</p>
                 )}
@@ -392,10 +432,11 @@ export function App() {
                 )}
                 <p className="hint">
                   Next: side panel → <b>Import Data</b> — point the archive folder at this
-                  Creator folder; the course appears in C · Courses. Placeholders (video,
-                  Storyline/Mighty, attachments) must be filled in manually after import; a
-                  labeled graphic ships on Rise's built-in placeholder image — swap it and place
-                  the markers in Rise.
+                  Creator folder; the course appears in C · Courses. Placeholders (Storyline/Mighty,
+                  attachments without a file) must be filled in manually after import; a styled
+                  video card ships with a VIDEO_ID slot until the video URL is known; a labeled
+                  graphic ships on Rise's built-in placeholder image — swap it and place the
+                  markers in Rise.
                 </p>
               </div>
             )}

@@ -55,9 +55,16 @@ export const PROMPT_EXAMPLE_BLUEPRINT = `{
   "production": []
 }`;
 
+export interface PromptOptions {
+  /** File names in the operator's connected asset folder (images, PDFs). When
+   *  given, the AI may reference them by exact name (`image` / `file`). */
+  imageNames?: readonly string[];
+}
+
 /** Build the copyable prompt; `deckInstructions` is the operator's per-deck note. */
-export function creatorPrompt(deckInstructions?: string): string {
+export function creatorPrompt(deckInstructions?: string, options: PromptOptions = {}): string {
   const extra = deckInstructions?.trim();
+  const images = (options.imageNames ?? []).filter((n) => n.trim() !== '');
   return `You convert ONE attached source document (a slide deck or text document) into ONE e-learning course, expressed as a "Course Blueprint" JSON object. The blueprint is compiled by a deterministic tool — your output must match the schema below EXACTLY.
 
 ## Output contract
@@ -80,7 +87,7 @@ export function creatorPrompt(deckInstructions?: string): string {
 - COMMENTS: an open/unaddressed comment is never content — record it in "unresolved" (include the author in sourceRef.label). A resolved comment is ignored, UNLESS its content never made it onto the slide — then treat it as source content and cite the comment in sourceRef.
 - CONTRADICTIONS: when slide text, speaker notes, and comments disagree (different counts, different dates, a heading that says "four" above a list of five), use the slide text for the block and record the discrepancy in "unresolved". Never silently pick one version or reconcile them yourself.
 - Material you cannot place (unsupported media, illegible diagrams, ambiguous fragments) goes into "unresolved" with the reason. Nothing may be silently dropped.
-- Images and binary media cannot travel through this chat: "assets" must stay []. Where an image or video is essential, use a placeholder block and add an "unresolved" entry describing it. EXCEPTION — a "labeled-graphic" needs no unresolved entry for its picture: it is built on Rise's built-in placeholder image; describe the intended image (from the source) in that block's "notes" instead.
+- Images and binary media cannot travel through this chat: "assets" must stay []. Where an image or video is essential, use a placeholder block and add an "unresolved" entry describing it — UNLESS an "Available files" list is given below: then name the matching file in the block's "image" (or the attachment's "file") field, by its EXACT name, and add no unresolved entry for it. Never invent a file name; a picture with no matching file goes to "unresolved" as before. EXCEPTION — a "labeled-graphic" needs no unresolved entry for its picture: it is built on Rise's built-in placeholder image; describe the intended image (from the source) in that block's "notes" instead.
 - NARRATION / voice-over / audio scripts are NEVER copied into the blueprint. The source document stays the producers' script; Rise only needs to know WHERE the video goes. Emit a "video-placeholder" whose label identifies the video (type, speaker, duration — e.g. "Video: Eksperta video lekcija (~3 min), Viktorija"), and leave "production" as [] — do not paste the script into it. Copying scripts makes the JSON many times larger for no benefit.
 - TITLES: the course title comes from the title slide (or the file name if there is none). Lesson titles come from section-divider / agenda text. When you must derive a title because the source names none, keep it short, in the source language, and add the note "title derived — no title in source" to that lesson's first block (titles have no origin field).
 
@@ -131,10 +138,20 @@ Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, 
 13. "labeled-graphic" — an image with clickable markers that pop up text. { "kind": "labeled-graphic", "heading": optional, "intro": [], "items": [{ "title": "<marker label, short>", "body": "<p>…</p>" (HTML popup text) }, …] }. The picture itself is a built-in placeholder and marker positions are generated — describe the intended image in the block's "notes" (see the image rule above). Use when the source presents labelled parts/areas of one picture or scheme.
 14. "note" — a highlighted callout. { "kind": "note", "paragraphs": ["<p>…</p>", …] (HTML) }. For warnings, key takeaways, "remember" boxes.
 15. "links" — a stack of link buttons. { "kind": "links", "heading": optional, "intro": [], "buttons": [{ "label": "<plain>", "destination": "<https URL>", "description": "<plain, may be "">" }, …], "trailing": optional HTML array }.
-16. "video-placeholder" — where the source has/needs a video. { "kind": "video-placeholder", "label": "<what belongs here, e.g. 'Video: intro interview (~3 min)'>" }.
+16. "video-placeholder" — where the source has/needs a video. { "kind": "video-placeholder", "label": "<what belongs here, e.g. 'Video: intro interview (~3 min)'>", "url": "<optional — the YouTube URL ONLY if the source states it>" }.
 17. "storyline-placeholder" — where an interactive activity beyond this vocabulary is required. { "kind": "storyline-placeholder", "label": "<what belongs here>" }.
-18. "attachment-placeholder" — where a downloadable file belongs. { "kind": "attachment-placeholder", "label": "<file and purpose>" }.
-19. "continue" — a "continue" gate button between sections. { "kind": "continue", "label": "<button text>" }.
+18. "attachment-placeholder" — where a downloadable file belongs. { "kind": "attachment-placeholder", "label": "<file and purpose>", "file": "<optional — an exact file name from "Available files" below>" }.
+19. "continue" — a "continue" gate button between sections. { "kind": "continue", "label": "<button text, sentence case — never ALL CAPS>" }.
+20. "quote" — a highlighted deep-dive / expert card (the house "Tēmas padziļināšanai" element). { "kind": "quote", "heading": "<plain, optional — e.g. 'Tēmas padziļināšanai'>", "text": "<p>…</p>" (HTML), "attribution": "<plain, optional>" }. Use for "to learn more" lead-ins, expert asides, and real quotations; a following "links" block carries the resources.
+21. "banner" — a full-width titled section banner. { "kind": "banner", "label": "<short title — e.g. 'Kopsavilkums', 'Pārbaudi savas zināšanas!', 'Uzdevums'>", "subtitle": "<plain, optional second line>" }. Use where the source marks a section start with a standalone title line such as a summary ("Kopsavilkums") or a self-check ("Pārbaudi savas zināšanas"); the content that follows stays in its own blocks.
+
+## Design hints (optional fields — never required)
+
+- Every block may carry "band": "white" | "light" | "accent" — the background band the block should sit on. The house rhythm alternates white and light-blue bands between TOPIC GROUPS; blocks that belong to one idea (a heading and its two paragraphs) share a band. Suggest a band only where grouping is clear; omit it otherwise and the compiler alternates for you. Video blocks are always "accent" (set automatically).
+- A "text" block may carry "image": "<exact file name from Available files>" — it becomes an image + text block with the picture beside the prose. A "banner" may carry "image" for its picture. Never put "image" on other kinds.
+- A lesson may carry "icon": "Article" | "Quiz" | "Video" | "Interaction" (Rise's lesson icon; default Article for a content lesson, Quiz for a test lesson), "image": "<exact file name>" (the topic illustration shown in the lesson opener), and "type": "section" for a module divider row — a section lesson has "blocks": [] and only a title (e.g. "1. modulis | Nodaļa 4/4").
+- LESSON OPENER: the FIRST block of every content lesson should be a plain "text" block WITHOUT a heading holding the topic's introductory paragraph(s) (a storyboard row marked as the topic intro, e.g. "Tēmas ievads", "paragraph with heading" whose heading repeats the lesson title). The compiler turns the lesson title + this intro into the house opener (title, illustrated intro, Continue); do not repeat the lesson title as a heading.
+- A summary row ("Kopsavilkums") → a "banner" with that label followed by the summary text as its own "text"/"list" block(s). A self-check lead-in ("Pārbaudi savas zināšanas!") → a "banner", then the knowledge-check block(s). A "Tēmas padziļināšanai" lead-in → a "quote" (heading = that phrase, text = the lead-in sentence), then the "links" block with the resources.
 
 ## Directive alias table (authors write Rise's UI names — map them)
 
@@ -144,7 +161,9 @@ Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, 
 - accordion → "accordion" · tabs → "tabs"
 - flipcards / flip cards / flashcard grid / flashcard stack → "flashcards"
 - process → "process" · timeline → "timeline" · sorting activity → "sorting"
-- quote / quote carousel → "text" (attribution stays in the paragraph text)
+- quote / quote carousel / expert quote / tēmas padziļināšanai → "quote"
+- image & text / image and text / text with image / picture → "text" (plus "image" naming a file from "Available files" when one clearly matches; otherwise add an "unresolved" entry for the picture)
+- summary banner / section title banner / Kopsavilkums / Pārbaudi savas zināšanas → "banner"
 - button / button stack / links / resources → "links"
 - continue / divider → "continue"
 - multiple choice / multiple response / quiz / knowledge check → "knowledge-check" (only with evidenced answers)
@@ -153,7 +172,7 @@ Text fields marked HTML below accept ONLY these tags: <p>, <strong>, <em>, <b>, 
 - table / comparison table / matrix → "table"
 - video / embed → "video-placeholder" · attachment / download → "attachment-placeholder"
 - storyline / mighty / horizontal accordion / scenario / any interactive not listed above → "storyline-placeholder"
-- image / image and text / image centered / gallery / images with notes → "text" carrying the text content, plus an "unresolved" entry for the visual part
+- image centered / gallery / images with notes → "text" carrying the text content, plus an "unresolved" entry for the visual part
 
 A directive naming TWO blocks ("Knowledge check + table", "Text + links", "Labeled graphic, Flipcards") means BOTH: emit each block in the order named, splitting the row's text between them by content. A directive NOT in this table: use the nearest listed block that can carry the TEXT, add a block note naming the original directive verbatim, and add an "unresolved" entry if any part (visuals, interaction) cannot be represented. Never bury source text inside a placeholder label — placeholders are only for video, attachments, and interactives.
 
@@ -182,7 +201,17 @@ Many source documents are not decks but a storyboard TABLE: one row per screen/b
 ${PROMPT_EXAMPLE_BLUEPRINT}
 \`\`\`
 
-Before answering, verify: every block has a sourceRef with a real slide/page reference (or "row" for a table-based storyboard); every invented or rephrased text is marked "origin": "suggested"; every directive was mapped through the alias table; open comments and contradictions are in "unresolved"; there are no knowledge checks the source does not evidence; "assets" is [] and "production" is []; no narration script was copied; nothing else from the source is silently missing (used or in unresolved); table-storyboard refs carry "row", never a row number in "slideNo".${
+${
+    images.length > 0
+      ? `## Available files (the operator's asset folder — reference by EXACT name)
+
+${images.map((n) => `- ${n}`).join('\n')}
+
+Match files to content by their names (designers number them by module/chapter/slide, e.g. "1.3.2.19.png" = course 1.3, chapter 2, slide 19; "2-5-0.png" = chapter 2.5, opener). Use each file where the source places that picture; when unsure, leave the field out rather than guess.
+
+`
+      : ''
+  }Before answering, verify: every block has a sourceRef with a real slide/page reference (or "row" for a table-based storyboard); every invented or rephrased text is marked "origin": "suggested"; every directive was mapped through the alias table; open comments and contradictions are in "unresolved"; there are no knowledge checks the source does not evidence; "assets" is [] and "production" is []; no narration script was copied; nothing else from the source is silently missing (used or in unresolved); table-storyboard refs carry "row", never a row number in "slideNo"; every "image"/"file" value is an exact name from "Available files"; button labels are sentence case.${
     extra
       ? `
 

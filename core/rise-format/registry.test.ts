@@ -26,6 +26,8 @@ const KINDS: BlockIntentKind[] = [
   'storyline-placeholder',
   'continue',
   'attachment-placeholder',
+  'quote',
+  'banner',
 ];
 
 describe('Rise template registry', () => {

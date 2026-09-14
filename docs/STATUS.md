@@ -1,6 +1,66 @@
 # Project Status
 
-_Last updated: 2026-09-13 (v0.9.11: forward lesson links + per-plane media hosts). Keep this current at each phase boundary._
+_Last updated: 2026-09-14 (v0.9.12: style harvest — Creator courses in the designer's house style). Keep this current at each phase boundary._
+
+## v0.9.12 (2026-09-14) — Creator: style harvest
+
+Operator need: ten more VAS courses in the look of the three hand-designed
+ones (1.1 / 1.2 / 1.3, `_export1309`). Creator output was Rise-default
+(no theme, no fonts, generic donor settings, bare `<p>` text). Design contract
+and findings: `docs/creator-ai-design.md` "Style harvest".
+
+- **`core/style/` — StyleProfile.** `harvestStyleProfile` derives a profile
+  from exported courses: primary course theme verbatim (incl. Mighty
+  power-ups = custom CSS snippets + global type/colour styles, and the
+  font-family mod), top-level typeface ids, label set, cover/logo; Mighty type
+  styles resolved to roles by NAME (H1/H1 White/H2/H2 gray/H3/Body/Bold body);
+  per-`family/variant` settings MODES over a style-key allowlist (band keys
+  excluded); light band colour; KC answer colours; lesson icon; mid-lesson
+  Continue label; motifs = opener (shared majority prefix of safe block types +
+  the Continue that commonly follows — VAS 1.2 puts a hero/note there in half
+  its lessons), closer Continue with its "Nākamā tēma:" prefix, banners keyed
+  by first caption word, quote/d, image+text aside, Mighty video card (most
+  used HTML, newest instance, YouTube id → `__VIDEO_ID__`), attachment; the
+  asset rows every donor/course field needs. Donors whose media has no
+  archived bytes are dropped with a report line. Real run over the three VAS
+  courses: 17 lessons / 522 blocks, opener + closer + 8 banners + 4 donors,
+  24 shared assets.
+- **Compiler applies it** (`compileCourseBlueprint(…, {style, files})`):
+  theme/fonts/cover cloned, published-title power-up rewritten per course;
+  opener = lesson title as H1 + the lesson's first plain text block consumed
+  into the illustrated aside (lesson `image` from the asset folder, else the
+  source illustration + note); body/heading type-style spans stamped on the
+  mapper's clean HTML (minimal class-span form, as the designer's newest
+  blocks); settings modes merged, KC colours forced, ALL-CAPS Continue labels
+  sentence-cased (designer: "TURPINĀT" was a mistake); band rhythm (opener
+  light, then white/light alternating per blueprint block, AI `band` hint
+  wins, banners white + reset, video accent, Continue inherits); donors for
+  `banner` / `quote` / `text`+`image` / `video-placeholder` (+`url`) /
+  `attachment-placeholder`+`file`; closer "Nākamā tēma: <next>" or the plain
+  label on the last lesson; `section` lessons; lesson icons. Every referenced
+  media key is declared in `courses/<id>.assets.json` (profile assets already
+  in the Creator folder, folder files stored content-addressed by the writer)
+  — an uncovered key aborts; `assertCleanDocument` takes the declared set.
+- **Blueprint v1 extended (closed schema):** intents `quote`, `banner`;
+  `video-placeholder.url`, `attachment-placeholder.file`; per-block `band`,
+  `image` (text/banner only); lesson `type: section` (blocks `[]`), `icon`,
+  `image`. Without a profile `quote`/`banner` fall back to heading/text and
+  hints are ignored. Prompt documents all of it, the opener rule for
+  storyboard "Tēmas ievads" rows, the Kopsavilkums / Pārbaudi / Padziļināšanai
+  mappings, and an "Available files" list from the connected asset folder
+  (exact names; designers number files by module/chapter/slide).
+- **Review page:** Style card — harvest from a rise-export archive (tick
+  courses, first = primary; media copied into the Creator folder; report
+  shown), pick a stored profile, connect the read-only asset folder; the
+  blueprint's file names are checked against it (missing = noted, not
+  blocking). Creator page lists the same folder's names into the prompt.
+  Handle keys `creatorAssetFolder`, `creatorStyleSourceFolder`.
+- Registry revision `2026-09-14.1`; `core/style/real-archive.test.ts` is the
+  env-gated operator check (`STYLE_ARCHIVE=… STYLE_COURSES=…`).
+- Not done: theme-level uploaded images stay blanked by the importer (none on
+  VAS); inline colour spans inside text are not reproduced; the first live
+  import of a styled course is the next verification (compare with 3.2).
+
 
 ## v0.9.11 (2026-09-13) — import: forward lesson links, per-plane media hosts
 

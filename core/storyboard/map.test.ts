@@ -377,7 +377,7 @@ describe('mapLesson', () => {
     ];
     const lesson = mapLesson('Tēma X', planned, mints());
     expect(lesson.records).toEqual([
-      { blockId: lesson.blocks[0]!.id, slideNo: 7, kind: 'text' },
+      { blockId: lesson.blocks[0]!.id, slideNo: 7, kind: 'text', blueprintIndex: 0 },
     ]);
     expect(lesson.notes[0]!).toBe('[slaids 7] kaut kas');
   });

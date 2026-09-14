@@ -29,6 +29,8 @@ const ALL_KINDS: BlockIntentKind[] = [
   'storyline-placeholder',
   'continue',
   'attachment-placeholder',
+  'quote',
+  'banner',
 ];
 
 describe('creatorPrompt', () => {

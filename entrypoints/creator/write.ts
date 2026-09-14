@@ -24,6 +24,8 @@ export interface WrittenFiles {
   courseFile: string;
   manifestFile: string;
   planFile: string;
+  /** Present when the course carries media (styled build). */
+  assetManifestFile?: string;
   /** Absent when the blueprint carried no narration entries. */
   productionFile?: string;
   /** Present when a lock from an earlier interrupted build was replaced. */
@@ -97,6 +99,23 @@ export async function writeBuiltCourse(
   );
 
   await storage.writeCourse(built.courseId, built.raw);
+  // Media of a STYLED course (v0.9.12): folder files are stored content-
+  // addressed here; style-profile assets were copied into this folder when the
+  // profile was harvested — their absence means a stale profile, refuse loudly
+  // rather than ship a course whose manifest points at missing bytes.
+  for (const f of built.assetFiles) {
+    if (!(await storage.hasAsset(f.name))) await storage.writeAsset(f.name, f.bytes);
+  }
+  for (const name of built.profileAssetFiles) {
+    if (!(await storage.hasAsset(name))) {
+      throw new Error(
+        `Style profile asset assets/${name} is missing from the Creator folder — harvest the style again (it copies the source course's media).`,
+      );
+    }
+  }
+  if (built.assetManifestJson) {
+    await storage.writeAssetManifest('courses', built.courseId, built.assetManifestJson);
+  }
   // The entry is derived AFTER writeCourse — it hashes what is actually on disk.
   const entry = await buildCourseEntry(storage, built.courseId, built.manifestEntry.title);
   const manifestArgs = {
@@ -113,6 +132,7 @@ export async function writeBuiltCourse(
       lessonCount: built.lessonCount,
       blockCount: built.blockCount,
       registryWarnings: built.registryWarnings,
+      styleProfile: built.styleName,
     },
   };
 
@@ -134,6 +154,7 @@ export async function writeBuiltCourse(
     courseFile: `courses/${built.courseId}.json`,
     manifestFile: 'manifest.json',
     planFile: `_creator/${planName}`,
+    ...(built.assetManifestJson ? { assetManifestFile: `courses/${built.courseId}.assets.json` } : {}),
     ...(built.productionMd !== null ? { productionFile: `_creator/${productionName}` } : {}),
     ...(priorBuildWarning ? { priorBuildWarning } : {}),
   };

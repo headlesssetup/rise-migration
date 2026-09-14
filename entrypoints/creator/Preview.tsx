@@ -32,6 +32,8 @@ export const KIND_LABEL: Record<BlockIntent['kind'], string> = {
   'storyline-placeholder': 'Storyline/Mighty — placeholder',
   continue: 'Continue (button)',
   'attachment-placeholder': 'Attachment — placeholder',
+  quote: 'Deep-dive quote',
+  banner: 'Banner',
 };
 
 function isPlaceholder(kind: BlockIntent['kind']): boolean {
@@ -396,6 +398,23 @@ function IntentContent({ intent }: { intent: BlockIntent }) {
 
     case 'continue':
       return <p className="continue-gate">[{intent.label}]</p>;
+
+    case 'quote':
+      return (
+        <blockquote className="note-box">
+          {intent.heading && <p className="blk-heading">{intent.heading}</p>}
+          <Html html={intent.text} />
+          {intent.attribution && <p className="item-title">— {intent.attribution}</p>}
+        </blockquote>
+      );
+
+    case 'banner':
+      return (
+        <p className="blk-heading">
+          ▬ {intent.label}
+          {intent.subtitle ? ` — ${intent.subtitle}` : ''}
+        </p>
+      );
   }
 }
 
@@ -427,6 +446,22 @@ function BlockCard({ block, ordinal }: { block: BlueprintBlock; ordinal: number 
           <span className="chip chip-suggested" title="Text invented or rephrased by the AI — review against the source">
             AI-suggested
           </span>
+        )}
+        {block.band && (
+          <span className="chip chip-auto" title="Suggested background band (applied with a style profile)">
+            band: {block.band}
+          </span>
+        )}
+        {block.image && (
+          <span className="chip chip-auto" title="Image from the connected asset folder (applied with a style profile)">
+            🖼 {block.image}
+          </span>
+        )}
+        {block.intent.kind === 'video-placeholder' && block.intent.url && (
+          <span className="chip chip-auto">▶ {block.intent.url}</span>
+        )}
+        {block.intent.kind === 'attachment-placeholder' && block.intent.file && (
+          <span className="chip chip-auto">📎 {block.intent.file}</span>
         )}
       </div>
       <div className="block-body">
@@ -505,6 +540,9 @@ export function Preview({ blueprint }: { blueprint: CourseBlueprint }) {
         <section className="card" key={li}>
           <h2>
             {li + 1} / {blueprint.lessons.length} · {lesson.title}
+            {lesson.type === 'section' && <span className="chip chip-auto"> section divider</span>}
+            {lesson.icon && <span className="chip chip-auto"> icon: {lesson.icon}</span>}
+            {lesson.image && <span className="chip chip-auto"> 🖼 {lesson.image}</span>}
           </h2>
           {lesson.blocks.map((block, bi) => (
             <BlockCard block={block} ordinal={bi + 1} key={bi} />

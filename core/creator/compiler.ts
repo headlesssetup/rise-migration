@@ -3,8 +3,22 @@
 // The compiler is the only Creator module allowed to emit Rise JSON. It uses
 // registry-backed donor mappers and aborts on unresolved local asset refs,
 // media keys, l10n refs, or cross-course references.
+//
+// v0.9.12: an optional STYLE PROFILE (core/style) is applied on top of the
+// mapped blocks — theme/fonts/cover, Mighty type-style classes, per-block
+// settings modes, the light-blue band rhythm, lesson opener/closer motifs and
+// the banner / quote / video / image+text / attachment donors. Media the
+// styled course references (profile assets + files from the operator's asset
+// folder) is declared in a per-course asset manifest so the standard import
+// upload/remap path handles it; any referenced key the manifest does not
+// cover aborts the compile.
 
 import { collectAssetKeys } from '@/core/assets/keys';
+import {
+  assetManifestToJson,
+  buildAssetManifest,
+  type AssetManifestEntry,
+} from '@/core/assets/manifest';
 import type { CourseBlueprint } from '@/core/creator/blueprint';
 import { newId } from '@/core/import/ids';
 import { findLocalAssetRefs } from '@/core/local-assets';
@@ -19,8 +33,15 @@ import {
   type MappedBlockRecord,
   type Mints,
 } from '@/core/storyboard/map';
+import {
+  applyCourseStyle,
+  styleLesson,
+  type ApplyContext,
+  type ResolvedFile,
+  type StyleProfile,
+} from '@/core/style';
 import { StoryboardError } from '@/core/creator/errors';
-import type { GetCourseDocument, Lesson } from '@/shared/types/rise';
+import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 
 export interface BuiltCourse {
   courseId: string;
@@ -35,12 +56,27 @@ export interface BuiltCourse {
   notes: string[];
   registryRevision: string;
   registryWarnings: string[];
+  /** `courses/<id>.assets.json` body when the course references media; else null. */
+  assetManifestJson: string | null;
+  /** Asset-folder files to store content-addressed as `assets/<name>`. */
+  assetFiles: { name: string; bytes: Uint8Array }[];
+  /** Profile asset files (`<hash>.<ext>`) the writer must find already present. */
+  profileAssetFiles: string[];
+  styleName: string | null;
+}
+
+export interface CompileOptions {
+  style?: StyleProfile | null;
+  /** Exact file name → bytes from the operator's asset folder. */
+  files?: Map<string, ResolvedFile>;
 }
 
 export { findLocalAssetRefs, type LocalAssetOccurrence } from '@/core/local-assets';
 
-/** Assert the compiler output contains no unresolved/local or foreign refs. */
-export function assertCleanDocument(doc: GetCourseDocument): void {
+/** Assert the compiler output contains no unresolved/local or foreign refs.
+ *  `declaredKeys` = uploaded-media keys the course's asset manifest covers
+ *  (style-profile assets + folder files); any other media key is a fault. */
+export function assertCleanDocument(doc: GetCourseDocument, declaredKeys?: Set<string>): void {
   const local = findLocalAssetRefs(doc);
   if (local.length > 0) {
     throw new StoryboardError(
@@ -49,7 +85,7 @@ export function assertCleanDocument(doc: GetCourseDocument): void {
         .join('; ')}`,
     );
   }
-  const media = collectAssetKeys(doc);
+  const media = collectAssetKeys(doc).filter((k) => !declaredKeys?.has(k.key));
   if (media.length > 0) {
     throw new StoryboardError(
       `compiler emitted media key(s) without an asset adapter: ${media
@@ -98,12 +134,71 @@ function productionReport(blueprint: CourseBlueprint): string | null {
   return lines.join('\n');
 }
 
+/** Declare every uploaded-media key the built document references: profile
+ *  assets (bytes already in the Creator folder) and folder files (bytes
+ *  carried in the result). A referenced key nobody covers is a compile fault. */
+function declareAssets(
+  doc: GetCourseDocument,
+  courseId: string,
+  generatedAt: string,
+  ctx: ApplyContext | null,
+): Pick<BuiltCourse, 'assetManifestJson' | 'assetFiles' | 'profileAssetFiles'> & {
+  declaredKeys: Set<string>;
+} {
+  const collected = collectAssetKeys(doc, courseId);
+  const entries = new Map<string, AssetManifestEntry>();
+  const assetFiles: { name: string; bytes: Uint8Array }[] = [];
+  const profileAssetFiles: string[] = [];
+  if (ctx) {
+    const referenced = new Set(collected.map((k) => k.key));
+    for (const a of ctx.profile.assets) {
+      if (!referenced.has(a.key)) continue;
+      entries.set(a.key, { key: a.key, kind: a.kind as AssetManifestEntry['kind'], hash: a.hash, ext: a.ext, file: a.file, size: a.size });
+      profileAssetFiles.push(a.file.replace(/^assets\//, ''));
+    }
+    for (const [key, used] of ctx.usedFiles) {
+      const f = used.file;
+      const name = `${f.sha256}.${f.ext || 'bin'}`;
+      entries.set(key, {
+        key,
+        kind: f.mimeType.startsWith('image/') ? 'media-image' : 'media-other',
+        hash: f.sha256,
+        ext: f.ext || 'bin',
+        file: `assets/${name}`,
+        size: f.size,
+      });
+      if (!assetFiles.some((x) => x.name === name)) assetFiles.push({ name, bytes: f.bytes });
+    }
+  }
+  const uncovered = collected.filter((k) => !entries.has(k.key));
+  if (uncovered.length > 0) {
+    throw new StoryboardError(
+      `styled course references media with no archived bytes: ${uncovered
+        .map((k) => `${k.key} @ ${k.paths[0]}`)
+        .join('; ')} — re-harvest the style profile`,
+    );
+  }
+  const assetManifestJson =
+    entries.size > 0
+      ? assetManifestToJson(
+          buildAssetManifest('course', courseId, collected, [...entries.values()], [], generatedAt),
+        )
+      : null;
+  return {
+    assetManifestJson,
+    assetFiles,
+    profileAssetFiles: [...new Set(profileAssetFiles)],
+    declaredKeys: new Set(entries.keys()),
+  };
+}
+
 /** Compile an approved blueprint into the standard local archive course body. */
 export function compileCourseBlueprint(
   blueprint: CourseBlueprint,
   generatedAt: string,
   mints: Mints = defaultMints(),
   mintCourseId: () => string = newId,
+  options: CompileOptions = {},
 ): BuiltCourse {
   if (blueprint.lessons.length === 0) {
     throw new StoryboardError('blueprint has no lessons — nothing to build');
@@ -115,6 +210,18 @@ export function compileCourseBlueprint(
   }
 
   const courseId = `sb-${mintCourseId()}`;
+  const style = options.style ?? null;
+  const ctx: ApplyContext | null = style
+    ? {
+        profile: style,
+        mints,
+        courseId,
+        files: options.files ?? new Map(),
+        usedFiles: new Map(),
+        notes: [],
+      }
+    : null;
+
   const lessons: Lesson[] = [];
   const records: (MappedBlockRecord & { lessonId: string; lesson: string })[] = [];
   const notes: string[] = [];
@@ -125,21 +232,57 @@ export function compileCourseBlueprint(
 
   for (let index = 0; index < blueprint.lessons.length; index++) {
     const plannedLesson = blueprint.lessons[index]!;
-    const mapped = mapLesson(plannedLesson.title, plannedLesson.blocks, mints);
     const lessonId = mints.cuid();
+    const icon = plannedLesson.icon ?? style?.lessons.icon ?? null;
+    if (plannedLesson.type === 'section') {
+      lessons.push({ id: lessonId, courseId, type: 'section', position: index, title: plannedLesson.title, items: [] });
+      continue;
+    }
+    const mapped = mapLesson(plannedLesson.title, plannedLesson.blocks, mints);
+    let blocks: Block[] = mapped.blocks;
+    let lessonRecords: MappedBlockRecord[] = mapped.records;
+    let lessonNotes: string[] = mapped.notes;
+    if (ctx) {
+      const next = blueprint.lessons.slice(index + 1).find((l) => l.type !== 'section');
+      const styled = styleLesson(
+        ctx,
+        plannedLesson,
+        { blocks: mapped.blocks, blueprintIndex: mapped.records.map((r) => r.blueprintIndex) },
+        next?.title ?? null,
+      );
+      blocks = styled.blocks;
+      // Notes of mappings a donor replaced (e.g. the native empty-video
+      // placeholder) would mislead the operator — keep only the survivors'.
+      lessonNotes = mapped.blockNotes
+        .filter((n) => !styled.replaced.has(n.blueprintIndex))
+        .map((n) => n.note);
+      lessonRecords = [];
+      styled.blocks.forEach((b, i) => {
+        const bi = styled.blueprintIndex[i];
+        if (bi === null || bi === undefined) return;
+        const pb = plannedLesson.blocks[bi]!;
+        lessonRecords.push({
+          blockId: String(b.id),
+          slideNo: pb.sourceRef.slideNo ?? null,
+          kind: pb.intent.kind,
+          blueprintIndex: bi,
+        });
+      });
+    }
     lessons.push({
       id: lessonId,
       courseId,
       type: 'blocks',
       position: index,
       title: plannedLesson.title,
-      items: mapped.blocks,
+      ...(icon ? { icon } : {}),
+      items: blocks,
     });
-    blockCount += mapped.blocks.length;
-    for (const record of mapped.records) {
+    blockCount += blocks.length;
+    for (const record of lessonRecords) {
       records.push({ ...record, lessonId, lesson: plannedLesson.title });
     }
-    for (const note of mapped.notes) notes.push(`${plannedLesson.title}: ${note}`);
+    for (const note of lessonNotes) notes.push(`${plannedLesson.title}: ${note}`);
   }
 
   const doc: GetCourseDocument = {
@@ -151,7 +294,12 @@ export function compileCourseBlueprint(
     },
     lessons,
   };
-  assertCleanDocument(doc);
+  if (ctx) {
+    applyCourseStyle(doc, blueprint, ctx.profile);
+    notes.push(...ctx.notes.map((n) => `style: ${n}`));
+  }
+  const assets = declareAssets(doc, courseId, generatedAt, ctx);
+  assertCleanDocument(doc, assets.declaredKeys);
   const warnings = registryWarnings(usedKinds);
 
   return {
@@ -165,9 +313,13 @@ export function compileCourseBlueprint(
         source: blueprint.source,
         blueprint,
         registryRevision: RISE_TEMPLATE_REGISTRY_REVISION,
+        style: style
+          ? { name: style.name, harvestedAt: style.harvestedAt, sourceCourseIds: style.sourceCourseIds }
+          : null,
         blocks: records,
         unresolvedCount: blueprint.unresolved.length,
         registryWarnings: warnings,
+        notes,
       },
       null,
       2,
@@ -178,5 +330,9 @@ export function compileCourseBlueprint(
     notes,
     registryRevision: RISE_TEMPLATE_REGISTRY_REVISION,
     registryWarnings: warnings,
+    assetManifestJson: assets.assetManifestJson,
+    assetFiles: assets.assetFiles,
+    profileAssetFiles: assets.profileAssetFiles,
+    styleName: style?.name ?? null,
   };
 }

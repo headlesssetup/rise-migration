@@ -125,10 +125,31 @@ export type BlockIntent =
       buttons: { label: string; destination: string; description: string }[];
       trailing?: string[];
     }
-  | { kind: 'video-placeholder'; label: string }
+  | {
+      kind: 'video-placeholder';
+      label: string;
+      /** YouTube URL when the script already names it; else the styled video
+       *  card ships with a visible VIDEO_ID slot for the designer. */
+      url?: string;
+    }
+  /** Deep-dive / expert quote — the house "Tēmas padziļināšanai" card. */
+  | { kind: 'quote'; heading?: string; text: string; attribution?: string }
+  /** Full-width section banner ("Kopsavilkums", "Uzdevums", …). */
+  | { kind: 'banner'; label: string; subtitle?: string }
   | { kind: 'storyline-placeholder'; label: string }
   | { kind: 'continue'; label: string }
-  | { kind: 'attachment-placeholder'; label: string };
+  | {
+      kind: 'attachment-placeholder';
+      label: string;
+      /** File name from the connected asset folder (PDF etc.) → a real
+       *  attachment block when a style profile is applied. */
+      file?: string;
+    };
+
+/** Background band a block sits on — the designer's light-blue / white
+ *  rhythm; "accent" is the dark-blue video band. Optional per block. */
+export type BlueprintBand = 'white' | 'light' | 'accent';
+export type BlueprintLessonIcon = 'Article' | 'Quiz' | 'Video' | 'Interaction';
 
 export interface BlueprintBlock {
   intent: BlockIntent;
@@ -138,11 +159,22 @@ export interface BlueprintBlock {
    *  written; 'suggested' = invented or rephrased by the provider and must be
    *  visibly distinguished for review (docs/creator-ai-design.md). */
   origin?: 'source' | 'suggested';
+  /** Suggested background band (style profiles only; ignored otherwise). */
+  band?: BlueprintBand;
+  /** Image file name from the connected asset folder (a `text` block becomes
+   *  an image + text aside; a `banner` uses it as its picture). */
+  image?: string;
 }
 
 export interface BlueprintLesson {
   title: string;
   blocks: BlueprintBlock[];
+  /** "section" = a module divider row with no content (blocks: []). */
+  type?: 'blocks' | 'section';
+  /** Rise lesson icon; a style profile supplies the default. */
+  icon?: BlueprintLessonIcon;
+  /** Topic illustration for the lesson opener (file name in the asset folder). */
+  image?: string;
 }
 
 export interface BlueprintUnresolvedItem {

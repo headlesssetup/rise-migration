@@ -494,6 +494,46 @@ export function mapIntent(intent: BlockIntent, mint: Mints): MappedRow {
         ],
         notes,
       };
+
+    case 'quote':
+      // Without a style profile the deep-dive card has no captured pristine
+      // donor: ship its text as heading + paragraph. The styled quote/d form is
+      // a profile motif (core/style/apply.ts) substituted by the compiler.
+      return {
+        blocks: [
+          textBlock(
+            mint,
+            intent.heading,
+            intent.text +
+              (intent.attribution ? `<p><em>${escapeHtml(intent.attribution)}</em></p>` : ''),
+          ),
+        ],
+        notes,
+      };
+
+    case 'banner':
+      // Without a style profile a banner is a heading block (the real
+      // image/text overlay is a profile motif). Donor: exported text/heading
+      // — {heading, paragraph:''} item.
+      return {
+        blocks: [
+          {
+            id: mint.cuid(),
+            type: 'text',
+            family: 'text',
+            variant: 'heading',
+            items: [
+              {
+                id: mint.cuid(),
+                heading: `<strong>${escapeHtml(intent.label)}</strong>`,
+                paragraph: intent.subtitle ? `<p>${escapeHtml(intent.subtitle)}</p>` : '',
+              },
+            ],
+            settings: { ...TEXT_SETTINGS },
+          },
+        ],
+        notes,
+      };
   }
 }
 
@@ -502,6 +542,8 @@ export interface MappedBlockRecord {
   blockId: string;
   slideNo: number | null;
   kind: BlockIntent['kind'];
+  /** Index of the blueprint block (within its lesson) this Rise block came from. */
+  blueprintIndex: number;
 }
 
 export interface MappedLesson {
@@ -510,6 +552,9 @@ export interface MappedLesson {
   /** Per-block origin (for the plan report). */
   records: MappedBlockRecord[];
   notes: string[];
+  /** The same notes keyed by blueprint block, so a caller that REPLACES a
+   *  block (style-profile donors) can drop the notes of the replaced mapping. */
+  blockNotes: { blueprintIndex: number; note: string }[];
 }
 
 /** Map a whole planned lesson. */
@@ -521,7 +566,8 @@ export function mapLesson(
   const blocks: Block[] = [];
   const records: MappedBlockRecord[] = [];
   const notes: string[] = [];
-  for (const pb of planned) {
+  const blockNotes: { blueprintIndex: number; note: string }[] = [];
+  planned.forEach((pb, blueprintIndex) => {
     const mapped = mapIntent(pb.intent, mint);
     for (const b of mapped.blocks) {
       blocks.push(b);
@@ -529,6 +575,7 @@ export function mapLesson(
         blockId: String(b.id),
         slideNo: pb.sourceRef.slideNo ?? null,
         kind: pb.intent.kind,
+        blueprintIndex,
       });
     }
     for (const n of [...pb.notes, ...mapped.notes]) {
@@ -538,7 +585,8 @@ export function mapLesson(
           ? `rinda ${pb.sourceRef.row}`
           : pb.sourceRef.label;
       notes.push(`[${slide}] ${n}`);
+      blockNotes.push({ blueprintIndex, note: `[${slide}] ${n}` });
     }
-  }
-  return { title, blocks, records, notes };
+  });
+  return { title, blocks, records, notes, blockNotes };
 }

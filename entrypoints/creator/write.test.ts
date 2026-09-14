@@ -44,6 +44,10 @@ const BUILT: BuiltCourse = {
   notes: [],
   registryRevision: '2026-08-14.1',
   registryWarnings: ['text: compiler-tested'],
+  assetManifestJson: null,
+  assetFiles: [],
+  profileAssetFiles: [],
+  styleName: null,
 };
 
 describe('writeBuiltCourse', () => {

@@ -46,6 +46,10 @@
 > never trusted; a consumed/expired slot dead-ends with a pointer back to the
 > Creator page.
 
+> **v0.9.12 (2026-09-14): STYLE HARVEST.** See the "Style harvest" section
+> at the end — a profile harvested from finished courses is applied by the
+> compiler; the AI stays blind to styling.
+
 This document records the agreed boundary for general conversion.
 
 ## Provider input
@@ -169,3 +173,57 @@ The operator preview exposes lesson/block order, proposed content, source refs,
 assets, unsupported items, registry status, confidence/warnings, and unresolved
 material. Operators edit the blueprint-level proposal; there is no raw Rise JSON
 editor.
+
+## Style harvest (v0.9.12)
+
+Goal: a Creator-built course lands close to a designer's finished look so she
+reviews instead of restyling. The AI never sees styling — style is a
+deterministic compile-time input picked by the operator.
+
+**What a Rise house style consists of** (VAS 1.1 / 1.2 / 1.3, analysed
+2026-09-13/14 with the designer's answers):
+
+1. The course **theme object**, shared by all courses, including the Mighty
+   power-ups stored inside it: custom CSS snippets (they override many block
+   settings — raw-data inconsistency is not visual inconsistency), global type
+   styles (H1 34 / H2 26 / H3 20 / Body 19, blue or dark gray) and colour
+   styles, the font-family mod. Fonts are the TOP-LEVEL typeface ids.
+2. **Per-text markup**: ~97% of body paragraphs carry
+   `<span class="mighty-type-style-<id>">`; headings carry H1/H2 classes.
+3. **Block settings**: paddings (hand-picked; the most common value per type
+   is the rule), Mighty mods (button style, image+text layout, note card),
+   KC answer colours (always), corner radii.
+4. **Band rhythm**: opener label paragraph light-blue, then white and
+   light-blue alternate per topic group, video cards on the accent band,
+   banners white. Played by ear — the AI may suggest a band per block.
+5. **Motifs**: opener ("Ritini uz leju!" › H1 › illustrated intro › Continue),
+   closer Continue "Nākamā tēma: …", banners (Kopsavilkums, Uzdevums, Pārbaudi
+   savas zināšanas!), the quote/d deep-dive card, the Mighty Interactive-HTML
+   YouTube card (identical except the video id; URLs arrive later by hand),
+   the attachment block with its icon. The designer keeps these as Rise block
+   templates too (55 `_VAS_*`), which confirmed the vocabulary.
+6. Shared **pictures**: banner backgrounds, the quote icon, the attachment
+   icon, cover and logo; per-chapter illustrations named by module/chapter/
+   slide in the designer's asset folder.
+
+**Where it lives.** `core/style/` (types, harvest, typography, apply) —
+profiles are DATA harvested from exported course JSON, never hand-authored.
+`_creator/styles/<slug>.json` in the Creator folder; the profile's media is
+copied into that folder's `assets/` store at harvest time. The compiler
+(`compileCourseBlueprint(…, {style, files})`) applies the profile on top of
+the mapped blocks and declares every referenced key in the built course's
+`assets.json`, so the standard importer uploads and remaps it. The blueprint
+carries only semantic hints (`band`, `image`, `icon`, `type: section`,
+`quote`, `banner`, `video url`, `attachment file`); without a profile they
+degrade to plain text and are ignored.
+
+**Prompt side.** The Creator page lists the connected asset folder's file
+names under "Available files"; the AI references them by exact name and
+never invents one. The first block of a lesson is its plain intro (storyboard
+"Tēmas ievads" rows) — the compiler builds the opener from it.
+
+**Known limits.** Inline colour spans inside prose are not reproduced;
+theme-level uploaded images are blanked by the importer; a lesson without a
+plain intro gets no illustrated aside (noted); a video without a URL ships
+the card with a literal `VIDEO_ID` slot (noted).
+
