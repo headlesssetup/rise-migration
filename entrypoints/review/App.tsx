@@ -248,17 +248,55 @@ export function App() {
     );
   }
 
+  // The Creator-folder card is shared by the approve step and the standalone
+  // (no blueprint) view — style profiles are stored in that folder.
+  const folderCard = (
+    <>
+      {!folder && (
+        <>
+          <p className="hint">
+            Creator folder not connected — pick a dedicated staging folder for Creator
+            packages (a rise-export archive folder is refused).
+          </p>
+          <div className="row">
+            <button onClick={connectFolder}>Connect Creator folder…</button>
+            {panelFolder && (
+              <button onClick={() => void usePanelFolder()}>
+                Use panel folder: {panelFolder.name}
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      {folder && folderNeedsGrant && (
+        <>
+          <p className="hint">Folder "{folder.name}" remembered, but permission needed.</p>
+          <button onClick={connectFolder}>Restore access: {folder.name}</button>
+        </>
+      )}
+      {folder && !folderNeedsGrant && <p className="hint">Creator folder: {folder.name}</p>}
+      {folderBuildWarning && <p className="error">⚠ {folderBuildWarning}</p>}
+    </>
+  );
+
   if (pending === 'missing') {
+    // No staged blueprint: still a working page for the style profiles and
+    // folders (harvest needs no blueprint), with the expired-slot notice only
+    // when a slot was actually requested.
     return (
       <div className="app">
         <h1>Review blueprint</h1>
         <section className="card">
-          <p className="error">
-            This review link has expired — the staged blueprint is gone (slots live for the
-            browser session).
-          </p>
+          {slotId ? (
+            <p className="error">
+              This review link has expired — the staged blueprint is gone (slots live for the
+              browser session).
+            </p>
+          ) : (
+            <p className="hint">No blueprint is staged. Styles and folders can be set up here anyway.</p>
+          )}
           <p className="hint">
-            Go back to Rise AI Creator, validate the JSON again, and click "Review blueprint".
+            To review a course: Rise AI Creator → validate the JSON → "Review blueprint".
           </p>
           <button
             onClick={() =>
@@ -268,6 +306,12 @@ export function App() {
             Open Rise AI Creator
           </button>
         </section>
+        <section className="card">
+          <h2>Creator folder</h2>
+          {folderCard}
+          {writeError && <p className="error">⚠ {writeError}</p>}
+        </section>
+        <StyleCard s={style} folderReady={folderReady} />
       </div>
     );
   }
@@ -348,32 +392,7 @@ export function App() {
 
           <section className="card">
             <h2>Approve and save the package</h2>
-            {!folder && (
-              <>
-                <p className="hint">
-                  Creator folder not connected — pick a dedicated staging folder for Creator
-                  packages (a rise-export archive folder is refused).
-                </p>
-                <div className="row">
-                  <button onClick={connectFolder}>Connect Creator folder…</button>
-                  {panelFolder && (
-                    <button onClick={() => void usePanelFolder()}>
-                      Use panel folder: {panelFolder.name}
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-            {folder && folderNeedsGrant && (
-              <>
-                <p className="hint">Folder "{folder.name}" remembered, but permission needed.</p>
-                <button onClick={connectFolder}>Restore access: {folder.name}</button>
-              </>
-            )}
-            {folder && !folderNeedsGrant && (
-              <p className="hint">Creator folder: {folder.name}</p>
-            )}
-            {folderBuildWarning && <p className="error">⚠ {folderBuildWarning}</p>}
+            {folderCard}
             {blueprint.unresolved.length > 0 && (
               <label className="ack">
                 <input

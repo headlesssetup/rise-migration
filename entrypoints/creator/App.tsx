@@ -216,6 +216,22 @@ export function App() {
         Data → C · Courses).
       </p>
 
+      <section className="card">
+        <h2>0 · Style profiles &amp; folders</h2>
+        <p className="hint">
+          Harvest a style from the designer's finished courses (a rise-export archive) and keep it
+          in the Creator folder — the Review page applies it when a course is approved. This
+          needs no blueprint.
+        </p>
+        <button
+          onClick={() =>
+            void browser.tabs.create({ url: browser.runtime.getURL('/review.html' as '/review.html') })
+          }
+        >
+          Open styles &amp; folders (Review page)
+        </button>
+      </section>
+
       <PromptStep />
 
       <section className="card">
