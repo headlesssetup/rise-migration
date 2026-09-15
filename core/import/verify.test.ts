@@ -386,3 +386,26 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
   });
 });
 
+
+describe('course fields the source never carried (Creator-built courses, v0.9.12)', () => {
+  it('treats a target default in an ABSENT source field as expected, never blocking', () => {
+    const s = src();
+    delete (s.course as Record<string, unknown>).theme;
+    delete (s.course as Record<string, unknown>).allowCopy;
+    const t = faithfulTarget();
+    (t.course as Record<string, unknown>).theme = { themeId: 'classic', colorAccent: '#0f0' };
+    (t.course as Record<string, unknown>).allowCopy = false;
+    const r = verifyParity(s, t);
+    expect(r.issues.filter((i) => i.path === 'course.theme' || i.path === 'course.allowCopy')).toEqual([]);
+    expect(r.expectedDivergences.some((i) => i.path === 'course.theme' && /never carried/.test(i.detail ?? ''))).toBe(true);
+  });
+
+  it('still blocks when the source CARRIES the field and the target differs', () => {
+    const s = src();
+    (s.course as Record<string, unknown>).theme = { themeId: 'organic' };
+    const t = faithfulTarget();
+    (t.course as Record<string, unknown>).theme = { themeId: 'classic' };
+    const r = verifyParity(s, t);
+    expect(r.issues.some((i) => i.path === 'course.theme')).toBe(true);
+  });
+});

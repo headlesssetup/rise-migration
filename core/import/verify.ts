@@ -237,8 +237,14 @@ function compareCourseFields(
     // a top-level residue diff is expected and unwritable, never blocking.
     const isLegacyMirror = LEGACY_MIRROR_FIELDS.has(f);
     const isDefaultImage = IMAGE_FIELDS.has(f) && isDeepEmpty(sv) && !isDeepEmpty(tv);
+    // A field the source document never CARRIED (key absent, not `{}`/null):
+    // an exported course always has every course key explicitly, so this is a
+    // Creator-built course that asserted nothing there (e.g. an unstyled build
+    // has no `theme`) — the target keeping Rise's default is expected, not a
+    // fidelity failure (v0.9.12).
+    const isUnasserted = !(f in sc) && !isDeepEmpty(tv);
     const isExpected =
-      isDefaultImage || isLegacyMirror || flaggedKeys.some((k) => raw.includes(k));
+      isDefaultImage || isLegacyMirror || isUnasserted || flaggedKeys.some((k) => raw.includes(k));
     const diffs = { mediaMissing: [] as string[], changed: [] as string[] };
     collectLeafDiffs(a, b, f, diffs);
     const detailPaths = [...diffs.changed, ...diffs.mediaMissing];
@@ -255,7 +261,9 @@ function compareCourseFields(
           ? `${detail} (course setting is not migrated yet; parity cannot be confirmed)`
           : isDefaultImage
             ? `${detail} (source has no ${f}; the target keeps Rise's random default — no captured write clears an image slot)`
-            : detail,
+            : isUnasserted
+              ? `${detail} (the source never carried course.${f} — a Creator-built course asserts nothing there; the target keeps Rise's default)`
+              : detail,
       ...(isExpected ? { expected: true } : {}),
     });
   }

@@ -83,10 +83,32 @@ export function useStyle(
   const [assetNeedsGrant, setAssetNeedsGrant] = useState(false);
   const [assetListing, setAssetListing] = useState<FolderListing | null>(null);
 
+  // The chosen profile is remembered across Review tabs (a fresh tab used to
+  // start at "none", and an approved course silently shipped unstyled).
+  const LAST_STYLE_KEY = 'creator:lastStyle';
+  const rememberStyle = useCallback((file: string) => {
+    setStyleFile(file);
+    try {
+      void browser.storage.local.set({ [LAST_STYLE_KEY]: file });
+    } catch {
+      /* storage unavailable — selection still applies to this tab */
+    }
+  }, []);
   const refreshStyles = useCallback(async (handle: FileSystemDirectoryHandle) => {
     const list = await listStyles(handle);
     setStyles(list);
-    setStyleFile((cur) => (cur && list.some((s) => s.fileName === cur) ? cur : ''));
+    let remembered = '';
+    try {
+      const got = await browser.storage.local.get(LAST_STYLE_KEY);
+      remembered = typeof got[LAST_STYLE_KEY] === 'string' ? (got[LAST_STYLE_KEY] as string) : '';
+    } catch {
+      remembered = '';
+    }
+    setStyleFile((cur) => {
+      if (cur && list.some((s) => s.fileName === cur)) return cur;
+      if (remembered && list.some((s) => s.fileName === remembered)) return remembered;
+      return list.length === 1 ? list[0]!.fileName : '';
+    });
   }, []);
 
   // Stored profiles live in the Creator folder — reload whenever it is usable.
@@ -192,13 +214,13 @@ export function useStyle(
         ...outcome.report,
       ]);
       await refreshStyles(folder);
-      setStyleFile(outcome.savedAs.replace(/^_creator\/styles\//, ''));
+      rememberStyle(outcome.savedAs.replace(/^_creator\/styles\//, ''));
     } catch (e) {
       setStyleError(errText(e));
     } finally {
       setHarvesting(false);
     }
-  }, [folder, styleSource, sourceSelected, harvesting, harvestName, sourceCourses, refreshStyles]);
+  }, [folder, styleSource, sourceSelected, harvesting, harvestName, sourceCourses, refreshStyles, rememberStyle]);
 
   const selectedStyle = useMemo(
     () => styles.find((s) => s.fileName === styleFile)?.profile ?? null,
@@ -216,7 +238,7 @@ export function useStyle(
   return {
     styles,
     styleFile,
-    setStyleFile,
+    setStyleFile: rememberStyle,
     selectedStyle,
     styleSource,
     sourceCourses,
@@ -266,6 +288,11 @@ export function StyleCard({ s, folderReady }: { s: StyleState; folderReady: bool
               ))}
             </select>
           </div>
+          {!selectedStyle && s.styles.length > 0 && (
+            <p className="error">
+              ⚠ No style selected — this course would ship in Rise's default look. Pick one above.
+            </p>
+          )}
           {selectedStyle && (
             <p className="hint">
               {selectedStyle.typography.styles.length} type styles ·{' '}
