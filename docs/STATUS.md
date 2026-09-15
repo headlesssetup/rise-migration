@@ -130,6 +130,18 @@ downgraded to Storyline placeholders.
 - Preview renders the new intents and reports coverage by table rows;
   `map.ts` donor settings split into `map-settings.ts`.
 
+## ⚠ Open — AI Scenario blocks are UNCAPTURED and NOT migratable (2026-09-13)
+
+`_export1309` surfaced a new variant `ai-scenario/ai-scenario` (+ new course
+type `scenario`, AI-Assistant-created). The block is a pointer (`scenarioId`)
+into a service we have never captured; the archive is INCOMPLETE despite
+`complete: true`, and the scanner does not know the field, so nothing aborted.
+Not expected to be migrated for now. **TODO T1:** flag it robustly in export
+results (manual consultation) and refuse/placeholder it on import. **TODO T2:**
+operator mitm session. Full analysis + checklist:
+`docs/findings-2026-09-13-ai-scenario.md`; warnings added to
+`rise-block-catalog.md`, `rise-api-reference.md` §8b, `CLAUDE.md`.
+
 ## v0.9.8 patch (2026-08-21) — HOTFIX for v0.9.7
 
 **v0.9.7 produced an unopenable docx for any course with duplicate images**
