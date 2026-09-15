@@ -135,10 +135,15 @@ export function useStyle(
         await saveDirHandle(h, STYLE_SOURCE_FOLDER_KEY);
         setStyleSource(h);
       }
-      const { origin, courses } = await listArchiveCourses(h);
+      const { origin, state, courses } = await listArchiveCourses(h);
       if (origin !== 'rise-export') {
         throw new Error(
           `That folder is a "${origin ?? 'unknown'}" archive — a style is harvested from a rise-export archive of finished courses.`,
+        );
+      }
+      if (state !== 'ready') {
+        throw new Error(
+          `"${h.name}" is a rise-export archive in state "${state ?? 'unknown'}" — its export did not finish (no media). Pick a complete archive (state "ready", with an assets/ folder).`,
         );
       }
       setSourceCourses(courses);

@@ -82,15 +82,17 @@ export interface ArchiveCourseRow {
 /** Courses listed by a rise-export archive's manifest (read-only). */
 export async function listArchiveCourses(source: FileSystemDirectoryHandle): Promise<{
   origin: string | null;
+  state: string | null;
   courses: ArchiveCourseRow[];
 }> {
   const storage = new FileSystemStorage(source);
   const raw = await storage.readManifest();
   if (!raw) throw new Error('No manifest.json in that folder — pick a rise-export archive.');
-  const m = JSON.parse(raw) as { origin?: unknown; courses?: unknown };
+  const m = JSON.parse(raw) as { origin?: unknown; state?: unknown; courses?: unknown };
   const rows = Array.isArray(m.courses) ? m.courses : [];
   return {
     origin: typeof m.origin === 'string' ? m.origin : null,
+    state: typeof m.state === 'string' ? m.state : null,
     courses: rows
       .filter((r): r is { id: string; title?: string } => !!r && typeof (r as { id?: unknown }).id === 'string')
       .map((r) => ({ id: r.id, title: typeof r.title === 'string' ? r.title : r.id })),
@@ -126,10 +128,15 @@ export async function harvestFromArchive(args: {
     const raw = await src.readCourse(id);
     if (!raw) throw new Error(`courses/${id}.json is missing in the style source archive.`);
     const assetRaw = await src.readAssetManifest('courses', id);
-    courses.push({
-      doc: unwrap(raw),
-      assetManifest: assetRaw ? (JSON.parse(assetRaw) as AssetManifest) : null,
-    });
+    // A course exported WITHOUT its media (a content-only fetch, or an export
+    // stopped before the asset stage) cannot donate banners, icons or the
+    // cover: refuse loudly rather than save a profile with every donor dropped.
+    if (!assetRaw) {
+      throw new Error(
+        `courses/${id}.assets.json is missing in "${args.source.name}" — that archive was exported without media (content-only fetch or interrupted export). Pick a complete rise-export archive (state "ready", with an assets/ folder), e.g. the September export.`,
+      );
+    }
+    courses.push({ doc: unwrap(raw), assetManifest: JSON.parse(assetRaw) as AssetManifest });
   }
   const { profile, report } = harvestStyleProfile({
     name: args.name,
