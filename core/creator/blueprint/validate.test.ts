@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { goldenBlueprint } from '../golden-blueprint.fixture';
+import { COURSE_BLUEPRINT_FORMAT, COURSE_BLUEPRINT_VERSION } from './types';
 import {
   blueprintErrorReport,
   unwrapPastedJson,
@@ -202,5 +203,38 @@ describe('blueprintErrorReport', () => {
     const report = blueprintErrorReport(v.issues);
     expect(report).toContain('failed validation');
     expect(report).toContain('blueprint.lessons[0].blocks[0].intent.kind');
+  });
+});
+
+describe('design hints placed inside intent (v0.9.12 tolerance)', () => {
+  it('hoists image/band from intent to the block with a warning instead of failing', () => {
+    const text = JSON.stringify({
+      format: COURSE_BLUEPRINT_FORMAT,
+      formatVersion: COURSE_BLUEPRINT_VERSION,
+      source: { kind: 'ai-provider' },
+      title: 'T',
+      lessons: [
+        {
+          title: 'L',
+          blocks: [
+            {
+              intent: { kind: 'text', paragraphs: ['<p>a</p>'], image: '1.4.1.4.png', band: 'light' },
+              sourceRef: { label: 'Row 2', slideNo: null, row: 2 },
+              notes: [],
+            },
+          ],
+        },
+      ],
+      assets: [],
+      unresolved: [],
+      production: [],
+    });
+    const v = validateBlueprint(text);
+    expect(v.ready).toBe(true);
+    const block = v.blueprint!.lessons[0]!.blocks[0]!;
+    expect(block.image).toBe('1.4.1.4.png');
+    expect(block.band).toBe('light');
+    expect(block.intent).not.toHaveProperty('image');
+    expect(v.issues.filter((i) => i.severity === 'warning' && i.code === 'style')).toHaveLength(2);
   });
 });

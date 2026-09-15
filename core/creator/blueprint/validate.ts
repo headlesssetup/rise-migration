@@ -157,6 +157,19 @@ export function validateBlueprint(text: string): BlueprintValidation {
           issue(issues, 'error', 'shape', bPath, 'Block must be an object {intent, sourceRef, notes?, origin?}.');
           return;
         }
+        // Design hints belong BESIDE "intent". Models often nest them inside it
+        // (field-tested 2026-09-15: 13 of 13 "image" hints landed in intent) —
+        // hoist them instead of failing a whole course over placement.
+        const intentObj = object(block.intent);
+        if (intentObj) {
+          for (const hint of ['image', 'band'] as const) {
+            if (intentObj[hint] !== undefined) {
+              if (block[hint] === undefined) block[hint] = intentObj[hint];
+              delete intentObj[hint];
+              issue(issues, 'warning', 'style', `${bPath}.intent.${hint}`, `"${hint}" belongs beside "intent", not inside it — accepted and moved.`);
+            }
+          }
+        }
         noUnknownKeys(issues, bPath, block, ['intent', 'sourceRef', 'notes', 'origin', 'band', 'image']);
         checkIntent(issues, `${bPath}.intent`, block.intent);
         checkSourceRef(issues, `${bPath}.sourceRef`, block.sourceRef, true);
