@@ -56,7 +56,15 @@ and findings: `docs/creator-ai-design.md` "Style harvest".
   blocking). Creator page lists the same folder's names into the prompt.
   Handle keys `creatorAssetFolder`, `creatorStyleSourceFolder`.
 - Registry revision `2026-09-14.1`; `core/style/real-archive.test.ts` is the
-  env-gated operator check (`STYLE_ARCHIVE=… STYLE_COURSES=…`).
+  env-gated operator check (`STYLE_ARCHIVE=… STYLE_COURSES=…`). Operator
+  step-by-step + friction list: `docs/creator-style-workflow.md`.
+- First live run 2026-09-15 (module 3 script, 9 lessons / 179 blocks):
+  imported clean; the first attempt shipped UNSTYLED because a fresh Review
+  tab started at "none" (now remembered/defaulted + warned); parity no longer
+  blocks on course fields a Creator build never asserted; hints placed inside
+  `intent` are hoisted; prompt gained navigation-form lesson titles and the
+  module divider; harvest refuses media-less archives and export folders as
+  destination; style source and Creator folder can be re-picked.
 - Not done: theme-level uploaded images stay blanked by the importer (none on
   VAS); inline colour spans inside text are not reproduced; the first live
   import of a styled course is the next verification (compare with 3.2).
