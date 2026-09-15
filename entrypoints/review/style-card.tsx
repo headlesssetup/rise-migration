@@ -11,6 +11,7 @@ import type { StyleProfile } from '@/core/style';
 import {
   ASSET_FOLDER_KEY,
   STYLE_SOURCE_FOLDER_KEY,
+  clearDirHandle,
   loadDirHandle,
   saveDirHandle,
   verifyPermission,
@@ -59,7 +60,8 @@ export interface StyleState {
   /** The blueprint's file names vs. the connected folder (null without a blueprint). */
   fileCheck: { names: string[]; missing: string[] } | null;
   connectAssetFolder: () => Promise<void>;
-  connectStyleSource: () => Promise<void>;
+  /** `repick` forces the directory picker even when a source is remembered. */
+  connectStyleSource: (repick?: boolean) => Promise<void>;
   harvest: () => Promise<void>;
 }
 
@@ -125,33 +127,44 @@ export function useStyle(
     }
   }, [assetFolder, assetNeedsGrant]);
 
-  const connectStyleSource = useCallback(async () => {
-    setStyleError(null);
-    setHarvestReport(null);
-    try {
-      let h = styleSource;
-      if (!h || !(await verifyReadPermission(h, true))) {
-        h = await pickDirectory('read');
-        await saveDirHandle(h, STYLE_SOURCE_FOLDER_KEY);
-        setStyleSource(h);
+  const connectStyleSource = useCallback(
+    async (repick = false) => {
+      setStyleError(null);
+      setHarvestReport(null);
+      setSourceCourses(null);
+      let h: FileSystemDirectoryHandle | null = null;
+      try {
+        h = repick ? null : styleSource;
+        if (!h || !(await verifyReadPermission(h, true))) {
+          h = await pickDirectory('read');
+          await saveDirHandle(h, STYLE_SOURCE_FOLDER_KEY);
+          setStyleSource(h);
+        }
+        const { origin, state, courses } = await listArchiveCourses(h);
+        if (origin !== 'rise-export') {
+          throw new Error(
+            `"${h.name}" is a "${origin ?? 'unknown'}" archive — a style is harvested from a rise-export archive of finished courses. Pick another folder.`,
+          );
+        }
+        if (state !== 'ready') {
+          throw new Error(
+            `"${h.name}" is a rise-export archive in state "${state ?? 'unknown'}" — its export did not finish (no media). Pick a complete archive (state "ready", with an assets/ folder).`,
+          );
+        }
+        setSourceCourses(courses);
+        setSourceSelectedRaw([]);
+      } catch (e) {
+        if (isAbort(e)) return;
+        setStyleError(errText(e));
+        // A rejected folder is forgotten, so the next click opens the picker.
+        if (h) {
+          setStyleSource(null);
+          await clearDirHandle(STYLE_SOURCE_FOLDER_KEY);
+        }
       }
-      const { origin, state, courses } = await listArchiveCourses(h);
-      if (origin !== 'rise-export') {
-        throw new Error(
-          `That folder is a "${origin ?? 'unknown'}" archive — a style is harvested from a rise-export archive of finished courses.`,
-        );
-      }
-      if (state !== 'ready') {
-        throw new Error(
-          `"${h.name}" is a rise-export archive in state "${state ?? 'unknown'}" — its export did not finish (no media). Pick a complete archive (state "ready", with an assets/ folder).`,
-        );
-      }
-      setSourceCourses(courses);
-      setSourceSelectedRaw([]);
-    } catch (e) {
-      if (!isAbort(e)) setStyleError(errText(e));
-    }
-  }, [styleSource]);
+    },
+    [styleSource],
+  );
 
   const harvest = useCallback(async () => {
     if (!folder || !styleSource || sourceSelected.length === 0 || harvesting) return;
@@ -272,6 +285,9 @@ export function StyleCard({ s, folderReady }: { s: StyleState; folderReady: bool
                   ? `Style source: ${s.styleSource.name} (list courses)`
                   : 'Pick the style source archive…'}
               </button>
+              {s.styleSource && (
+                <button onClick={() => void s.connectStyleSource(true)}>Change style source…</button>
+              )}
             </div>
             {s.sourceCourses && (
               <>
