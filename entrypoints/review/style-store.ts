@@ -60,10 +60,30 @@ export function styleSlug(name: string): string {
   return slug || 'style';
 }
 
+/** The Creator folder is a dedicated staging folder. A rise-export archive
+ *  (or any non-creator manifest) is REFUSED before anything is written — the
+ *  same guard as the package writer (archives are operator-managed input). */
+export async function assertCreatorFolder(creator: FileSystemDirectoryHandle): Promise<void> {
+  const raw = await new FileSystemStorage(creator).readManifest();
+  if (!raw) return;
+  let origin: unknown = null;
+  try {
+    origin = (JSON.parse(raw) as { origin?: unknown }).origin;
+  } catch {
+    origin = 'unreadable';
+  }
+  if (origin !== 'creator') {
+    throw new Error(
+      `"${creator.name}" holds a ${String(origin ?? 'unknown')} archive — it cannot be the Creator folder. Use "Change Creator folder…" and pick an empty or dedicated Creator folder; style profiles and packages are written there.`,
+    );
+  }
+}
+
 export async function saveStyle(
   creator: FileSystemDirectoryHandle,
   profile: StyleProfile,
 ): Promise<string> {
+  await assertCreatorFolder(creator);
   const dir = await stylesDir(creator, true);
   if (!dir) throw new Error('Could not create _creator/styles in the Creator folder.');
   const fileName = `${styleSlug(profile.name)}.json`;
@@ -121,6 +141,7 @@ export async function harvestFromArchive(args: {
   name: string;
   toolVersion: string;
 }): Promise<HarvestOutcome> {
+  await assertCreatorFolder(args.creator);
   const src = new FileSystemStorage(args.source);
   const dest = new FileSystemStorage(args.creator);
   const courses: HarvestCourseInput[] = [];

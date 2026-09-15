@@ -155,6 +155,16 @@ export function App() {
     }
   }, [folder, folderNeedsGrant, adoptFolder]);
 
+  /** Re-pick the Creator folder (a wrong pick used to be permanent). */
+  const changeFolder = useCallback(async () => {
+    try {
+      await adoptFolder(await pickDirectory('readwrite'));
+      setWriteError(null);
+    } catch (e) {
+      if (!isAbort(e)) setWriteError(errText(e));
+    }
+  }, [adoptFolder]);
+
   const usePanelFolder = useCallback(async () => {
     if (!panelFolder) return;
     try {
@@ -274,7 +284,12 @@ export function App() {
           <button onClick={connectFolder}>Restore access: {folder.name}</button>
         </>
       )}
-      {folder && !folderNeedsGrant && <p className="hint">Creator folder: {folder.name}</p>}
+      {folder && !folderNeedsGrant && (
+        <div className="row">
+          <span className="hint">Creator folder: {folder.name}</span>
+          <button onClick={() => void changeFolder()}>Change Creator folder…</button>
+        </div>
+      )}
       {folderBuildWarning && <p className="error">⚠ {folderBuildWarning}</p>}
     </>
   );
