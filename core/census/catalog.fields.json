@@ -99,6 +99,10 @@
     "items[].label",
     "items[].type",
     "media",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
     "settings",
     "settings.accentColor",
     "settings.attachedToNextBlock",
@@ -107,6 +111,7 @@
     "settings.backgroundType",
     "settings.buttonAlignment",
     "settings.buttonColor",
+    "settings.buttonRadius",
     "settings.buttonShowDescription",
     "settings.buttonWidth",
     "settings.cardMode",
@@ -411,7 +416,10 @@
     "variant",
     "background.media.image.dimensions",
     "background.media.image.dimensions.originalHeight",
-    "background.media.image.dimensions.originalWidth"
+    "background.media.image.dimensions.originalWidth",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "divider/divider": [
     "background",
@@ -646,6 +654,8 @@
     "items[].id",
     "items[].isNewlyInserted",
     "media",
+    "metadata",
+    "metadata.createdVia",
     "settings",
     "settings.accentColor",
     "settings.attachedToNextBlock",
@@ -1323,7 +1333,9 @@
     "items[].media.image.originalImage.dimensions.originalHeight",
     "items[].media.image.originalImage.dimensions.originalWidth",
     "items[].media.image.originalImage.sourcedFrom",
-    "items[].media.image.originalImage.isSkipCrush"
+    "items[].media.image.originalImage.isSkipCrush",
+    "createdAt",
+    "updatedAt"
   ],
   "image/hero": [
     "background",
@@ -1448,7 +1460,11 @@
     "variant",
     "background.media.image.dimensions",
     "background.media.image.dimensions.originalHeight",
-    "background.media.image.dimensions.originalWidth"
+    "background.media.image.dimensions.originalWidth",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "metadata.isHeroImage"
   ],
   "image/text aside": [
     "background",
@@ -2987,6 +3003,7 @@
     "background.media.image.sourcedFrom",
     "background.media.image.type",
     "background.media.image.useCrushedKey",
+    "createdAt",
     "data",
     "family",
     "globalBlockId",
@@ -3079,6 +3096,8 @@
     "items[].settings.showMetaData",
     "items[].title",
     "media",
+    "metadata",
+    "metadata.createdVia",
     "settings",
     "settings.accentColor",
     "settings.attachedToNextBlock",
@@ -3113,6 +3132,7 @@
     "settings.v",
     "settings.zoomOnClick",
     "type",
+    "updatedAt",
     "variant"
   ],
   "interactive/accordion": [
@@ -5429,7 +5449,10 @@
     "background.media.image.originalImage.sourcedFrom",
     "background.media.image.originalImage.type",
     "background.media.image.originalImage.useCrushedKey",
-    "background.media.image.overlayColor"
+    "background.media.image.overlayColor",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "text/paragraph": [
     "background",
@@ -5529,7 +5552,11 @@
     "background.media.image.originalImage.originalUrl",
     "background.media.image.originalImage.sourcedFrom",
     "background.media.image.originalImage.type",
-    "background.media.image.originalImage.useCrushedKey"
+    "background.media.image.originalImage.useCrushedKey",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "text/subheading": [
     "background",
@@ -5650,7 +5677,10 @@
     "background.media.image.dimensions",
     "background.media.image.dimensions.originalHeight",
     "background.media.image.dimensions.originalWidth",
-    "background.media.image.originalUrl"
+    "background.media.image.originalUrl",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "text/table": [
     "background",
