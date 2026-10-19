@@ -69,6 +69,13 @@ describe('logLineClass', () => {
     expect(cls('Search failed (HTTP 403)')).toBe('log-error');
   });
 
+  it('renders an unavailable OPTIONAL asset as a warning even with an HTTP status', () => {
+    expect(cls('[9/49 assets] OPTIONAL Fq8f-Eksport.mp4: HTTP 403')).toBe('log-warn');
+    expect(cls('[9/49 assets] OPTIONAL Fq8f-Eksport.mp4 (unavailable, not retried)')).toBe('log-warn');
+    // a REQUIRED miss stays red
+    expect(cls('[9/49 assets] FAILED Fq8f-Eksport.mp4: HTTP 500')).toBe('log-error');
+  });
+
   it('does NOT colorize on words inside course titles (the M/LOW bug)', () => {
     // Titles are user data; only the emitter's markers may set the color.
     expect(cls('Saved: Error handling')).toBe('');

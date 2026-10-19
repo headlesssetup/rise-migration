@@ -47,7 +47,10 @@ const PROGRESS_PREFIX = /^\s*(?:\[\d+\/\d+[^\]]*\]\s*)?/;
 const RULES: Array<[RegExp, string]> = [
   // Leading marker — the emitter's own classification, so it wins outright.
   [/^(?:FAILED|BLOCKED|ERROR|Failed|Aborting|Unauthorized)\b|^[⛔✗]/, 'log-error'],
-  [/^(?:WARN|PARTIAL|STOPPED)\b|^⚠/, 'log-warn'],
+  // OPTIONAL = capture-confirmed authoring provenance that could not be
+  // fetched; it is blanked without a flag at import, so its HTTP status is a
+  // warning, never a failure (the later `HTTP 4xx` rule must not see it).
+  [/^(?:WARN|PARTIAL|STOPPED|OPTIONAL)\b|^⚠/, 'log-warn'],
   [/^DRY\b/, 'log-dry'],
   [/^(?:OK|Done|Imported|Planned)\b|^✓/, 'log-ok'],
   // `<label>: MARKER` — the per-course/per-item form.
