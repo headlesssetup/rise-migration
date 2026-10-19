@@ -494,8 +494,11 @@ _v}` (`_v: 47` in every 2026-08-31 capture; **51 and 52 live by 2026-10** — th
 `/transaction` validator PINS `_v` to the service's current schema: EU answered
 `400 {"code":"invalid_value","values":[52],"path":["blockument","_v"],"message":"Invalid input: expected 52"}`
 to an archived 51 on 2026-10-19, so import adopts the `_v` that the target's own
-`createFromBlank` returns — `adoptSchemaVersion`; 52 added `shapeDef.orient:"normal"`
-on shapes, NOT synthesized); `item {id, blockumentId, parentId, type:
+`createFromBlank` returns — `adoptSchemaVersion` — and applies the KNOWN
+migrations: **51→52** makes `states.default.shapeDef.orient` required (enum
+`normal|cw|half|ccw|flip|flip-cw|flip-half|flip-ccw`, from the live 400 on the
+items transaction); v51 shapes get `"normal"` (unrotated, the value on every
+shape of the captured v52 graph). Unknown gaps ship verbatim + WARN); `item {id, blockumentId, parentId, type:
 group|text|shape|image, states:{default:{…, text?:{type:"tiptap", json}, fill?:
 {assetId?, crop?}, …}}, assets?:{<assetId>:{id, path, name, type, width,
 height}}, breakpointOverrides, localeOverrides, clonedFromId?, removed, _v}`.

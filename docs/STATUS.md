@@ -11,9 +11,13 @@ First DFO run (170 courses, US plane, `docs/findings-2026-10-15-dfo-export.md`).
   `invalid_value … path ["blockument","_v"] … expected 52` — the archive was
   captured at `_v: 51` (captures were 47). `adoptSchemaVersion`
   (`core/mondrian/remap.ts`) stamps the doc + every versioned item with the
-  `_v` the target's own `createFromBlank` returned; all other fields verbatim
-  (52's `shapeDef.orient` is NOT synthesized — a rejected item stays a loud
-  `partial`). Logged as a NOTE per blockument. Dry-run unchanged.
+  `_v` the target's own `createFromBlank` returned and applies the KNOWN
+  migrations between the two: 51→52 adds `states.default.shapeDef.orient:
+  "normal"` where absent (the second pilot 400'd on the items transaction with
+  the enum `normal|cw|half|ccw|flip|flip-cw|flip-half|flip-ccw`; v51 had no
+  orientation, the captured v52 graph has `normal` on every shape). Version
+  gaps without a known step ship verbatim + WARN. Logged as a NOTE per
+  blockument. Dry-run unchanged. Build `0.9.13a`.
 - **Novelty review:** 323 new field paths on 41 known variants accepted into
   `core/census/catalog.fields.json` + `docs/rise-block-catalog.md` (0 new
   variants). Notable: `items[].media.customVideo` (Rise stock video on

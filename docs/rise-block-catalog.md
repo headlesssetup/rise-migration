@@ -150,7 +150,8 @@ planes) and are referenced by `fill.assetId` + an in-item `assets` record map.
 Blockument schema `_v: 47` in every capture — a different `_v` is a novelty
 warning at export (51/52 seen 2026-10). The target's `/transaction` validator pins
 `_v` to its CURRENT schema (EU `expected 52`, 2026-10-19 pilot), so import stamps
-the doc + items with the `_v` returned by the target's `createFromBlank`. See `docs/rise-api-reference.md` §mondrian.
+the doc + items with the `_v` returned by the target's `createFromBlank` and applies
+the known 51→52 migration (`shapeDef.orient: "normal"` where absent). See `docs/rise-api-reference.md` §mondrian.
 
 ## Creator compiler donors added 2026-09-03 (docx storyboards)
 

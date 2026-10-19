@@ -97,8 +97,14 @@ export async function handleCreateBlockument(
   );
   const remapped = adopted.remapped;
   if (adopted.changed) {
+    const mig = adopted.migrations.length
+      ? `; migrated ${adopted.migrations.join(', ')}`
+      : '; fields shipped verbatim';
+    const gap = adopted.unbridged.length
+      ? `; WARN no known migration from v${adopted.unbridged.join(', v')} — fields verbatim, the server validator decides`
+      : '';
     log(
-      `${pfx()} NOTE blockument schema _v ${String(adopted.archivedV)} (archived) → ${String(targetV)} (target createFromBlank) adopted; fields shipped verbatim`,
+      `${pfx()} NOTE blockument schema _v ${String(adopted.archivedV)} (archived) → ${String(targetV)} (target createFromBlank) adopted${mig}${gap}`,
     );
   }
 

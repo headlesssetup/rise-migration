@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   adoptSchemaVersion,
+  type BlockumentItem,
   applyAssetMap,
   blockumentManifest,
   blockumentTransaction,
@@ -225,15 +226,42 @@ describe('adoptSchemaVersion', () => {
     for (const item of out.remapped.items) {
       if (item._v !== undefined) expect(item._v).toBe(52);
     }
-    // nothing else is touched — no field migration is guessed
+    // the doc itself is otherwise untouched
     const { _v: _a, ...docA } = out.remapped.doc;
     const { _v: _b, ...docB } = remapped().doc;
     expect(docA).toEqual(docB);
+    // 47→52 crosses 51→52 (known) and 47..51 (no steps) — reported, not guessed
+    expect(out.unbridged).toEqual([47, 48, 49, 50]);
+    expect(out.migrations).toEqual(['51→52 shapeDef.orient on 0 item(s)']);
+  });
+
+  it('51→52: adds shapeDef.orient "normal" to every shapeDef lacking it (live EU 400 enum, 2026-10-19)', () => {
+    const r = remapped();
+    r.doc._v = 51;
+    const [root, a, b] = r.items as [BlockumentItem, BlockumentItem, BlockumentItem];
+    a.states = { default: { shapeDef: { type: 'rectangle', borderRadius: { topLeft: 4 } } } };
+    b.states = { default: { shapeDef: { type: 'ellipse', orient: 'cw' } } };
+    root.states = { default: { fill: { assetId: 'x' } } };
+    const out = adoptSchemaVersion(r, 52);
+    expect(out.migrations).toEqual(['51→52 shapeDef.orient on 1 item(s)']);
+    expect(out.unbridged).toEqual([]);
+    const byId = new Map(out.remapped.items.map((i) => [i.id, i]));
+    const sdA = (byId.get(a.id)!.states as { default: { shapeDef: Record<string, unknown> } }).default.shapeDef;
+    expect(sdA).toEqual({ type: 'rectangle', borderRadius: { topLeft: 4 }, orient: 'normal' });
+    const sdB = (byId.get(b.id)!.states as { default: { shapeDef: Record<string, unknown> } }).default.shapeDef;
+    expect(sdB.orient).toBe('cw'); // an existing value is never overwritten
+    expect(byId.get(root.id)!.states).toEqual({ default: { fill: { assetId: 'x' } } });
   });
 
   it('is a no-op when the target version is unknown (dry-run) or already matches', () => {
     const r = remapped();
-    expect(adoptSchemaVersion(r, undefined)).toEqual({ remapped: r, archivedV: 47, changed: false });
+    expect(adoptSchemaVersion(r, undefined)).toEqual({
+      remapped: r,
+      archivedV: 47,
+      changed: false,
+      migrations: [],
+      unbridged: [],
+    });
     expect(adoptSchemaVersion(r, 47).changed).toBe(false);
     expect(adoptSchemaVersion(r, 47).remapped).toBe(r);
   });
