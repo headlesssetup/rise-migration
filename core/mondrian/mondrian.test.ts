@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  adoptSchemaVersion,
   applyAssetMap,
   blockumentManifest,
   blockumentTransaction,
@@ -206,5 +207,34 @@ describe('applyAssetMap', () => {
     // no old references anywhere
     expect(JSON.stringify(remapped)).not.toContain('cmtgvpgwa036d073v6gvrao0x');
     expect(JSON.stringify(remapped)).not.toContain(SRC_BID);
+  });
+});
+
+describe('adoptSchemaVersion', () => {
+  const mintUuid = () => {
+    let n = 0;
+    return () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
+  };
+  const remapped = () => remapBlockumentGraph(fixtureGraph(), SRC_BID, NEW_BID, 'C', mintUuid());
+
+  it('stamps the target _v on the doc and every versioned item (live EU 2026-10-19: expected 52)', () => {
+    const out = adoptSchemaVersion(remapped(), 52);
+    expect(out.changed).toBe(true);
+    expect(out.archivedV).toBe(47);
+    expect(out.remapped.doc._v).toBe(52);
+    for (const item of out.remapped.items) {
+      if (item._v !== undefined) expect(item._v).toBe(52);
+    }
+    // nothing else is touched — no field migration is guessed
+    const { _v: _a, ...docA } = out.remapped.doc;
+    const { _v: _b, ...docB } = remapped().doc;
+    expect(docA).toEqual(docB);
+  });
+
+  it('is a no-op when the target version is unknown (dry-run) or already matches', () => {
+    const r = remapped();
+    expect(adoptSchemaVersion(r, undefined)).toEqual({ remapped: r, archivedV: 47, changed: false });
+    expect(adoptSchemaVersion(r, 47).changed).toBe(false);
+    expect(adoptSchemaVersion(r, 47).remapped).toBe(r);
   });
 });

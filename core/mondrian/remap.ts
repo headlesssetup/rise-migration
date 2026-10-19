@@ -140,3 +140,39 @@ export function applyAssetMap(
     return substitute(out, sub);
   });
 }
+
+/**
+ * Stamp the TARGET's blockument schema version onto a remapped graph.
+ *
+ * The mondrian transaction validator checks `_v` against the service's CURRENT
+ * schema (live 2026-10-19, EU: `{"code":"invalid_value","values":[52],"path":
+ * ["blockument","_v"],"message":"Invalid input: expected 52"}` for an archive
+ * captured at 51). The archived number is the SOURCE plane's version at export
+ * time; the only authoritative value for the target is what its own
+ * `createFromBlank` just returned, so adopt that on the doc and every item.
+ * Everything else stays verbatim — no field migration is guessed here (the
+ * 51→52 bump added `shapeDef.orient` on shapes; if the target rejects an item
+ * for a missing field it 400s loudly and the course stays `partial`).
+ * `targetV` undefined (dry-run, or a response without `_v`) → unchanged.
+ */
+export function adoptSchemaVersion(
+  remapped: RemappedBlockument,
+  targetV: number | undefined,
+): { remapped: RemappedBlockument; archivedV: number | undefined; changed: boolean } {
+  const archivedV = remapped.doc._v;
+  if (typeof targetV !== 'number' || !Number.isFinite(targetV)) {
+    return { remapped, archivedV, changed: false };
+  }
+  const changed =
+    archivedV !== targetV || remapped.items.some((i) => i._v !== undefined && i._v !== targetV);
+  if (!changed) return { remapped, archivedV, changed: false };
+  return {
+    remapped: {
+      ...remapped,
+      doc: { ...remapped.doc, _v: targetV },
+      items: remapped.items.map((i) => (i._v === undefined ? i : { ...i, _v: targetV })),
+    },
+    archivedV,
+    changed: true,
+  };
+}

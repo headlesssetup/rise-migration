@@ -15,7 +15,12 @@ export {
   collectGraphAssets,
   remapBlockumentRefs,
 } from './collect';
-export { applyAssetMap, remapBlockumentGraph, type RemappedBlockument } from './remap';
+export {
+  adoptSchemaVersion,
+  applyAssetMap,
+  remapBlockumentGraph,
+  type RemappedBlockument,
+} from './remap';
 export {
   blockumentManifest,
   blockumentTransaction,

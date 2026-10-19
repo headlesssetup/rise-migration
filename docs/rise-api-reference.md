@@ -490,7 +490,12 @@ Captured endpoints (`-mondrian{,2,3}.mitm` — EU create/edit + US plane parity)
 
 Document shape: `blockument {id, title, children:[{id, visualOrder,
 clonedFromId?}], triggers, authoringOpened, createdFromTemplateId?, responsive,
-_v}` (`_v: 47` in every capture); `item {id, blockumentId, parentId, type:
+_v}` (`_v: 47` in every 2026-08-31 capture; **51 and 52 live by 2026-10** — the
+`/transaction` validator PINS `_v` to the service's current schema: EU answered
+`400 {"code":"invalid_value","values":[52],"path":["blockument","_v"],"message":"Invalid input: expected 52"}`
+to an archived 51 on 2026-10-19, so import adopts the `_v` that the target's own
+`createFromBlank` returns — `adoptSchemaVersion`; 52 added `shapeDef.orient:"normal"`
+on shapes, NOT synthesized); `item {id, blockumentId, parentId, type:
 group|text|shape|image, states:{default:{…, text?:{type:"tiptap", json}, fill?:
 {assetId?, crop?}, …}}, assets?:{<assetId>:{id, path, name, type, width,
 height}}, breakpointOverrides, localeOverrides, clonedFromId?, removed, _v}`.

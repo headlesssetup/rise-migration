@@ -12,6 +12,7 @@
 // every block's `blockumentId` through it (a dangling id 404s boot).
 
 import {
+  adoptSchemaVersion,
   applyAssetMap,
   blockumentTransaction,
   collectGraphAssets,
@@ -65,6 +66,7 @@ export async function handleCreateBlockument(
   const created = await send(createBlockumentFromBlank(p, ctx.newCourseId), step.kind);
   let newBid: string;
   let canvasId: string;
+  let targetV: number | undefined;
   if (dryRun) {
     newBid = mintUuid();
     canvasId = mintUuid();
@@ -76,6 +78,9 @@ export async function handleCreateBlockument(
       | { id?: unknown }
       | undefined;
     canvasId = typeof canvas?.id === 'string' ? canvas.id : '';
+    // The target's CURRENT schema version — the transaction validator pins it.
+    const createdDoc = isObject(created.blockuments) ? created.blockuments[newBid] : undefined;
+    targetV = isObject(createdDoc) && typeof createdDoc._v === 'number' ? createdDoc._v : undefined;
     if (!newBid || !canvasId) {
       throw new WriteError(
         'createFromBlank returned no blockument/canvas id',
@@ -86,7 +91,16 @@ export async function handleCreateBlockument(
   }
 
   // 2. Remap the archived graph onto the created blockument.
-  const remapped = remapBlockumentGraph(graph, step.sourceBlockumentId, newBid, canvasId, mintUuid);
+  const adopted = adoptSchemaVersion(
+    remapBlockumentGraph(graph, step.sourceBlockumentId, newBid, canvasId, mintUuid),
+    targetV,
+  );
+  const remapped = adopted.remapped;
+  if (adopted.changed) {
+    log(
+      `${pfx()} NOTE blockument schema _v ${String(adopted.archivedV)} (archived) → ${String(targetV)} (target createFromBlank) adopted; fields shipped verbatim`,
+    );
+  }
 
   // 3. Upload the graph's assets and build the asset id/path map.
   const assetMap = new Map<string, { id: string; path: string }>();
