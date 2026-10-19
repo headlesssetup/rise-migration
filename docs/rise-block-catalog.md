@@ -147,8 +147,11 @@ S3 PUT + `CRUSH_IMAGE` → full-state `transaction` upserts) and remaps the
 block's `blockumentId`. Item images live under the dedicated media namespace
 `mondrian/assets/blockument/<bid>/<assetId>.<ext>` (public usercontent, both
 planes) and are referenced by `fill.assetId` + an in-item `assets` record map.
-Blockument schema `_v: 47` in every capture — a different `_v` is a novelty
-warning at export (51/52 seen 2026-10). The target's `/transaction` validator pins
+Blockument schema `_v` was 47 in every 2026-08 capture, 51/52 in the wild by
+2026-10. Export logs each graph's `_v` and warns only when it is ABOVE
+`MAX_KNOWN_BLOCKUMENT_V` (the version the newest known migration lands on, 52)
+or missing — a never-seen schema whose migration must be captured from the
+editor first (v0.9.14). The target's `/transaction` validator pins
 `_v` to its CURRENT schema (EU `expected 52`, 2026-10-19 pilot), so import stamps
 the doc + items with the `_v` returned by the target's `createFromBlank` and applies
 the known 51→52 migration (`shapeDef.orient: "normal"` where absent). See `docs/rise-api-reference.md` §mondrian.

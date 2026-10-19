@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Storage } from '@/core/storage/storage';
 import type { BackgroundResponse } from '@/shared/messaging';
 import { rpc } from '../rpc';
-import { exportCourses } from './courses';
+import { blockumentVersionLine, exportCourses } from './courses';
 import type { ProgressEvent } from './shared';
 
 vi.mock('../rpc', () => ({ rpc: vi.fn() }));
@@ -84,5 +84,25 @@ describe('exportCourses auth recovery boundary', () => {
     expect(rpcMock).toHaveBeenCalledTimes(2);
     expect(written).toEqual(['b']);
     expect(result).toEqual({ saved: 1, skipped: 0, failed: ['a'] });
+  });
+});
+
+describe('blockumentVersionLine (schema _v tripwire)', () => {
+  it('logs a known version as plain INFO — 51 and 52 are bridged/known, 47 is a known gap', () => {
+    for (const v of [47, 51, 52]) {
+      const line = blockumentVersionLine('[1/1]', 'B', v);
+      expect(line).not.toContain('WARN');
+      expect(line).toContain(`_v=${v}`);
+    }
+  });
+  it('warns on a version newer than the migration table, naming what to capture', () => {
+    const line = blockumentVersionLine('[1/1]', 'B', 53);
+    expect(line).toContain('WARN');
+    expect(line).toContain('_v=53');
+    expect(line).toContain('knows up to 52');
+    expect(line).toContain('capture the editor');
+  });
+  it('warns on a doc with no _v', () => {
+    expect(blockumentVersionLine('[1/1]', 'B', undefined)).toContain('WARN');
   });
 });

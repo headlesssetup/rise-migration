@@ -885,8 +885,9 @@ editor (lazy fetch) looked fine. Protocol details in `rise-api-reference.md`
   (`BlockumentArchive`, checksummed in the archive manifest as
   `blockuments`/`blockumentsSha256`); the graphs' `mondrian/assets/blockument/…`
   keys join the course's asset manifest + content-addressed store (a NEW media
-  namespace; owner = the blockumentId path segment). A blockument `_v` ≠ 47 is
-  a loud novelty warning. A failed/missing manifest marks the course failed —
+  namespace; owner = the blockumentId path segment). A blockument `_v` ABOVE
+  `MAX_KNOWN_BLOCKUMENT_V` (`core/mondrian/remap.ts`, 52) or missing is a loud
+  warning — a schema the importer cannot bridge; known versions log as info. A failed/missing manifest marks the course failed —
   its import would ship a dangling ref.
 - **Import** (plan `create-blockument`, BEFORE the lesson's create-blocks,
   mirroring the editor's createFromBlank→CREATE_BLOCKS order): createFromBlank

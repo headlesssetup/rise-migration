@@ -16,6 +16,7 @@ export {
   remapBlockumentRefs,
 } from './collect';
 export {
+  MAX_KNOWN_BLOCKUMENT_V,
   adoptSchemaVersion,
   applyAssetMap,
   remapBlockumentGraph,

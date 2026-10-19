@@ -11,6 +11,7 @@ import {
   materializeLocale,
 } from '@/core/l10n';
 import {
+  MAX_KNOWN_BLOCKUMENT_V,
   blockumentManifest,
   collectBlockumentIds,
   type BlockumentArchive,
@@ -117,6 +118,18 @@ export interface ExportResult {
  * whose blockuments are missing cannot be imported (a dangling `blockumentId`
  * 404s preview/publish boot on the target, 2026-08-31 root cause).
  */
+/** One log line per archived blockument: INFO for a known `_v`, WARN when
+ *  the version is above MAX_KNOWN_BLOCKUMENT_V or missing. Never blocks. */
+export function blockumentVersionLine(pfx: string, bid: string, v: unknown): string {
+  if (typeof v !== 'number') {
+    return `${pfx} WARN: blockument ${bid} has no schema _v — archived verbatim; the target validator decides at import`;
+  }
+  if (v > MAX_KNOWN_BLOCKUMENT_V) {
+    return `${pfx} WARN: blockument ${bid} has schema _v=${String(v)}, newer than the importer's migration table (knows up to ${String(MAX_KNOWN_BLOCKUMENT_V)}) — capture the editor's migration for v${String(v)} before import; the server validator decides otherwise`;
+  }
+  return `${pfx} blockument ${bid} schema _v=${String(v)}`;
+}
+
 export async function fetchCourseBlockuments(
   courseId: string,
   doc: unknown,
@@ -182,14 +195,12 @@ export async function fetchCourseBlockuments(
       if (!graph.blockuments?.[bid]) throw new Error('manifest has no blockument doc');
       existing[bid] = graph;
       const v = graph.blockuments[bid]?._v;
-      if (v !== undefined && v !== 47) {
-        // Novelty tripwire: every 2026-08-31 capture was `_v: 47`. A different
-        // schema version is archived verbatim but must not pass unnoticed.
-        onEvent({
-          kind: 'log',
-          message: `${pfx} WARN: blockument ${bid} has schema _v=${String(v)} (captures were 47) — review before import`,
-        });
-      }
+      // Schema-version tripwire. The archive keeps `_v` verbatim; the
+      // importer adopts the TARGET's version and bridges known gaps, so the
+      // only versions that must not pass unnoticed are ones NEWER than the
+      // migration table (never seen — capture the editor's migration first)
+      // and a doc with no version at all.
+      onEvent({ kind: 'log', message: blockumentVersionLine(pfx, bid, v) });
     } catch (e) {
       failed += 1;
       onEvent({

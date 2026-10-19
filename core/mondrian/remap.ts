@@ -183,6 +183,13 @@ const MIGRATIONS: Record<number, (item: BlockumentItem) => { item: BlockumentIte
   51: migrate51to52,
 };
 
+/** The newest blockument schema the importer can migrate TO (highest
+ *  MIGRATIONS key + 1). Export compares each archived graph's `_v` against
+ *  this: a graph at or below it is either bridged or a known gap the server
+ *  validator polices at import; one ABOVE it is a schema we have never seen,
+ *  so its migration must be captured from the editor before import. */
+export const MAX_KNOWN_BLOCKUMENT_V: number = Math.max(...Object.keys(MIGRATIONS).map(Number)) + 1;
+
 /**
  * Stamp the TARGET's blockument schema version onto a remapped graph, applying
  * the known field migrations between the archived and the target version.

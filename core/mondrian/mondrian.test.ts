@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_KNOWN_BLOCKUMENT_V,
   adoptSchemaVersion,
   type BlockumentItem,
   applyAssetMap,
@@ -264,5 +265,11 @@ describe('adoptSchemaVersion', () => {
     });
     expect(adoptSchemaVersion(r, 47).changed).toBe(false);
     expect(adoptSchemaVersion(r, 47).remapped).toBe(r);
+  });
+});
+
+describe('MAX_KNOWN_BLOCKUMENT_V', () => {
+  it('is the version the newest known migration lands on (51→52)', () => {
+    expect(MAX_KNOWN_BLOCKUMENT_V).toBe(52);
   });
 });
