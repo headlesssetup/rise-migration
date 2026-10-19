@@ -4,7 +4,7 @@
 // bodies below are verbatim moves with identical mutation semantics; the
 // characterization test freezes the emitted step order.
 
-import { collectAssetKeys } from '@/core/assets/keys';
+import { collectAssetKeys, type OptionalAssetReason } from '@/core/assets/keys';
 import { collectBlockumentRefs, collectGraphAssets } from '@/core/mondrian';
 import { isKnownLegacyStorylineBlock } from '@/core/storyline/compatibility';
 import type { Block, Lesson } from '@/shared/types/rise';
@@ -66,6 +66,18 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
   // Monolingual: called with the raw course near the end of the plan. Stack:
   // called with the MATERIALIZED course BEFORE the conversion (the conversion
   // turns the plain image objects into refs + default-locale cells itself).
+  // DOC-WIDE optional classification (capture-confirmed non-rendering
+  // provenance: `media.tmp`, `originalImage`, distinct `inputKey`, the inactive
+  // image variant). A key is optional only when EVERY occurrence in the whole
+  // document is — one live occurrence promotes it to required (collectAssetKeys).
+  // The plan's AssetEntry carries a reason only for UNAVAILABLE optional bytes,
+  // so a downloaded-but-optional key must be classified here.
+  const docOptionalReason = new Map(
+    collectAssetKeys(input.course, sourceCourseId)
+      .filter((ak) => ak.optionalReason)
+      .map((ak) => [ak.key, ak.optionalReason as OptionalAssetReason] as const),
+  );
+
   const planCourseImages = (c: Record<string, unknown>): void => {
     const coverKey = coverCardImageKey(c.coverImage);
     const cardKey = coverCardImageKey(c.cardImage);
@@ -83,23 +95,49 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
     const builtinCard = !cardKey && courseImageKind(c.cardImage) === 'builtin';
     const builtinMedia = !mediaKey && courseImageKind(c.media) === 'builtin';
     const builtinHeader = !headerKey && courseImageKind(c.lessonHeaderImage) === 'builtin';
-    const anyBuiltin = builtinCover || builtinCard || builtinMedia || builtinHeader;
-    if (!coverKey && !cardKey && !mediaKey && !headerKey && !anyBuiltin) return;
+    const has = {
+      cover: !!coverKey || builtinCover,
+      card: !!cardKey || builtinCard,
+      media: !!mediaKey || builtinMedia,
+      header: !!headerKey || builtinHeader,
+    };
     // Orphaned course-image keys (deleted at source, no archived bytes) are
     // flagged BEFORE the set-course-images step, mirroring block/lesson media:
     // the executor blanks them (keyMap → '') so UPDATE_COURSE ships without the
     // image and the course still succeeds — with a flag, not a late hard-fail.
     const flaggedImgKeys = new Set<string>();
-    const courseImages: [unknown, string][] = [
-      [c.coverImage, 'course cover image'],
-      [c.cardImage, 'course card image'],
-      [c.media, 'course logo'],
-      [c.lessonHeaderImage, 'course lesson-header image'],
+    const courseImages: [unknown, string, boolean][] = [
+      [c.coverImage, 'course cover image', has.cover],
+      [c.cardImage, 'course card image', has.card],
+      [c.media, 'course logo', has.media],
+      [c.lessonHeaderImage, 'course lesson-header image', has.header],
     ];
-    for (const [img, where] of courseImages) {
+    for (const [img, where, shipped] of courseImages) {
       for (const ak of collectAssetKeys(img, sourceCourseId)) {
-        handledKeys.add(ak.key);
         const entry = assetByKey.get(ak.key);
+        if (!shipped) {
+          // (entry is undefined for a key the archive never listed; the doc-wide
+          // scan still classifies it.)
+          // The slot is NOT written (no active image, no built-in ref) — e.g. a
+          // logo slot holding only abandoned `media.tmp` staging (live DFO
+          // 2026-10-19: 5 courses). Marking its keys handled here used to let
+          // them survive unremapped (nothing uploaded, nothing blanked, and the
+          // unsupported sweep skipped them). Doc-wide optional provenance is
+          // blanked without a flag; anything else is left for its live
+          // occurrence or the unsupported-media sweep.
+          const reason = entry?.optionalReason ?? docOptionalReason.get(ak.key);
+          if (reason && !handledKeys.has(ak.key)) {
+            handledKeys.add(ak.key);
+            steps.push({
+              kind: 'drop-optional-media',
+              sourceKey: ak.key,
+              reason,
+              summary: `Drop optional ${reason} in an unwritten ${where} slot: ${ak.key}`,
+            });
+          }
+          continue;
+        }
+        handledKeys.add(ak.key);
         if (entry?.optionalUnavailable) continue;
         if ((entry?.orphaned || (entry && !entry.file)) && !flaggedImgKeys.has(ak.key)) {
           flaggedImgKeys.add(ak.key);
@@ -113,12 +151,7 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
         }
       }
     }
-    const has = {
-      cover: !!coverKey || builtinCover,
-      card: !!cardKey || builtinCard,
-      media: !!mediaKey || builtinMedia,
-      header: !!headerKey || builtinHeader,
-    };
+    if (!has.cover && !has.card && !has.media && !has.header) return;
     const label = [
       has.cover && `cover${builtinCover ? ' (built-in)' : ''}`,
       has.card && `card${builtinCard ? ' (built-in)' : ''}`,

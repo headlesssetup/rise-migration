@@ -445,6 +445,43 @@ describe('buildPlan media + flags', () => {
     ).toBe(false);
   });
 
+  it('blanks (no flag) abandoned `media.tmp` staging in a logo slot that has no active image', () => {
+    // Live DFO 2026-10-19: `course.media` held ONLY `{tmp:{image:{key,crushedKey}}}`.
+    // The slot is never written (no active image, no built-in ref), so its keys
+    // must be dropped — not marked handled and left to survive unremapped.
+    const key = 'rise/courses/SRC/logo.png';
+    const crushed = 'rise/courses/SRC/crushed.png';
+    const steps = buildPlan(
+      input({
+        assets: [
+          { key, kind: 'media-image', file: 'assets/a.png' },
+          { key: crushed, kind: 'media-image', file: 'assets/b.png' },
+          { key: 'rise/courses/SRC/cover.jpg', kind: 'media-image', file: 'assets/c.jpg' },
+        ],
+        course: {
+          course: {
+            id: 'SRC',
+            title: 'C',
+            coverImage: { media: { image: { key: 'rise/courses/SRC/cover.jpg' } } },
+            media: { tmp: { image: { key, crushedKey: crushed, useCrushedKey: true } } },
+          },
+          lessons: [
+            { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1', family: 'text', variant: 'p', items: [] }] },
+          ],
+        },
+      }),
+    );
+    for (const k of [key, crushed]) {
+      expect(steps).toContainEqual(
+        expect.objectContaining({ kind: 'drop-optional-media', sourceKey: k, reason: 'temporary-media' }),
+      );
+    }
+    const sc = steps.find((s) => s.kind === 'set-course-images') as { hasMedia: boolean } | undefined;
+    expect(sc?.hasMedia).toBe(false);
+    expect(steps.some((s) => s.kind === 'flag-unsupported-media')).toBe(false);
+    expect(steps.some((s) => s.kind === 'flag-orphan-media')).toBe(false);
+  });
+
   it('still flags a theme/header image that is not the cover/card', () => {
     const steps = buildPlan(
       input({
