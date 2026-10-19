@@ -148,7 +148,10 @@ block's `blockumentId`. Item images live under the dedicated media namespace
 `mondrian/assets/blockument/<bid>/<assetId>.<ext>` (public usercontent, both
 planes) and are referenced by `fill.assetId` + an in-item `assets` record map.
 Blockument schema `_v: 47` in every capture — a different `_v` is a novelty
-warning at export. See `docs/rise-api-reference.md` §mondrian.
+warning at export (51/52 seen 2026-10). The target's `/transaction` validator pins
+`_v` to its CURRENT schema (EU `expected 52`, 2026-10-19 pilot), so import stamps
+the doc + items with the `_v` returned by the target's `createFromBlank` and applies
+the known 51→52 migration (`shapeDef.orient: "normal"` where absent). See `docs/rise-api-reference.md` §mondrian.
 
 ## Creator compiler donors added 2026-09-03 (docx storyboards)
 
@@ -190,6 +193,16 @@ stays copy-faithful.
 | `buttons/button` | `settings.buttonRadius` | **accepted current Rise schema** — button corner radius. Copy-faithful, parity-verified. | same |
 | `image/hero` | `metadata.isHeroImage` | **accepted current Rise schema** — editor marker. Copy-faithful, same `metadata` caveat. | same |
 | `image/hero` | `items[].media.image.translationOverride` | **new field** — multi-language feature: marks a media cell a language OVERRIDE (set when a target language's asset is swapped; the cell then stops following the source language). Copy-faithful; carried verbatim in the l10n cell. | novelty run 2026-08-02 (EU stack `AEDTROY…`), capture `capture1aug_2.mitm`; see `docs/rise-multilang.md` §2/§4.3 |
+
+| 23 further variants (`continue`, `divider`, `flashcard`, `gallery`, `image`, `impact`, `interactive`, `interactive-fullscreen`, `list`, `multimedia`, `quote`, `text`) | `metadata.contentValidation{,.pass,.version}` (+ bare `metadata`), `createdAt`/`updatedAt` | **accepted** — same editor stamp / server timestamps as the rows above, now seen on the rest of the library. | `DFO-15oct` export 2026-10-15/19 (US, 170 courses, 55 variants, 0 new variants); see `docs/findings-2026-10-15-dfo-export.md`. |
+| image slots on more variants (`background.media.image`, `items[].avatar`, `items[].background`, `items[].front`, `items[].media`) | `originalImage.*`, `dimensions.*`, `isSquare`, `align`, `alt`, `isSkipCrush`, `imageType`, `isProcessing`, `sourcedFrom`, `overlayColor`, `alpha`; block background `background.{key,type,useCrushedKey}` on `continue`, `flashcard`, `image/text aside`, `text/paragraph` | **accepted current Rise schema** — the `_mercedes2` image/background metadata union, reached from more slots. Keys are covered by the generic scan. | same |
+| `interactive/tabs`, `interactive-fullscreen/labeledgraphic`, `multimedia/video`, `quote/b`, `quote/background`, `interactive-fullscreen/timeline` | `items[].media.video.*` incl. `captions[].{id,key,code,name,filename,url}`, `captionUID`; `media.tmp.*` incl. `uploadProgress`, `error` | **accepted** — the `multimedia/video` record inside item slots (caption `.vtt` keys archived + remapped); `tmp` is transient upload state = OPTIONAL provenance, blanked silently when unavailable. | same |
+| `interactive/accordion`, `interactive/tabs` | `items[].media.embed.{embedType,src,originalUrl,type,provider,providerUrl,favicon,thumbnail,title,description}`, `items[].settings.showMetaData` | **new field (benign)** — embedly link-preview card inside an item; external URLs, copy-faithful. | same |
+| `multimedia/video` | `items[].media.customVideo.{src,poster,subtitle,thumbnail,title}` | **new shape** — Rise stock sample video (`https://video.riseusercontent.com/PRMG-…/*.m3u8`, public CloudFront, HEAD 200 from EU). Not an uploadable key, no host regex matches it → copied verbatim, no probe/flag today (seen only in Rise sample-derived courses "Online Security Fundamentals", "Verktøykasse for <xxxxxxx>"). | same |
+| `image/text aside` | `items[].media.image.aiImageGenSettings.{prompt,style,orientation}` | **new field (benign)** — AI image-generation provenance text; copy-faithful. | same |
+| `impact/b`, `impact/d`, `multimedia/embed`, `text/paragraph`, `text/subheading paragraph`, `quote/a` | `settings.{backgroundMode,styleMode,noteIcon,noteSize,columns,images,divider,dividerPadding,dividerSize,isCustomColor,customPaddingTop,customPaddingBottom}` | **accepted current Rise schema** — Mighty style modes / note / column / divider settings (the style harvest already models them). | same |
+| `interactive-fullscreen/scenario` | `items[].character.poses.115.*` | **accepted** — one more pose record (`cdn.articulate.com/content-pass/uploads/…`), built-in, shipped verbatim. | same |
+| `mondrian/mondrian` | **`blocumentId`** (sic, alongside `blockumentId`) | **new field — provenance, NOT remapped.** Present only on Custom blocks inserted from a block template: it names the TEMPLATE's blockument in the source plane's mondrian service (`account/block-templates.json` carries the same ids), while `blockumentId` is the course's own copy. `collectBlockumentIds` ignores it, so it ships verbatim as a US-only id. Whether EU boot resolves it is UNVERIFIED — pilot one affected course (`GtgN_Ipg…`) before the batch; strip on write if boot 404s. Blockument schema `_v` now 51/52 in the wild (captures: 47); 52 adds `shapeDef.orient`. | same |
 
 ## Review queue (auto-captured, awaiting classification)
 

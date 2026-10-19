@@ -140,3 +140,112 @@ export function applyAssetMap(
     return substitute(out, sub);
   });
 }
+
+/**
+ * Known schema migrations, applied ONLY when adopting a target `_v` that is
+ * newer than the archived one. Each entry is capture/server-derived, never a
+ * guess: the server's own 400 names the field and its enum, and an archived
+ * graph already at the newer version shows the value every migrated instance
+ * carries.
+ *
+ *  51 → 52 — `states.default.shapeDef.orient` became REQUIRED on every item
+ *  that has a `shapeDef` (live EU 2026-10-19: `invalid_value … values:
+ *  ["normal","cw","half","ccw","flip","flip-cw","flip-half","flip-ccw"]
+ *  … path ["items",<id>,"states","default","shapeDef","orient"]`). v51 had no
+ *  orientation concept, so every v51 shape renders unrotated = `"normal"` —
+ *  the value on all 15 shapes of the one v52 graph the DFO export captured.
+ */
+const SHAPE_ORIENT_DEFAULT = 'normal';
+
+function migrate51to52(item: BlockumentItem): { item: BlockumentItem; touched: number } {
+  let touched = 0;
+  const walk = (n: unknown): unknown => {
+    if (Array.isArray(n)) return n.map(walk);
+    if (!isObject(n)) return n;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(n)) {
+      if (k === 'shapeDef' && isObject(v) && !('orient' in v)) {
+        out[k] = { ...v, orient: SHAPE_ORIENT_DEFAULT };
+        touched++;
+      } else {
+        out[k] = walk(v);
+      }
+    }
+    return out;
+  };
+  return { item: walk(item) as BlockumentItem, touched };
+}
+
+/** Migration steps keyed by the version they START from. A gap (an archived
+ *  or target version with no step) is NOT bridged — fields ship verbatim and
+ *  the server's validator is the loud tripwire. */
+const MIGRATIONS: Record<number, (item: BlockumentItem) => { item: BlockumentItem; touched: number }> = {
+  51: migrate51to52,
+};
+
+/**
+ * Stamp the TARGET's blockument schema version onto a remapped graph, applying
+ * the known field migrations between the archived and the target version.
+ *
+ * The mondrian transaction validator checks `_v` against the service's CURRENT
+ * schema (live 2026-10-19, EU: `{"code":"invalid_value","values":[52],"path":
+ * ["blockument","_v"],"message":"Invalid input: expected 52"}` for an archive
+ * captured at 51). The archived number is the SOURCE plane's version at export
+ * time; the only authoritative value for the target is what its own
+ * `createFromBlank` just returned, so adopt that on the doc and every item.
+ * Then walk MIGRATIONS from the archived version up to the target; versions
+ * without a known step leave fields verbatim (a rejected item 400s loudly and
+ * the course stays `partial`). `targetV` undefined (dry-run, or a response
+ * without `_v`) → unchanged.
+ */
+export function adoptSchemaVersion(
+  remapped: RemappedBlockument,
+  targetV: number | undefined,
+): {
+  remapped: RemappedBlockument;
+  archivedV: number | undefined;
+  changed: boolean;
+  /** Migration steps applied, e.g. ["51→52 shapeDef.orient on 12 item(s)"]. */
+  migrations: string[];
+  /** Versions between archived and target with NO known migration step. */
+  unbridged: number[];
+} {
+  const archivedV = remapped.doc._v;
+  if (typeof targetV !== 'number' || !Number.isFinite(targetV)) {
+    return { remapped, archivedV, changed: false, migrations: [], unbridged: [] };
+  }
+  const changed =
+    archivedV !== targetV || remapped.items.some((i) => i._v !== undefined && i._v !== targetV);
+  if (!changed) return { remapped, archivedV, changed: false, migrations: [], unbridged: [] };
+
+  let items = remapped.items;
+  const migrations: string[] = [];
+  const unbridged: number[] = [];
+  if (typeof archivedV === 'number' && archivedV < targetV) {
+    for (let v = archivedV; v < targetV; v++) {
+      const step = MIGRATIONS[v];
+      if (!step) {
+        unbridged.push(v);
+        continue;
+      }
+      let touched = 0;
+      items = items.map((i) => {
+        const r = step(i);
+        touched += r.touched;
+        return r.item;
+      });
+      migrations.push(`${v}→${v + 1}${v === 51 ? ' shapeDef.orient' : ''} on ${touched} item(s)`);
+    }
+  }
+  return {
+    remapped: {
+      ...remapped,
+      doc: { ...remapped.doc, _v: targetV },
+      items: items.map((i) => (i._v === undefined ? i : { ...i, _v: targetV })),
+    },
+    archivedV,
+    changed: true,
+    migrations,
+    unbridged,
+  };
+}

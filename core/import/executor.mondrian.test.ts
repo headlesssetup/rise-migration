@@ -102,7 +102,8 @@ function mondrianCourse(): PlanInput {
 const mondrianHandlers = {
   ...happyHandlers,
   createFromBlank: () => ({
-    blockuments: { [NEW_BID]: { id: NEW_BID, title: 'Custom Block', children: [], _v: 47 } },
+    // The target's CURRENT schema (live EU 2026-10-19: 52) while the archive is 47.
+    blockuments: { [NEW_BID]: { id: NEW_BID, title: 'Custom Block', children: [], _v: 52 } },
     items: {
       [CANVAS_ID]: { id: CANVAS_ID, blockumentId: NEW_BID, parentId: NEW_BID, type: 'group' },
     },
@@ -193,8 +194,12 @@ describe('executePlan — mondrian happy path', () => {
     const txs = sent.filter((s) => s.url.includes('/transaction'));
     expect(txs.length).toBe(2); // 1 doc + 1 items map
     expect(txs[0]!.url).toContain(NEW_BID);
-    const docTx = txs[0]!.body as { blockument: { id: string; children: { id: string }[] } };
+    const docTx = txs[0]!.body as {
+      blockument: { id: string; _v?: number; children: { id: string }[] };
+    };
     expect(docTx.blockument.id).toBe(NEW_BID);
+    // the transaction validator pins _v to the target's schema — adopted from createFromBlank
+    expect(docTx.blockument._v).toBe(52);
     expect(docTx.blockument.children[0]!.id).toBe(CANVAS_ID);
     const itemsTx = txs[1]!.body as { items: Record<string, { parentId: string }> };
     const itemIds = Object.keys(itemsTx.items);

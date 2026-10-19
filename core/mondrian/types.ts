@@ -39,7 +39,9 @@ export interface BlockumentItem {
 
 /** The blockument document itself. Copy-faithful except `id` and
  *  `children[].id` (which reference item ids). `_v` is the schema version
- *  (47 in every 2026-08-31 capture) — archived verbatim, surfaced in reports. */
+ *  (47 in every 2026-08-31 capture; 51/52 in the wild by 2026-10) — archived
+ *  verbatim, surfaced in reports; on import the TARGET's version is adopted
+ *  (`adoptSchemaVersion`) because the transaction validator pins it. */
 export interface BlockumentDoc {
   id: string;
   title?: string;

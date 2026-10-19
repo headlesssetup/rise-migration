@@ -419,7 +419,10 @@
     "background.media.image.dimensions.originalWidth",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "background.key",
+    "background.type",
+    "background.useCrushedKey"
   ],
   "divider/divider": [
     "background",
@@ -460,7 +463,9 @@
     "type",
     "variant",
     "settings.customPaddingBottom",
-    "settings.customPaddingTop"
+    "settings.customPaddingTop",
+    "createdAt",
+    "updatedAt"
   ],
   "divider/numbered divider": [
     "background",
@@ -546,7 +551,9 @@
     "settings.styleMode",
     "settings.v",
     "type",
-    "variant"
+    "variant",
+    "createdAt",
+    "updatedAt"
   ],
   "flashcard/flashcard": [
     "background",
@@ -695,7 +702,14 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "background.key",
+    "background.type",
+    "background.useCrushedKey",
+    "items[].front.media.image.originalImage.align"
   ],
   "flashcard/stack": [
     "background",
@@ -789,7 +803,12 @@
     "items[].front.media.image.originalImage.key",
     "items[].front.media.image.originalImage.originalUrl",
     "items[].front.media.image.originalImage.type",
-    "items[].front.media.image.originalImage.useCrushedKey"
+    "items[].front.media.image.originalImage.useCrushedKey",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "items[].front.media.image.align"
   ],
   "gallery/centered": [
     "background",
@@ -859,7 +878,8 @@
     "settings.v",
     "settings.zoomOnClick",
     "type",
-    "variant"
+    "variant",
+    "items[].media.image.alt"
   ],
   "gallery/four column": [
     "background",
@@ -951,7 +971,10 @@
     "settings.v",
     "settings.zoomOnClick",
     "type",
-    "variant"
+    "variant",
+    "items[].media.image.alt",
+    "createdAt",
+    "updatedAt"
   ],
   "gallery/three column": [
     "background",
@@ -1042,7 +1065,8 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.alt"
   ],
   "gallery/two column": [
     "background",
@@ -1117,7 +1141,28 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.dimensions.height",
+    "items[].media.image.dimensions.left",
+    "items[].media.image.dimensions.top",
+    "items[].media.image.dimensions.width",
+    "items[].media.image.isSquare",
+    "items[].media.image.originalImage",
+    "items[].media.image.originalImage.crushedKey",
+    "items[].media.image.originalImage.key",
+    "items[].media.image.originalImage.originalUrl",
+    "items[].media.image.originalImage.sourcedFrom",
+    "items[].media.image.originalImage.type",
+    "items[].media.image.originalImage.useCrushedKey",
+    "items[].media.image.imageType",
+    "items[].media.image.originalImage.dimensions",
+    "items[].media.image.originalImage.dimensions.originalHeight",
+    "items[].media.image.originalImage.dimensions.originalWidth",
+    "items[].media.image.originalImage.isSkipCrush",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "html/cdn": [
     "createdAt",
@@ -1335,7 +1380,11 @@
     "items[].media.image.originalImage.sourcedFrom",
     "items[].media.image.originalImage.isSkipCrush",
     "createdAt",
-    "updatedAt"
+    "updatedAt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "image/hero": [
     "background",
@@ -1464,7 +1513,10 @@
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
     "metadata.contentValidation.version",
-    "metadata.isHeroImage"
+    "metadata.isHeroImage",
+    "items[].media.image.originalImage.alt",
+    "background.media.image.overlayColor",
+    "items[].media.image.originalImage.align"
   ],
   "image/text aside": [
     "background",
@@ -1584,7 +1636,20 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.originalImage.alt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "items[].media.image.originalImage.isSkipCrush",
+    "background.key",
+    "background.type",
+    "background.useCrushedKey",
+    "items[].media.image.aiImageGenSettings",
+    "items[].media.image.aiImageGenSettings.orientation",
+    "items[].media.image.aiImageGenSettings.prompt",
+    "items[].media.image.aiImageGenSettings.style"
   ],
   "image/text overlay": [
     "background",
@@ -1692,7 +1757,16 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.originalImage.dimensions",
+    "items[].media.image.originalImage.dimensions.originalHeight",
+    "items[].media.image.originalImage.dimensions.originalWidth",
+    "items[].media.image.originalImage.align",
+    "items[].media.image.originalImage.isSkipCrush",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "impact/a": [
     "family",
@@ -1726,7 +1800,8 @@
     "settings.styleMode",
     "settings.v",
     "type",
-    "variant"
+    "variant",
+    "background"
   ],
   "impact/b": [
     "background",
@@ -1799,7 +1874,12 @@
     "background.media.image.originalImage.originalUrl",
     "background.media.image.originalImage.sourcedFrom",
     "background.media.image.originalImage.type",
-    "background.media.image.originalImage.useCrushedKey"
+    "background.media.image.originalImage.useCrushedKey",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "settings.backgroundMode",
+    "settings.styleMode"
   ],
   "impact/c": [
     "background",
@@ -1850,7 +1930,19 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "background.media.image.dimensions.height",
+    "background.media.image.dimensions.left",
+    "background.media.image.dimensions.top",
+    "background.media.image.dimensions.width",
+    "background.media.image.isSquare",
+    "background.media.image.originalImage",
+    "background.media.image.originalImage.alpha",
+    "background.media.image.originalImage.crushedKey",
+    "background.media.image.originalImage.key",
+    "background.media.image.originalImage.originalUrl",
+    "background.media.image.originalImage.type",
+    "background.media.image.originalImage.useCrushedKey"
   ],
   "impact/d": [
     "background",
@@ -1901,7 +1993,10 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "settings.divider",
+    "settings.dividerPadding",
+    "settings.dividerSize"
   ],
   "impact/note": [
     "background",
@@ -1999,7 +2094,11 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "interactive-fullscreen/labeledgraphic": [
     "background",
@@ -2200,7 +2299,20 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.alt",
+    "media.image.originalImage.isSkipCrush",
+    "items[].media.video",
+    "items[].media.video.duration",
+    "items[].media.video.inputKey",
+    "items[].media.video.key",
+    "items[].media.video.originalUrl",
+    "items[].media.video.poster",
+    "items[].media.video.thumbnail",
+    "items[].media.video.transcodeId",
+    "items[].media.video.type",
+    "items[].media.video.url",
+    "items[].media.video.existingMediaType"
   ],
   "interactive-fullscreen/process": [
     "background",
@@ -2346,7 +2458,30 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.originalImage.isSkipCrush",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "background.media.image.alpha",
+    "background.media.image.crushedKey",
+    "background.media.image.originalUrl",
+    "background.media.image.dimensions",
+    "background.media.image.dimensions.height",
+    "background.media.image.dimensions.left",
+    "background.media.image.dimensions.originalHeight",
+    "background.media.image.dimensions.originalWidth",
+    "background.media.image.dimensions.top",
+    "background.media.image.dimensions.width",
+    "background.media.image.isSquare",
+    "background.media.image.originalImage",
+    "background.media.image.originalImage.alpha",
+    "background.media.image.originalImage.crushedKey",
+    "background.media.image.originalImage.key",
+    "background.media.image.originalImage.originalUrl",
+    "background.media.image.originalImage.type",
+    "background.media.image.originalImage.useCrushedKey",
+    "items[].media.image.originalImage.alt"
   ],
   "interactive-fullscreen/scenario": [
     "background",
@@ -2938,7 +3073,15 @@
     "items[].character.poses.19120.id",
     "items[].character.poses.19120.key",
     "items[].character.poses.19120.src",
-    "items[].character.poses.19120.thumbnailKey"
+    "items[].character.poses.19120.thumbnailKey",
+    "items[].character.poses.115",
+    "items[].character.poses.115.filters",
+    "items[].character.poses.115.filters[].name",
+    "items[].character.poses.115.filters[].value",
+    "items[].character.poses.115.id",
+    "items[].character.poses.115.key",
+    "items[].character.poses.115.src",
+    "items[].character.poses.115.thumbnailKey"
   ],
   "interactive-fullscreen/sorting": [
     "background",
@@ -2992,7 +3135,10 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "interactive-fullscreen/timeline": [
     "background",
@@ -3133,7 +3279,17 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "items[].media.image.originalImage.isSkipCrush",
+    "items[].media.tmp.image.dimensions",
+    "items[].media.tmp.image.dimensions.originalHeight",
+    "items[].media.tmp.image.dimensions.originalWidth",
+    "items[].media.tmp.image.sourcedFrom",
+    "items[].media.tmp.image.trackingContext",
+    "items[].media.tmp.image.trackingId"
   ],
   "interactive/accordion": [
     "background",
@@ -3262,7 +3418,24 @@
     "settings.v",
     "settings.zoomOnClick",
     "type",
-    "variant"
+    "variant",
+    "items[].media.image.alt",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "items[].media.embed",
+    "items[].media.embed.description",
+    "items[].media.embed.embedType",
+    "items[].media.embed.favicon",
+    "items[].media.embed.originalUrl",
+    "items[].media.embed.provider",
+    "items[].media.embed.providerUrl",
+    "items[].media.embed.src",
+    "items[].media.embed.thumbnail",
+    "items[].media.embed.title",
+    "items[].media.embed.type",
+    "items[].settings",
+    "items[].settings.showMetaData"
   ],
   "interactive/tabs": [
     "background",
@@ -3609,7 +3782,31 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.image.alt",
+    "items[].media.video",
+    "items[].media.video.duration",
+    "items[].media.video.inputKey",
+    "items[].media.video.key",
+    "items[].media.video.originalUrl",
+    "items[].media.video.poster",
+    "items[].media.video.thumbnail",
+    "items[].media.video.transcodeId",
+    "items[].media.video.type",
+    "items[].media.video.url",
+    "items[].media.video.existingMediaType",
+    "items[].media.embed",
+    "items[].media.embed.embedType",
+    "items[].media.embed.originalUrl",
+    "items[].media.embed.src",
+    "items[].media.embed.type",
+    "items[].media.video.captions",
+    "items[].media.video.captions[].code",
+    "items[].media.video.captions[].filename",
+    "items[].media.video.captions[].id",
+    "items[].media.video.captions[].key",
+    "items[].media.video.captions[].name",
+    "items[].media.video.captionUID"
   ],
   "knowledge/knowledge": [
     "family",
@@ -3957,7 +4154,10 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "knowledgeCheck/multiple response": [
     "background",
@@ -4060,7 +4260,10 @@
     "type",
     "updatedAt",
     "variant",
-    "settings.retryCount"
+    "settings.retryCount",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "list/bulleted": [
     "background",
@@ -4151,7 +4354,11 @@
     "variant",
     "background.media.image.dimensions",
     "background.media.image.dimensions.originalHeight",
-    "background.media.image.dimensions.originalWidth"
+    "background.media.image.dimensions.originalWidth",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "list/checkboxes": [
     "background",
@@ -4215,7 +4422,11 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "list/numbered": [
     "background",
@@ -4349,7 +4560,8 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "blocumentId"
   ],
   "multimedia/attachment": [
     "background",
@@ -4581,7 +4793,14 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "background.media.image.alpha",
+    "settings.backgroundMode",
+    "settings.styleMode"
   ],
   "multimedia/video": [
     "background",
@@ -4675,7 +4894,18 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "items[].media.customVideo",
+    "items[].media.customVideo.poster",
+    "items[].media.customVideo.src",
+    "items[].media.customVideo.subtitle",
+    "items[].media.customVideo.thumbnail",
+    "items[].media.customVideo.title",
+    "items[].media.video.captions[].url",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "quote/a": [
     "background",
@@ -4788,7 +5018,10 @@
     "background.media.image.originalImage.originalUrl",
     "background.media.image.originalImage.sourcedFrom",
     "background.media.image.originalImage.type",
-    "background.media.image.originalImage.useCrushedKey"
+    "background.media.image.originalImage.useCrushedKey",
+    "settings.customPaddingBottom",
+    "settings.customPaddingTop",
+    "settings.isCustomColor"
   ],
   "quote/b": [
     "background",
@@ -4898,7 +5131,23 @@
     "background.media.image.originalImage.type",
     "background.media.image.originalImage.useCrushedKey",
     "background.media.image.originalUrl",
-    "settings.attachedToNextBlock"
+    "settings.attachedToNextBlock",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "items[].background.media.image.imageType",
+    "items[].background.media.image.isProcessing",
+    "items[].avatar.media.image.align",
+    "items[].background.media.tmp",
+    "items[].background.media.tmp.image",
+    "items[].background.media.tmp.image.imageType",
+    "items[].background.media.tmp.image.isProcessing",
+    "items[].background.media.tmp.image.key",
+    "items[].background.media.tmp.image.originalUrl",
+    "items[].background.media.tmp.image.src",
+    "items[].background.media.tmp.image.thumbnail",
+    "items[].background.media.tmp.image.type"
   ],
   "quote/background": [
     "background",
@@ -4988,7 +5237,35 @@
     "settings.snippetColorContrast",
     "settings.v",
     "type",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "background.media.image.alpha",
+    "items[].avatar.media.image.alt",
+    "items[].avatar.media.tmp",
+    "items[].avatar.media.tmp.image",
+    "items[].avatar.media.tmp.image.key",
+    "items[].avatar.media.tmp.image.originalUrl",
+    "items[].avatar.media.tmp.image.src",
+    "items[].avatar.media.tmp.image.thumbnail",
+    "items[].avatar.media.tmp.image.type",
+    "items[].background.media.image.dimensions.height",
+    "items[].background.media.image.dimensions.left",
+    "items[].background.media.image.dimensions.top",
+    "items[].background.media.image.dimensions.width",
+    "items[].background.media.image.isSquare",
+    "items[].background.media.image.originalImage",
+    "items[].background.media.image.originalImage.align",
+    "items[].background.media.image.originalImage.crushedKey",
+    "items[].background.media.image.originalImage.key",
+    "items[].background.media.image.originalImage.originalUrl",
+    "items[].background.media.image.originalImage.type",
+    "items[].background.media.image.originalImage.useCrushedKey",
+    "items[].background.media.tmp.image.error",
+    "items[].background.media.tmp.image.uploadProgress",
+    "media"
   ],
   "quote/c": [
     "background",
@@ -5074,7 +5351,9 @@
     "items[].avatar.media.image.originalImage.sourcedFrom",
     "items[].avatar.media.image.originalImage.type",
     "items[].avatar.media.image.originalImage.useCrushedKey",
-    "items[].avatar.media.image.originalImage.isSkipCrush"
+    "items[].avatar.media.image.originalImage.isSkipCrush",
+    "items[].background.media.image.imageType",
+    "items[].background.media.image.isProcessing"
   ],
   "quote/carousel": [
     "background",
@@ -5147,7 +5426,23 @@
     "settings.snippetColorContrast",
     "settings.v",
     "type",
-    "variant"
+    "variant",
+    "items[].avatar.media.image.dimensions.height",
+    "items[].avatar.media.image.dimensions.left",
+    "items[].avatar.media.image.dimensions.top",
+    "items[].avatar.media.image.dimensions.width",
+    "items[].avatar.media.image.isSquare",
+    "items[].avatar.media.image.originalImage",
+    "items[].avatar.media.image.originalImage.align",
+    "items[].avatar.media.image.originalImage.crushedKey",
+    "items[].avatar.media.image.originalImage.key",
+    "items[].avatar.media.image.originalImage.originalUrl",
+    "items[].avatar.media.image.originalImage.type",
+    "items[].avatar.media.image.originalImage.useCrushedKey",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "quote/d": [
     "background",
@@ -5348,7 +5643,10 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "text/heading paragraph": [
     "background",
@@ -5556,7 +5854,12 @@
     "metadata",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "background.key",
+    "background.type",
+    "background.useCrushedKey",
+    "settings.noteIcon",
+    "settings.noteSize"
   ],
   "text/subheading": [
     "background",
@@ -5680,7 +5983,12 @@
     "background.media.image.originalUrl",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "settings.backgroundMode",
+    "settings.styleMode",
+    "settings.columns",
+    "settings.images",
+    "background.media.image.overlayColor"
   ],
   "text/table": [
     "background",

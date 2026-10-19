@@ -1,6 +1,36 @@
 # Project Status
 
-_Last updated: 2026-09-14 (v0.9.12: style harvest — Creator courses in the designer's house style). Keep this current at each phase boundary._
+_Last updated: 2026-10-19 (v0.9.13: DFO export analysis + mondrian schema-version fix). Keep this current at each phase boundary._
+
+## v0.9.13 (2026-10-19) — DFO US→EU: novelty acceptance + mondrian `_v` adoption
+
+First DFO run (170 courses, US plane, `docs/findings-2026-10-15-dfo-export.md`).
+
+- **Mondrian import adopts the TARGET's blockument schema version.** The EU
+  pilot ("Mitt ledelsesgrunnlag") 400'd on the doc transaction:
+  `invalid_value … path ["blockument","_v"] … expected 52` — the archive was
+  captured at `_v: 51` (captures were 47). `adoptSchemaVersion`
+  (`core/mondrian/remap.ts`) stamps the doc + every versioned item with the
+  `_v` the target's own `createFromBlank` returned and applies the KNOWN
+  migrations between the two: 51→52 adds `states.default.shapeDef.orient:
+  "normal"` where absent (the second pilot 400'd on the items transaction with
+  the enum `normal|cw|half|ccw|flip|flip-cw|flip-half|flip-ccw`; v51 had no
+  orientation, the captured v52 graph has `normal` on every shape). Version
+  gaps without a known step ship verbatim + WARN. Logged as a NOTE per
+  blockument. Dry-run unchanged. Build `0.9.13a`.
+- **Novelty review:** 323 new field paths on 41 known variants accepted into
+  `core/census/catalog.fields.json` + `docs/rise-block-catalog.md` (0 new
+  variants). Notable: `items[].media.customVideo` (Rise stock video on
+  `video.riseusercontent.com`, copied verbatim), embedly link-preview cards
+  inside accordion/tabs, `aiImageGenSettings`, and the misspelled
+  `blocumentId` on template-inserted Custom blocks (template provenance, NOT
+  remapped — whether EU boot resolves it is still the pilot's question).
+- **Operator refetch recipe:** moving `courses/<id>.json` (+ its
+  `blockuments/<id>.json`, `storyline/<id>*`) out of the archive forces the
+  exporter to refetch that course; `.assets.json` stays so only new keys
+  download. 24 "updated" DFO courses came back content-identical (publish
+  settings only).
+
 
 ## v0.9.12 (2026-09-14) — Creator: style harvest
 
