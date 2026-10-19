@@ -69,6 +69,13 @@ describe('logLineClass', () => {
     expect(cls('Search failed (HTTP 403)')).toBe('log-error');
   });
 
+  it('sees through nested progress prefixes (owner-of-total, then item-of-total)', () => {
+    expect(cls('[2/120] [9/26 assets] OK x.png (deduped)')).toBe('log-ok');
+    expect(cls('[2/120] [9/26 assets] OPTIONAL x.mp4: HTTP 403')).toBe('log-warn');
+    expect(cls('[2/120] [9/26 assets] FAILED x.mp4: HTTP 500')).toBe('log-error');
+    expect(cls('[2/120] ⚠ owner FAILED abc: boom')).toBe('log-warn');
+  });
+
   it('renders an unavailable OPTIONAL asset as a warning even with an HTTP status', () => {
     expect(cls('[9/49 assets] OPTIONAL Fq8f-Eksport.mp4: HTTP 403')).toBe('log-warn');
     expect(cls('[9/49 assets] OPTIONAL Fq8f-Eksport.mp4 (unavailable, not retried)')).toBe('log-warn');

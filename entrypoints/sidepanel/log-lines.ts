@@ -42,7 +42,9 @@ export function appendLogLines(
 // Those are the two shapes every emitter uses (`[3/20 folders] OK   created "X"`,
 // `[2/5] Course title: FAILED — …`). Matching a bare substring anywhere painted a
 // course titled "Error handling" red and one titled "Done Deal" green.
-const PROGRESS_PREFIX = /^\s*(?:\[\d+\/\d+[^\]]*\]\s*)?/;
+// Prefixes may nest (`[2/120] [9/26 assets] OK …` — owner-of-total, then
+// item-of-total within it), so strip every leading one.
+const PROGRESS_PREFIX = /^\s*(?:\[\d+\/\d+[^\]]*\]\s*)*/;
 
 const RULES: Array<[RegExp, string]> = [
   // Leading marker — the emitter's own classification, so it wins outright.

@@ -281,6 +281,10 @@ export async function downloadAllAssets(
 
   for (const [i, owner] of owners.entries()) {
     onEvent({ kind: 'course', index: i, total: owners.length, courseId: owner.id });
+    // Owner position, repeated on every line this owner emits — a 170-course
+    // run streams thousands of `[i/N assets]` lines and the operator must see
+    // which owner-of-total they belong to without scrolling back.
+    const pfx = `[${i + 1}/${owners.length}]`;
 
     try {
       // Custom-block (mondrian) assets live in the course's archived blockument
@@ -297,7 +301,7 @@ export async function downloadAllAssets(
           try {
             scanDoc = { course: owner.doc, blockuments: JSON.parse(braw) };
           } catch {
-            onEvent({ kind: 'log', message: `WARN unreadable blockuments/${owner.id}.json — its Custom-block assets were not collected` });
+            onEvent({ kind: 'log', message: `${pfx} WARN unreadable blockuments/${owner.id}.json — its Custom-block assets were not collected` });
           }
         }
       }
@@ -362,7 +366,7 @@ export async function downloadAllAssets(
           const orphanCount = priorTerminal.length - optionalCount;
           onEvent({
             kind: 'log',
-            message: `Assets already done: ${owner.id}${
+            message: `${pfx} Assets already done: ${owner.id}${
               orphanCount ? ` (⚠ ${orphanCount} active asset(s) unavailable)` : ''
             }${
               optionalCount ? ` (${optionalCount} optional source ref(s) unavailable)` : ''
@@ -373,8 +377,8 @@ export async function downloadAllAssets(
         onEvent({
           kind: 'log',
           message: lostBlob
-            ? `Assets re-run ${owner.id}: stored blob missing (${lostBlob})`
-            : `Assets re-run ${owner.id}: ${newKeys.length} key(s) not covered by the prior manifest (e.g. ${newKeys[0]})`,
+            ? `${pfx} Assets re-run ${owner.id}: stored blob missing (${lostBlob})`
+            : `${pfx} Assets re-run ${owner.id}: ${newKeys.length} key(s) not covered by the prior manifest (e.g. ${newKeys[0]})`,
         });
       }
 
@@ -387,7 +391,7 @@ export async function downloadAllAssets(
         {
           priorAssets,
           priorOrphans: priorTerminal,
-          onProgress: (message) => onEvent({ kind: 'log', message }),
+          onProgress: (message) => onEvent({ kind: 'log', message: `${pfx} ${message}` }),
         },
       );
       await storage.writeAssetManifest(
@@ -407,7 +411,7 @@ export async function downloadAllAssets(
       if (stats.orphaned || stats.failed) {
         onEvent({
           kind: 'log',
-          message: `⚠ ${owner.id}: ${stats.orphaned} active unavailable, ${stats.failed} failed${
+          message: `${pfx} ⚠ ${owner.id}: ${stats.orphaned} active unavailable, ${stats.failed} failed${
             stats.optionalUnavailable
               ? `, ${stats.optionalUnavailable} optional source ref(s) unavailable`
               : ''
@@ -416,7 +420,7 @@ export async function downloadAllAssets(
       } else {
         onEvent({
           kind: 'log',
-          message: `Assets ${owner.id}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
+          message: `${pfx} Assets ${owner.id}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
             stats.fetched || stats.reused ? '' : ' (no media)'
           }${stats.optionalUnavailable ? `; ${stats.optionalUnavailable} optional source ref(s) unavailable` : ''}`,
         });
@@ -433,7 +437,7 @@ export async function downloadAllAssets(
       });
       onEvent({
         kind: 'log',
-        message: `⚠ [${i + 1}/${owners.length}] owner FAILED ${owner.id}: ${String(e)}`,
+        message: `${pfx} ⚠ owner FAILED ${owner.id}: ${String(e)}`,
       });
     }
   }

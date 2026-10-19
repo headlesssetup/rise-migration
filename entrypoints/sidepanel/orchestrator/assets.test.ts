@@ -370,12 +370,13 @@ describe('downloadAllAssets', () => {
     expect(logs().some((m) => m.includes('1 owner(s) failed entirely'))).toBe(true);
   });
 
-  it('emits per-asset [i/N] progress lines from inside the pool', async () => {
+  it('emits per-asset [i/N] progress lines from inside the pool, prefixed with the owner position', async () => {
     const store = fakeStorage({
       c1: docWith('c1', ['rise/courses/c1/one.jpg', 'rise/courses/c1/two.jpg']),
     });
     await downloadAllAssets(store.storage, onEvent, servingDownloader([]));
-    expect(logs().some((m) => /^\[1\/2 assets\] /.test(m))).toBe(true);
-    expect(logs().some((m) => /^\[2\/2 assets\] /.test(m))).toBe(true);
+    expect(logs().some((m) => /^\[1\/1\] \[1\/2 assets\] /.test(m))).toBe(true);
+    expect(logs().some((m) => /^\[1\/1\] \[2\/2 assets\] /.test(m))).toBe(true);
+    expect(logs().some((m) => /^\[1\/1\] Assets c1: /.test(m))).toBe(true);
   });
 });
