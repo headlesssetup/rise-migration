@@ -125,6 +125,8 @@ export interface AccountSettingsOptions {
   dryRun: boolean;
   override?: boolean;
   pacing?: PacingConfig;
+  /** Recreate typefaces shared in from another tenant (archived `foreign`). */
+  rehostForeignTypefaces?: boolean;
 }
 
 /**
@@ -181,6 +183,7 @@ export async function importAccountSettings(
     onEvent,
     pin,
     relay: makePinnedRelay(pin),
+    rehostForeign: opts.rehostForeignTypefaces === true,
   });
 
   // Persist for B/C (and re-runs).
@@ -210,15 +213,23 @@ async function importAccountFonts(args: {
   pin?: TabPin;
   /** Relay bound to `pin`; the caller builds it so there is ONE pinned relay per run. */
   relay: Relay;
+  rehostForeign?: boolean;
 }): Promise<{ idMap: Map<string, string>; matched: number; created: number; unresolved: number }> {
   const { sourceTypefaces, targetTypefaces, readFontBytes, dryRun, pacing, onEvent, pin, relay } =
     args;
   const allIds = [...sourceTypefaces.keys()];
-  const { idMap, toRecreate, unresolved } = resolveTypefaces(
+  const { idMap, toRecreate, unresolved, foreignHeld } = resolveTypefaces(
     allIds,
     sourceTypefaces,
     targetByName(targetTypefaces),
+    { rehostForeign: args.rehostForeign === true },
   );
+  for (const tf of foreignHeld) {
+    onEvent({
+      kind: 'log',
+      message: `  ⚠ typeface "${tf.name}" is shared in from another tenant (via course ${tf.sharedVia ?? '?'}) — HELD; tick "Re-host shared-in typefaces" to recreate it`,
+    });
+  }
   const matched = idMap.size;
   if (toRecreate.length === 0) {
     return { idMap, matched, created: 0, unresolved: unresolved.length };

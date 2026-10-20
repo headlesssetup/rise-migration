@@ -15,9 +15,12 @@ import {
   buildTypefaceInventory,
   collectFontKeys,
   extractTypefaces,
+  mergeForeignTypefaces,
   typefacesToCsv,
   typefacesToJson,
+  unknownTypefaceIdsOf,
 } from '@/core/census/typefaces';
+import { DEFAULT_PACING, pacedDelay } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { BackgroundRequest } from '@/shared/messaging';
 import { cdnDownload } from './assets';
@@ -28,6 +31,8 @@ export interface AccountExtrasSummary {
   blockTemplates: number;
   typefaces: number;
   fonts: { written: number; deduped: number; failed: number };
+  /** Shared-in (foreign-tenant) typefaces resolved per course / still unknown. */
+  foreign: { resolved: number; unresolved: number };
 }
 
 /** Fetch a RAW_RESULT export; returns {raw, doc} or null (logging the error). */
@@ -69,6 +74,7 @@ export async function fetchAccountExtras(
     blockTemplates: 0,
     typefaces: 0,
     fonts: { written: 0, deduped: 0, failed: 0 },
+    foreign: { resolved: 0, unresolved: 0 },
   };
 
   // 1) Block templates.
@@ -94,12 +100,67 @@ export async function fetchAccountExtras(
   } else {
     const tf = await fetchRaw({ type: 'FETCH_TYPEFACES', courseId }, 'Typefaces', onEvent);
     if (tf) {
-      await storage.writeTypefaces(tf.raw);
-      const rows = buildTypefaceInventory(extractTypefaces(tf.doc));
+      // Shared-in typefaces (issue #12): the account list omits typefaces shared
+      // in from another tenant, yet saved courses reference them. Re-ask
+      // FETCH_TYPEFACES in the context of each affected course and merge what
+      // comes back as `foreign`. Paced (authoring reads); one call per course,
+      // skipping courses whose unknown ids an earlier call already resolved.
+      let doc: unknown = tf.doc;
+      let raw = tf.raw;
+      const known = new Set(extractTypefaces(tf.doc).map((t) => String(t.id ?? '')));
+      const pending = new Map<string, Set<string>>(); // unknown id → course ids
+      for (const id of await storage.listSaved()) {
+        const c = await storage.readCourse(id);
+        if (!c) continue;
+        try {
+          for (const tfId of unknownTypefaceIdsOf(JSON.parse(c), known)) {
+            if (!pending.has(tfId)) pending.set(tfId, new Set());
+            pending.get(tfId)!.add(id);
+          }
+        } catch {
+          /* unreadable course doc — the course export already reported it */
+        }
+      }
+      if (pending.size) {
+        onEvent({
+          kind: 'log',
+          message: `Typefaces: ${pending.size} shared-in typeface id(s) not in the account list — resolving per course…`,
+        });
+        const perCourse: { courseId: string; doc: unknown }[] = [];
+        const tried = new Set<string>();
+        for (const [tfId, courses] of pending) {
+          if (known.has(tfId)) continue; // resolved by an earlier course's call
+          const cid = [...courses].find((c) => !tried.has(c)) ?? [...courses][0]!;
+          if (tried.has(cid)) continue;
+          tried.add(cid);
+          await pacedDelay(DEFAULT_PACING);
+          const r = await fetchRaw({ type: 'FETCH_TYPEFACES', courseId: cid }, `Typefaces (course ${cid})`, onEvent);
+          if (!r) continue;
+          perCourse.push({ courseId: cid, doc: r.doc });
+          for (const t of extractTypefaces(r.doc)) if (typeof t.id === 'string') known.add(t.id);
+        }
+        const { merged, added } = mergeForeignTypefaces(tf.doc, perCourse);
+        doc = merged;
+        raw = JSON.stringify(merged, null, 2);
+        summary.foreign.resolved = added.length;
+        for (const a of added) {
+          onEvent({ kind: 'log', message: `  • shared-in typeface "${a.name}" (${a.id}) resolved via course ${a.sharedVia} — archived as foreign (re-host needs operator opt-in at import)` });
+        }
+        for (const [tfId, courses] of pending) {
+          if (known.has(tfId)) continue;
+          summary.foreign.unresolved += 1;
+          onEvent({
+            kind: 'log',
+            message: `  ⚠ shared-in typeface ${tfId} used by ${courses.size} course(s) could NOT be resolved via FETCH_TYPEFACES(course) — the import will flag it; recover its files from the editor page's @font-face rules (issue #12, route B)`,
+          });
+        }
+      }
+      await storage.writeTypefaces(raw);
+      const rows = buildTypefaceInventory(extractTypefaces(doc));
       await storage.writeTypefaceInventory(typefacesToJson(rows), typefacesToCsv(rows));
       summary.typefaces = rows.length;
 
-      const fontKeys = collectFontKeys(tf.doc);
+      const fontKeys = collectFontKeys(doc);
       if (fontKeys.length) {
         // Fonts are account-level — store them under account/assets/ (separate
         // from the huge content-addressed course assets/ store).
@@ -125,7 +186,7 @@ export async function fetchAccountExtras(
       }
       onEvent({
         kind: 'log',
-        message: `Typefaces: ${rows.length} (fonts ${summary.fonts.written} new, ${summary.fonts.deduped} deduped, ${summary.fonts.failed} failed).`,
+        message: `Typefaces: ${rows.length} (fonts ${summary.fonts.written} new, ${summary.fonts.deduped} deduped, ${summary.fonts.failed} failed${summary.foreign.resolved ? `; ${summary.foreign.resolved} shared-in resolved` : ''}${summary.foreign.unresolved ? `; ${summary.foreign.unresolved} shared-in UNRESOLVED` : ''}).`,
       });
     }
   }

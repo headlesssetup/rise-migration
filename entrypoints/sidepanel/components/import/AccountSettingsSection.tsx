@@ -21,6 +21,7 @@ export function AccountSettingsSection({
 }: SectionProps) {
   const [info, setInfo] = useState<ArchiveInfo | null>(null);
   const [summary, setSummary] = useState<AccountSettingsSummary | null>(null);
+  const [rehostForeignTypefaces, setRehostForeignTypefaces] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -44,7 +45,7 @@ export function AccountSettingsSection({
         const res = await importAccountSettings(
           storage,
           target,
-          { dryRun, override },
+          { dryRun, override, rehostForeignTypefaces },
           onEvent,
         );
         if (res.summary) setSummary(res.summary);
@@ -57,7 +58,7 @@ export function AccountSettingsSection({
         setRunning(false);
       }
     },
-    [storage, target, override, onEvent, logBreak, setRunning],
+    [storage, target, override, rehostForeignTypefaces, onEvent, logBreak, setRunning],
   );
 
   return (
@@ -75,6 +76,15 @@ export function AccountSettingsSection({
         Imports the folder tree + custom fonts (account-level, once). Folder
         ownership/sharing stays a manual step.
       </p>
+      <label className="hint" style={{ display: 'block', marginBottom: 6 }}>
+        <input
+          type="checkbox"
+          checked={rehostForeignTypefaces}
+          onChange={(e) => setRehostForeignTypefaces(e.target.checked)}
+        />{' '}
+        Re-host shared-in typefaces (fonts owned by another tenant that the export resolved per
+        course — only if you may copy them; off = held + flagged)
+      </label>
       <div className="row">
         <button onClick={() => run(true)} disabled={!storage || running}>
           {running ? 'Working…' : 'Dry-run'}

@@ -113,6 +113,9 @@ export interface ImportOptions {
    *  reused, never duplicated) and place each course into its folder. OFF
    *  (default) → nothing is created or moved; courses land in the root. */
   recreateFolders?: boolean;
+  /** Recreate typefaces SHARED IN from another tenant (archived as `foreign`).
+   *  Default OFF → flagged as manual work (someone else's font: licensing). */
+  rehostForeignTypefaces?: boolean;
   /** Cooperative cancel for the Stop button. Polled between courses and (via the
    *  executor) between paced write steps — never mid-write. */
   shouldStop?: () => boolean;
@@ -463,6 +466,7 @@ export async function runImport(
       sourceTypefaces,
       targetTypefaces,
       typefaceIdMap: typefaceSeed.size > 0 ? typefaceSeed : undefined,
+      rehostForeignTypefaces: opts.rehostForeignTypefaces === true,
       readFontBytes,
       ids,
       dryRun: opts.dryRun,

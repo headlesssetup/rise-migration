@@ -95,3 +95,61 @@ export function typefacesToCsv(rows: TypefaceRow[]): string {
     ),
   );
 }
+
+// --- Shared-in (foreign-tenant) typefaces ------------------------------------
+//
+// The account's FETCH_TYPEFACES lists only typefaces the account OWNS. A course
+// may reference a typeface shared in from another tenant (live DFO 2026-10-20:
+// "Arkivverkets Fontsamling" in 3 courses — absent from the list, so the import
+// could only flag it). The export resolves such ids per affected course and
+// merges the results into account/typefaces.json, marked `foreign: true` so the
+// import never re-hosts someone else's font without an operator opt-in.
+
+/** Typeface ids a saved course document uses (`{course:{…}}` or ducks-wrapped)
+ *  that are NOT in `known` — candidates for a per-course FETCH_TYPEFACES. */
+export function unknownTypefaceIdsOf(courseDoc: unknown, known: ReadonlySet<string>): string[] {
+  const root = isObj(courseDoc) ? (isObj(courseDoc.payload) ? courseDoc.payload : courseDoc) : null;
+  const course = root && isObj(root.course) ? root.course : null;
+  if (!course) return [];
+  const theme = isObj(course.theme) ? course.theme : {};
+  const out = new Set<string>();
+  for (const src of [course, theme]) {
+    for (const k of ['headingTypefaceId', 'bodyTypefaceId', 'uiTypefaceId']) {
+      const v = src[k];
+      if (typeof v === 'string' && v && !known.has(v)) out.add(v);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Merge typefaces found via per-course FETCH_TYPEFACES into the account doc:
+ * every typeface not already listed (and not deleted) is appended with
+ * `foreign: true, sharedVia: <courseId>`. Returns the merged raw doc (same
+ * `{type, payload:{typefaces}}` shape the archive stores) + what was added.
+ */
+export function mergeForeignTypefaces(
+  accountDoc: unknown,
+  perCourse: { courseId: string; doc: unknown }[],
+): { merged: unknown; added: { id: string; name: string; sharedVia: string }[] } {
+  const base = isObj(accountDoc) ? accountDoc : {};
+  const payload = isObj(base.payload) ? base.payload : null;
+  const list = [...extractTypefaces(accountDoc)];
+  const known = new Set(list.map((t) => String(t.id ?? '')));
+  const added: { id: string; name: string; sharedVia: string }[] = [];
+  for (const { courseId, doc } of perCourse) {
+    for (const t of extractTypefaces(doc)) {
+      const id = typeof t.id === 'string' ? t.id : '';
+      if (!id || known.has(id) || t.deleted === true) continue;
+      known.add(id);
+      list.push({ ...t, foreign: true, sharedVia: courseId });
+      added.push({ id, name: typeof t.name === 'string' ? t.name : '', sharedVia: courseId });
+    }
+  }
+  const merged = payload
+    ? { ...base, payload: { ...payload, typefaces: list } }
+    : Array.isArray(accountDoc)
+      ? list
+      : { ...base, typefaces: list };
+  return { merged, added };
+}

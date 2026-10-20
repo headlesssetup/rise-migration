@@ -89,8 +89,19 @@ import type { ExecCtx } from './executor-run-state';
     const seed = deps.typefaceIdMap ?? new Map<string, string>();
     const used = usedTypefaceIds(course);
     const unseeded = used.filter((id) => !seed.has(id));
-    const { idMap, toRecreate, unresolved } = resolveTypefaces(unseeded, source, targetByName(target));
+    const { idMap, toRecreate, unresolved, foreignHeld } = resolveTypefaces(
+      unseeded,
+      source,
+      targetByName(target),
+      { rehostForeign: deps.rehostForeignTypefaces === true },
+    );
     for (const [k, v] of seed) idMap.set(k, v);
+    for (const tf of foreignHeld) {
+      result.flags.push({
+        kind: 'typeface',
+        detail: `Typeface "${tf.name}" is shared in from another tenant (${tf.fonts.length} file(s) archived) — tick "Re-host shared-in typefaces" to recreate it, or set the font manually`,
+      });
+    }
 
     for (const tf of toRecreate) {
       const uploaded = new Map<string, { key: string; url: string; type: string; filename: string }>();

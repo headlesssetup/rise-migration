@@ -94,6 +94,27 @@ describe('resolveTypefaces', () => {
     const res = resolveTypefaces(['mystery'], source, new Map());
     expect(res.unresolved).toEqual(['mystery']);
   });
+
+  it('HOLDS a shared-in (foreign) typeface unless the operator opts in to re-hosting', () => {
+    const foreignSource = parseTypefaces({
+      payload: { typefaces: [{
+        id: '607E', name: 'Arkivverkets Fontsamling', foreign: true, sharedVia: 'C1',
+        fonts: [{ key: 'rise/fonts/x-regular.woff', style: 'regular', original: null }],
+      }] },
+    });
+    expect(foreignSource.get('607E')).toMatchObject({ foreign: true, sharedVia: 'C1' });
+    const held = resolveTypefaces(['607E'], foreignSource, new Map());
+    expect(held.toRecreate).toEqual([]);
+    expect(held.foreignHeld.map((t) => t.id)).toEqual(['607E']);
+    expect(held.unresolved).toEqual([]);
+    const rehost = resolveTypefaces(['607E'], foreignSource, new Map(), { rehostForeign: true });
+    expect(rehost.toRecreate.map((t) => t.id)).toEqual(['607E']);
+    expect(rehost.foreignHeld).toEqual([]);
+    // Already on the target by name → matched either way, never recreated.
+    const matched = resolveTypefaces(['607E'], foreignSource, new Map([['arkivverkets fontsamling', 'tgt']]));
+    expect(matched.idMap.get('607E')).toBe('tgt');
+    expect(matched.foreignHeld).toEqual([]);
+  });
 });
 
 describe('buildCreateTypefaceFonts', () => {

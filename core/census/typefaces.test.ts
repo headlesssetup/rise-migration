@@ -3,6 +3,8 @@ import {
   buildTypefaceInventory,
   collectFontKeys,
   extractTypefaces,
+  mergeForeignTypefaces,
+  unknownTypefaceIdsOf,
 } from './typefaces';
 
 const doc = {
@@ -45,5 +47,44 @@ describe('typefaces', () => {
       'rise/fonts/auth0|abc/x-Bold.woff',
       'rise/fonts/auth0|abc/x-Light.woff',
     ]);
+  });
+});
+
+describe('shared-in (foreign-tenant) typefaces', () => {
+  const account = {
+    type: 'rise/typefaces/FETCH_TYPEFACES',
+    payload: { typefaces: [{ id: 'own', name: 'Lato', default: true, fonts: [] }], author: 'a' },
+  };
+
+  it('finds the typeface ids a course uses that the account list lacks', () => {
+    const course = {
+      payload: {
+        course: { id: 'C', bodyTypefaceId: '607E', headingTypefaceId: '607E', uiTypefaceId: 'own', theme: { bodyTypefaceId: '607E' } },
+        lessons: [],
+      },
+    };
+    expect(unknownTypefaceIdsOf(course, new Set(['own']))).toEqual(['607E']);
+    expect(unknownTypefaceIdsOf({ course: { id: 'C' } }, new Set())).toEqual([]);
+  });
+
+  it('merges per-course results as foreign, keeping the archive doc shape', () => {
+    const perCourse = [
+      {
+        courseId: 'C1',
+        doc: { payload: { typefaces: [
+          { id: 'own', name: 'Lato', default: true, fonts: [] },
+          { id: '607E', name: 'Arkivverkets Fontsamling', fonts: [{ key: 'rise/fonts/x-regular.woff', style: 'regular' }] },
+          { id: 'gone', name: 'Old', deleted: true, fonts: [] },
+        ] } },
+      },
+      { courseId: 'C2', doc: { payload: { typefaces: [{ id: '607E', name: 'Arkivverkets Fontsamling', fonts: [] }] } } },
+    ];
+    const { merged, added } = mergeForeignTypefaces(account, perCourse);
+    expect(added).toEqual([{ id: '607E', name: 'Arkivverkets Fontsamling', sharedVia: 'C1' }]);
+    const list = extractTypefaces(merged);
+    expect(list.map((t) => t.id)).toEqual(['own', '607E']);
+    expect(list[1]).toMatchObject({ foreign: true, sharedVia: 'C1' });
+    expect((merged as { payload: { author: string } }).payload.author).toBe('a');
+    expect(collectFontKeys(merged)).toEqual(['rise/fonts/x-regular.woff']);
   });
 });

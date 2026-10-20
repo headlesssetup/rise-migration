@@ -43,6 +43,7 @@ export function CoursesSection({
   // "Re-create folders" — ON: create/reuse just the selected courses' folder
   // chains on the target and place the courses there; OFF: courses land in root.
   const [recreateFolders, setRecreateFolders] = useState(false);
+  const [rehostForeignTypefaces, setRehostForeignTypefaces] = useState(false);
   // "Ready to import?" — rough pre-run time estimate for the selection (local
   // archive reads + pure plans; debounced so rapid clicking doesn't churn disk).
   const [estimate, setEstimate] = useState<string | null>(null);
@@ -104,7 +105,7 @@ export function CoursesSection({
           storage,
           [...selected],
           target,
-          { dryRun, override, recreateFolders, shouldStop: stop.shouldStop },
+          { dryRun, override, recreateFolders, rehostForeignTypefaces, shouldStop: stop.shouldStop },
           onEvent,
         );
         if (res.blocked) setBlocked(res.blocked);
@@ -118,7 +119,7 @@ export function CoursesSection({
         setRunning(false);
       }
     },
-    [storage, target, override, recreateFolders, selected, onEvent, logBreak, setRunning, stop],
+    [storage, target, override, recreateFolders, rehostForeignTypefaces, selected, onEvent, logBreak, setRunning, stop],
   );
 
   return (
@@ -169,6 +170,15 @@ export function CoursesSection({
               onChange={(e) => setRecreateFolders(e.target.checked)}
             />{' '}
             Re-create folders (off = courses go to the root)
+          </label>
+          <label className="hint" style={{ display: 'block' }}>
+            <input
+              type="checkbox"
+              checked={rehostForeignTypefaces}
+              onChange={(e) => setRehostForeignTypefaces(e.target.checked)}
+            />{' '}
+            Re-host shared-in typefaces (fonts owned by another tenant that the export resolved per
+            course — only if you may copy them; off = flagged as manual work)
           </label>
           <div className="row">
             <button onClick={() => run(true)} disabled={!storage || selected.size === 0 || running}>

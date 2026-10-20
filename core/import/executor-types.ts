@@ -48,6 +48,9 @@ export interface ExecutorDeps {
    *  course's typeface id is seeded here, set-theme reuses it (no per-course font
    *  upload); ids NOT seeded fall back to in-loop resolve/recreate. */
   typefaceIdMap?: Map<string, string>;
+  /** Operator opt-in: recreate typefaces SHARED IN from another tenant (marked
+   *  `foreign` by the export). Default off → held + flagged (licensing). */
+  rehostForeignTypefaces?: boolean;
   /** Read a custom font's archived `.woff` bytes by its source key. */
   readFontBytes?: (fontKey: string) => Promise<AssetBytes | null>;
   ids?: IdMap;

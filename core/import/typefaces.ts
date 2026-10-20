@@ -23,6 +23,12 @@ export interface Typeface {
   name: string;
   isDefault: boolean;
   fonts: SourceFont[];
+  /** SHARED IN from another tenant (not in the source account's own list; the
+   *  export resolved it per course — see core/census/typefaces mergeForeign…).
+   *  Someone else's asset: recreated on the target only on operator opt-in. */
+  foreign?: boolean;
+  /** The course the export resolved a foreign typeface through. */
+  sharedVia?: string;
 }
 
 function asArray(v: unknown): unknown[] {
@@ -54,7 +60,14 @@ export function parseTypefaces(doc: unknown): Map<string, Typeface> {
             original: typeof f.original === 'string' ? f.original : null,
           }))
       : [];
-    out.set(id, { id, name, isDefault: t.default === true, fonts });
+    out.set(id, {
+      id,
+      name,
+      isDefault: t.default === true,
+      fonts,
+      ...(t.foreign === true ? { foreign: true } : {}),
+      ...(typeof t.sharedVia === 'string' ? { sharedVia: t.sharedVia } : {}),
+    });
   }
   return out;
 }
@@ -95,6 +108,9 @@ export interface TypefaceResolution {
   /** Used ids we couldn't resolve (no source catalog entry, no name match, no
    *  recreatable fonts) → flag for manual handling. */
   unresolved: string[];
+  /** Shared-in (foreign-tenant) typefaces the target lacks, HELD because the
+   *  operator did not opt in to re-hosting them → flag, never recreated. */
+  foreignHeld: Typeface[];
 }
 
 /**
@@ -105,11 +121,18 @@ export function resolveTypefaces(
   usedIds: string[],
   sourceById: Map<string, Typeface>,
   targetNames: Map<string, string>,
+  opts: {
+    /** Operator opt-in: recreate typefaces shared in from another tenant. A
+     *  foreign font is someone else's asset (licensing), so the default is to
+     *  HOLD it (flag) — the same reasoning as built-in library assets. */
+    rehostForeign?: boolean;
+  } = {},
 ): TypefaceResolution {
   const idMap = new Map<string, string>();
   const toRecreate: Typeface[] = [];
   const seenRecreate = new Set<string>();
   const unresolved: string[] = [];
+  const foreignHeld: Typeface[] = [];
 
   for (const id of usedIds) {
     const src = sourceById.get(id);
@@ -125,15 +148,15 @@ export function resolveTypefaces(
     // Not on target. Recreatable iff it's a custom font with uploadable files.
     const recreatable = !isBuiltinFont(src) && src.fonts.some((f) => f.key.startsWith('rise/'));
     if (recreatable) {
-      if (!seenRecreate.has(id)) {
-        seenRecreate.add(id);
-        toRecreate.push(src);
-      }
+      if (seenRecreate.has(id)) continue;
+      seenRecreate.add(id);
+      if (src.foreign && !opts.rehostForeign) foreignHeld.push(src);
+      else toRecreate.push(src);
     } else {
       unresolved.push(id);
     }
   }
-  return { idMap, toRecreate, unresolved };
+  return { idMap, toRecreate, unresolved, foreignHeld };
 }
 
 /** Build the `CREATE_TYPEFACE` `fonts` object from a source typeface and the
