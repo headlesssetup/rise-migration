@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import type { Storage } from '@/core/storage/storage';
-import { uploadStorylineToReview360, type ProgressEvent } from '../../orchestrator';
+import { renameReviewItemsToBlockTitles, uploadStorylineToReview360, type ProgressEvent } from '../../orchestrator';
 import { CollapsibleStep, type SectionProps } from './step-shared';
 
 /** Stage C — upload the locally staged Storyline packages to the TARGET account's
@@ -31,6 +31,20 @@ export function StorylineUploadSection({
   // re-points the manifest's upload record at them. Deliberately only offered
   // with a selection — never a silent mass re-upload of every staged package.
   const [force, setForce] = useState(false);
+  const rename = useCallback(async () => {
+    if (!storage) return;
+    logBreak('Rename uploaded Review 360 items → block titles');
+    setRunning(true);
+    try {
+      const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
+      await renameReviewItemsToBlockTitles(storage, onEvent, { onlyCourseIds });
+    } catch (e) {
+      onEvent({ kind: 'log', message: `FAILED — rename: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setRunning(false);
+    }
+  }, [storage, onEvent, logBreak, setRunning, selected]);
+
   const go = useCallback(async () => {
     if (!storage) return;
     logBreak('Upload storyline packages → Review 360');
@@ -80,6 +94,11 @@ export function StorylineUploadSection({
           : selected.size > 0
             ? `Upload staged packages (${selected.size} selected)`
             : 'Upload staged packages (ALL staged)'}
+      </button>{' '}
+      <button onClick={rename} disabled={!liveOk || running} title="Items uploaded before v0.9.14e show the package's internal project title (often “Untitled1”). This renames them to the Rise block's title; already-named items are skipped.">
+        {selected.size > 0
+          ? `Rename uploaded Review items (${selected.size} selected)`
+          : 'Rename uploaded Review items (ALL uploaded)'}
       </button>
     </CollapsibleStep>
   );

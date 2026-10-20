@@ -34,6 +34,9 @@ function toBase64(bytes: Uint8Array): string {
 export interface StorylineUploadRecord {
   itemId: string;
   reviewPrefix: string;
+  /** The Review 360 item name the item carries after our post-publish rename
+   *  (v0.9.14e). Absent on older records → the repair pass renames them. */
+  title?: string;
 }
 
 export interface StorylineUploadSummary {
@@ -65,7 +68,14 @@ export interface StorylineUploadDeps {
     md5Base64: string;
     md5Hex: string;
     pin?: TabPin;
-  }) => Promise<{ ok: true; itemId: string; contentPrefix: string } | { ok: false; error: string }>;
+  }) => Promise<
+    | { ok: true; itemId: string; contentPrefix: string; title?: string; renameError?: string }
+    | { ok: false; error: string }
+  >;
+  /** Rename one existing Review item (default: background STORYLINE_RENAME). */
+  renameOne?: (args: { itemId: string; title: string; pin?: TabPin }) => Promise<
+    { ok: true } | { ok: false; error: string }
+  >;
   refresh?: (pin?: TabPin) => Promise<{ advanced: boolean; valid: boolean; via?: string } | void>;
   /** Resolve the ONE Rise tab this run may use (default: background PIN_RISE_TAB
    *  via pinTargetTab). Injectable for tests. */
@@ -94,7 +104,15 @@ const defaultUploadOne: NonNullable<StorylineUploadDeps['uploadOne']> = async ({
   const resp = await pinnedRpc(pin)({ type: 'STORYLINE_UPLOAD', ...args });
   if (resp.type !== 'STORYLINE_UPLOAD_RESULT') return { ok: false, error: 'unexpected response' };
   if (!resp.result.ok) return { ok: false, error: resp.result.error };
-  return { ok: true, itemId: resp.result.data.itemId, contentPrefix: resp.result.data.contentPrefix };
+  const { itemId, contentPrefix, title, renameError } = resp.result.data;
+  return { ok: true, itemId, contentPrefix, title, renameError };
+};
+
+const defaultRenameOne: NonNullable<StorylineUploadDeps['renameOne']> = async ({ pin, ...args }) => {
+  const resp = await pinnedRpc(pin)({ type: 'STORYLINE_RENAME', ...args });
+  if (resp.type !== 'STORYLINE_RENAME_RESULT') return { ok: false, error: 'unexpected response' };
+  if (!resp.result.ok) return { ok: false, error: resp.result.error };
+  return { ok: true };
 };
 
 interface StoredManifest {
@@ -171,13 +189,7 @@ export async function uploadStorylineToReview360(
   const work: Array<{ courseId: string; title?: string; leaf: string; itemTitle?: string }> = [];
   for (const m of manifests) {
     const legacyLeaves = new Set<string>();
-    // Review item name per leaf: the manifest's recorded block title (Stage B
-    // since v0.9.14d), else the live course doc's `media.storyline.title`
-    // (older manifests), else the package's internal `meta.title`.
-    const itemTitleByLeaf = new Map<string, string>();
-    for (const block of m.blocks ?? []) {
-      if (block.leaf && block.title) itemTitleByLeaf.set(block.leaf, block.title);
-    }
+    const itemTitleByLeaf = manifestTitlesByLeaf(m);
     for (const block of m.blocks ?? []) {
       if (
         block.leaf &&
@@ -215,12 +227,7 @@ export async function uploadStorylineToReview360(
       const leaf = block.leaf;
       if (!leaf || legacyLeaves.has(leaf) || seen.has(leaf)) continue;
       seen.add(leaf);
-      const metaTitle =
-        block.meta && typeof block.meta === 'object'
-          ? (block.meta as { title?: unknown }).title
-          : undefined;
-      const itemTitle =
-        itemTitleByLeaf.get(leaf) ?? (typeof metaTitle === 'string' && metaTitle ? metaTitle : undefined);
+      const itemTitle = itemTitleByLeaf.get(leaf) ?? metaTitleOf(block.meta);
       work.push({ courseId: m.courseId, title: m.title, leaf, itemTitle });
     }
   }
@@ -330,10 +337,19 @@ export async function uploadStorylineToReview360(
       if (!res.ok) throw new Error(res.error);
 
       manifest.uploads = manifest.uploads ?? {};
-      manifest.uploads[leaf] = { itemId: res.itemId, reviewPrefix: res.contentPrefix };
+      manifest.uploads[leaf] = {
+        itemId: res.itemId,
+        reviewPrefix: res.contentPrefix,
+        ...(res.title ? { title: res.title } : {}),
+      };
       await storage.writeStorylineManifest(courseId, JSON.stringify(manifest, null, 2));
       summary.uploaded += 1;
-      onEvent({ kind: 'log', message: `${label} ${leaf}: → ${res.contentPrefix}` });
+      onEvent({
+        kind: 'log',
+        message: `${label} ${leaf}: → ${res.contentPrefix}${res.title ? ` (renamed to "${res.title}")` : ''}${
+          res.renameError ? ` ⚠ rename failed: ${res.renameError} — run "Rename uploaded Review items"` : ''
+        }`,
+      });
     } catch (e) {
       const error = (e as Error).message;
       summary.failed += 1;
@@ -352,5 +368,117 @@ export async function uploadStorylineToReview360(
     message: `Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} automatic package(s); ${summary.legacySkipped} legacy package(s) flagged.`,
   });
   onEvent({ kind: 'import-status', label: 'Storyline upload complete', etaSeconds: null, done: true });
+  return summary;
+}
+
+// --- Review item titles ------------------------------------------------------
+
+/** Review item name per leaf: the manifest's recorded block title (Stage B
+ *  since v0.9.14d), else the live course doc's `media.storyline.title` (older
+ *  manifests, merged in by the caller), else the package's internal `meta.title`. */
+function manifestTitlesByLeaf(m: StoredManifest): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const block of m.blocks ?? []) {
+    if (block.leaf && block.title) out.set(block.leaf, block.title);
+  }
+  return out;
+}
+
+function metaTitleOf(meta: unknown): string | undefined {
+  const t = meta && typeof meta === 'object' ? (meta as { title?: unknown }).title : undefined;
+  return typeof t === 'string' && t ? t : undefined;
+}
+
+export interface StorylineRenameSummary {
+  courses: number;
+  renamed: number;
+  skipped: number;
+  failed: number;
+  errors: { courseId: string; leaf: string; error: string }[];
+}
+
+/**
+ * Repair pass: rename every already-uploaded Review 360 item of the selected
+ * courses to its block's title. Items uploaded before v0.9.14e all show the
+ * package's internal project title ("Untitled1" ×13, live DFO 2026-10-20). A
+ * record whose `title` already equals the target is skipped (idempotent); the
+ * rename result is written back to the manifest. Paced like every other
+ * authoring-side loop; one socket per rename (the background's contract).
+ */
+export async function renameReviewItemsToBlockTitles(
+  storage: Storage,
+  onEvent: (e: ProgressEvent) => void,
+  deps: Pick<StorylineUploadDeps, 'renameOne' | 'pinTab' | 'pacing' | 'onlyCourseIds'> = {},
+): Promise<StorylineRenameSummary> {
+  const renameOne = deps.renameOne ?? defaultRenameOne;
+  const pacing = deps.pacing ?? DEFAULT_PACING;
+  const summary: StorylineRenameSummary = { courses: 0, renamed: 0, skipped: 0, failed: 0, errors: [] };
+  const { pin, blocked } = await (deps.pinTab ?? (() => pinTargetTab(undefined, onEvent)))();
+  if (blocked) {
+    onEvent({ kind: 'log', message: `BLOCKED — ${blocked}` });
+    return summary;
+  }
+  const saved = await storage.listSaved();
+  const ids = deps.onlyCourseIds ? saved.filter((id) => deps.onlyCourseIds!.has(id)) : saved;
+  const work: { courseId: string; leaf: string; itemId: string; title: string; manifest: StoredManifest }[] = [];
+  for (const courseId of ids) {
+    const raw = await storage.readStorylineManifest(courseId);
+    if (!raw) continue;
+    let m: StoredManifest;
+    try {
+      m = JSON.parse(raw) as StoredManifest;
+    } catch {
+      continue;
+    }
+    if (!m.uploads || Object.keys(m.uploads).length === 0) continue;
+    summary.courses += 1;
+    const titles = manifestTitlesByLeaf(m);
+    if (typeof storage.readCourse === 'function') {
+      const doc = await storage.readCourse(courseId);
+      if (doc) {
+        try {
+          for (const b of findStorylineBlocks(unwrap(doc))) {
+            if (b.leaf && b.title && !titles.has(b.leaf)) titles.set(b.leaf, b.title);
+          }
+        } catch {
+          /* manifest titles remain the fallback */
+        }
+      }
+    }
+    for (const [leaf, rec] of Object.entries(m.uploads)) {
+      // No `meta.title` fallback here: that IS the name the server already gave
+      // the item, so renaming to it would be a wasted call.
+      const title = titles.get(leaf);
+      if (!title || !rec.itemId) {
+        summary.skipped += 1;
+        continue;
+      }
+      if (rec.title === title) {
+        summary.skipped += 1;
+        continue;
+      }
+      work.push({ courseId, leaf, itemId: rec.itemId, title, manifest: m });
+    }
+  }
+  onEvent({ kind: 'log', message: `Renaming ${work.length} Review 360 item(s) across ${summary.courses} course manifest(s)…` });
+  for (const [i, w] of work.entries()) {
+    const label = `[${i + 1}/${work.length}]`;
+    if (i > 0) await pacedDelay(pacing);
+    const res = await renameOne({ itemId: w.itemId, title: w.title, pin });
+    if (!res.ok) {
+      summary.failed += 1;
+      summary.errors.push({ courseId: w.courseId, leaf: w.leaf, error: res.error });
+      onEvent({ kind: 'log', message: `${label} ${w.leaf}: FAILED — ${res.error}` });
+      continue;
+    }
+    w.manifest.uploads![w.leaf] = { ...w.manifest.uploads![w.leaf]!, title: w.title };
+    await storage.writeStorylineManifest(w.courseId, JSON.stringify(w.manifest, null, 2));
+    summary.renamed += 1;
+    onEvent({ kind: 'log', message: `${label} ${w.leaf}: renamed to "${w.title}"` });
+  }
+  onEvent({
+    kind: 'log',
+    message: `Rename: ${summary.renamed} renamed, ${summary.skipped} skipped (already named / no title), ${summary.failed} failed.`,
+  });
   return summary;
 }

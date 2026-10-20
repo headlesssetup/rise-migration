@@ -9,6 +9,7 @@ import {
   reviewSocketBaseForPlane,
   uploadStorylinePackage,
   type AckSocket,
+  renameReviewItem,
 } from './review-socket-client';
 
 vi.mock('socket.io-client', () => ({ io: vi.fn() }));
@@ -195,6 +196,20 @@ describe('emitAck', () => {
   it('rejects on timeout when no ack comes', async () => {
     const silent: AckSocket = { emit: () => {}, disconnect: () => {} };
     await expect(emitAck(silent, 'x', [], 5)).rejects.toThrow(/timed out/);
+  });
+});
+
+describe('renameReviewItem', () => {
+  it('emits items:update {title,id} and accepts the ack', async () => {
+    const sock = new FakeSocket(() => ({ success: true }));
+    await renameReviewItem(sock, { id: 'item-1', title: 'Kurs for attestanter' });
+    expect(sock.calls.map((c) => c.event)).toEqual(['items:update']);
+    expect(sock.calls[0]!.args[0]).toEqual({ title: 'Kurs for attestanter', id: 'item-1' });
+  });
+
+  it('throws on an error ack', async () => {
+    const sock = new FakeSocket(() => ({ success: false, error: 'forbidden' }));
+    await expect(renameReviewItem(sock, { id: 'item-1', title: 'x' })).rejects.toThrow(/forbidden/);
   });
 });
 

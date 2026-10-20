@@ -32,6 +32,7 @@ export {
   scanSavedCoursesForStoryline,
   exportStorylinePackages,
   uploadStorylineToReview360,
+  renameReviewItemsToBlockTitles,
   type StorylineCourseScan,
   type StorylineExportSummary,
   type StorylineUploadSummary,

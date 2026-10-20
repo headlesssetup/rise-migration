@@ -12,6 +12,14 @@
 //   emit items:update {versions:[{state:"uploading", package:{key, md5_checksum:<hex>}}], id}
 //   emit items:upload {id, type:"storyline"}      → server unzips + publishes review/items/{leaf}
 //   (readiness via items:get, or the REST /review/items list — parseContentPrefix below)
+//
+// Rename (captured live 2026-10-20 from the EU Review library's own Rename
+// action, console hook on WebSocket.send):
+//   emit items:update {title:"<new name>", id:"<item uuid>"}   → ack
+//   emit items:get    "<item uuid>", {pass:null, protectedLinksFlagEnabled:true}   (UI refresh only)
+// The server REPLACES the item title with the package's internal project title
+// when it unzips (items:upload), so a title passed to items:create does not
+// survive — the rename must run AFTER the contentPrefix is published.
 
 /** Socket.IO event names used by the upload handshake. */
 export const REVIEW_EVENTS = {
@@ -147,6 +155,12 @@ export function buildItemsUpdate(args: ItemsUpdateArgs): Record<string, unknown>
     id: args.id,
     sendBroadcastMessages: false,
   };
+}
+
+/** `items:update` payload that RENAMES an item (capture-confirmed 2026-10-20:
+ *  the library's Rename action sends exactly `{title, id}`). */
+export function buildItemsRename(args: { id: string; title: string }): Record<string, unknown> {
+  return { title: args.title, id: args.id };
 }
 
 /** `items:upload` payload — triggers server-side unzip/transcode/publish. */

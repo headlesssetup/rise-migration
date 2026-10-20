@@ -9,6 +9,7 @@ import { s3PutReview } from '@/core/import/envelopes';
 import type { WriteSpec } from '@/core/import/envelopes';
 import {
   awaitContentPrefix,
+  renameReviewItem,
   connectReviewSocket,
   reviewSocketBaseForPlane,
   uploadStorylinePackage,
@@ -181,9 +182,29 @@ export async function handleStorylineUpload(
           trace.push(`item ${itemId.slice(0, 8)}`, `key ${key.split('/').pop()}`);
           const contentPrefix = await awaitContentPrefix(socket, itemId, { timeoutMs: 180_000 });
           trace.push(`prefix ${contentPrefix}`);
+          // The unzip just replaced the create-time title with the package's
+          // internal project title ("Untitled1"): rename now, after publish.
+          // A rename failure never fails the upload — the item is published and
+          // attachable; the panel reports it and the repair pass can retry.
+          let title: string | undefined;
+          let renameError: string | undefined;
+          if (msg.title) {
+            try {
+              await renameReviewItem(socket, { id: itemId, title: msg.title });
+              title = msg.title;
+              trace.push('renamed');
+            } catch (e) {
+              renameError = (e as Error).message;
+              trace.push(`rename FAILED: ${renameError}`);
+            }
+          }
           return {
             type: 'STORYLINE_UPLOAD_RESULT',
-            result: { ok: true, status: 200, data: { itemId, contentPrefix, key } },
+            result: {
+              ok: true,
+              status: 200,
+              data: { itemId, contentPrefix, key, ...(title ? { title } : {}), ...(renameError ? { renameError } : {}) },
+            },
           };
         } catch (e) {
           return {
@@ -198,4 +219,50 @@ export async function handleStorylineUpload(
             /* ignore */
           }
         }
+}
+
+export async function handleStorylineRename(
+  msg: Extract<BackgroundRequest, { type: 'STORYLINE_RENAME' }>,
+  pin: TabPin | undefined,
+  d: StorylineHandlerDeps,
+): Promise<BackgroundResponse> {
+  const { tokenFor, startKeepalive } = d;
+  // Repair pass: rename ONE existing Review 360 item (same socket, same
+  // namespace as the upload). One socket per call — the panel paces the loop.
+  const resolved = await resolveTarget(pin);
+  if (!resolved.ok) {
+    return { type: 'STORYLINE_RENAME_RESULT', result: { ok: false, error: resolved.error } };
+  }
+  const { plane } = resolved.target;
+  const token = tokenFor(plane);
+  if (!token) {
+    return { type: 'STORYLINE_RENAME_RESULT', result: { ok: false, error: noTokenForPlaneMessage(plane) } };
+  }
+  const userId = await readAccountUserId(pin);
+  if (!userId) {
+    return {
+      type: 'STORYLINE_RENAME_RESULT',
+      result: { ok: false, error: 'No target account user id (open a logged-in Rise/360 tab).' },
+    };
+  }
+  const base = reviewSocketBaseForPlane(plane);
+  const stopKeepalive = startKeepalive();
+  let socket: Awaited<ReturnType<typeof connectReviewSocket>> | null = null;
+  try {
+    socket = await connectReviewSocket({ userId, token, base });
+    await renameReviewItem(socket, { id: msg.itemId, title: msg.title });
+    return {
+      type: 'STORYLINE_RENAME_RESULT',
+      result: { ok: true, status: 200, data: { itemId: msg.itemId, title: msg.title } },
+    };
+  } catch (e) {
+    return { type: 'STORYLINE_RENAME_RESULT', result: { ok: false, error: (e as Error).message } };
+  } finally {
+    stopKeepalive();
+    try {
+      socket?.disconnect();
+    } catch {
+      /* ignore */
+    }
+  }
 }

@@ -3,6 +3,7 @@ import {
   buildItemsCreate,
   buildItemsUpdate,
   buildItemsUpload,
+  buildItemsRename,
   buildYurlGetArg,
   deriveKeyFromUrl,
   isItemReady,
@@ -103,6 +104,8 @@ describe('buildItemsUpdate / buildItemsUpload', () => {
 
   it('defaults items:upload type to storyline', () => {
     expect(buildItemsUpload({ id: 'x' })).toEqual({ id: 'x', type: 'storyline' });
+    // Rename — captured 2026-10-20 from the library's own Rename action.
+    expect(buildItemsRename({ id: 'ec6d2886', title: 'helloworld' })).toEqual({ title: 'helloworld', id: 'ec6d2886' });
   });
 });
 

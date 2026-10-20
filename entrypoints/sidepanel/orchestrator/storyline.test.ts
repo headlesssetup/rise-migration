@@ -8,6 +8,7 @@ import {
   scanSavedCoursesForStoryline,
   updateStorylineImportability,
   uploadStorylineToReview360,
+  renameReviewItemsToBlockTitles,
 } from './storyline';
 import type { ProgressEvent } from './shared';
 
@@ -567,6 +568,68 @@ describe('uploadStorylineToReview360 — Review item title', () => {
     await uploadStorylineToReview360(store, onEvent, { uploadOne, refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } });
     const titles = Object.fromEntries(uploadOne.mock.calls.map((c) => [c[0].fileName, c[0].title]));
     expect(titles).toEqual({ 'L1.zip': 'From manifest', 'L2.zip': 'From course doc', 'L3.zip': 'Untitled1' });
+  });
+
+  it('records the post-publish renamed title in the upload record', async () => {
+    const manifests = new Map<string, string>([
+      ['C1', JSON.stringify({ courseId: 'C1', title: 'C1', blocks: [{ blockId: 'b1', leaf: 'L1', title: 'Named' }] })],
+    ]);
+    const store = {
+      listSaved: async () => ['C1'],
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      readStorylineZip: async () => new Uint8Array([1]),
+    } as any;
+    const { onEvent } = sink();
+    const uploadOne = vi.fn(async (a: { title?: string }) => ({ ok: true as const, itemId: 'it1', contentPrefix: 'review/items/L1', title: a.title }));
+    await uploadStorylineToReview360(store, onEvent, { uploadOne, refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } });
+    expect(JSON.parse(manifests.get('C1')!).uploads.L1).toEqual({ itemId: 'it1', reviewPrefix: 'review/items/L1', title: 'Named' });
+  });
+});
+
+describe('renameReviewItemsToBlockTitles — repair pass', () => {
+  it('renames uploaded items to their block titles, skips already-named ones, records the title', async () => {
+    const manifests = new Map<string, string>([
+      ['C1', JSON.stringify({
+        courseId: 'C1', title: 'C1',
+        blocks: [
+          { blockId: 'b1', leaf: 'L1', title: 'Kurs for attestanter', meta: { title: 'Untitled1' } },
+          { blockId: 'b2', leaf: 'L2', title: 'Already done', meta: { title: 'Untitled1' } },
+          { blockId: 'b3', leaf: 'L3', meta: { title: 'Untitled1' } }, // no block title → skipped (meta.title is what the server already set)
+          { blockId: 'b4', leaf: 'L4', title: 'Four', meta: { title: 'Untitled1' } },
+        ],
+        uploads: {
+          L1: { itemId: 'it1', reviewPrefix: 'review/items/L1' },
+          L2: { itemId: 'it2', reviewPrefix: 'review/items/L2', title: 'Already done' },
+          L3: { itemId: 'it3', reviewPrefix: 'review/items/L3' },
+          L4: { itemId: 'it4', reviewPrefix: 'review/items/L4' },
+        },
+      })],
+      ['C2', JSON.stringify({ courseId: 'C2', title: 'C2', blocks: [{ blockId: 'b9', leaf: 'L9' }] })], // never uploaded
+    ]);
+    const store = {
+      listSaved: async () => ['C1', 'C2'],
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+    } as any;
+    const { onEvent } = sink();
+    const renameOne = vi.fn(async (a: { itemId: string; title: string }) =>
+      a.itemId === 'it4' ? { ok: false as const, error: 'boom' } : { ok: true as const },
+    );
+    const summary = await renameReviewItemsToBlockTitles(store, onEvent, {
+      renameOne,
+      pinTab,
+      pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ courses: 1, renamed: 1, skipped: 2, failed: 1 });
+    expect(renameOne.mock.calls.map((c) => [c[0].itemId, c[0].title])).toEqual([
+      ['it1', 'Kurs for attestanter'],
+      ['it4', 'Four'],
+    ]);
+    const m = JSON.parse(manifests.get('C1')!);
+    expect(m.uploads.L1.title).toBe('Kurs for attestanter');
+    expect(m.uploads.L3.title).toBeUndefined();
+    expect(m.uploads.L4.title).toBeUndefined();
   });
 });
 

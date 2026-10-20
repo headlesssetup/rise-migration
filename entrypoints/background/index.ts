@@ -51,6 +51,7 @@ import { createReauth } from './reauth';
 import {
   handleStorylineExport,
   handleStorylineUpload,
+  handleStorylineRename,
   type StorylineHandlerDeps,
 } from './storyline-handlers';
 import { risePlaneFromUrl } from '@/shared/messaging';
@@ -635,6 +636,10 @@ export default defineBackground(() => {
 
       case 'STORYLINE_UPLOAD': {
         return handleStorylineUpload(msg, pin, storylineDeps);
+      }
+
+      case 'STORYLINE_RENAME': {
+        return handleStorylineRename(msg, pin, storylineDeps);
       }
 
       case 'REAUTH': {

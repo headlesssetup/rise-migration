@@ -18,6 +18,7 @@ import {
   parseContentPrefix,
   parseYurlAck,
   REVIEW_EVENTS,
+  buildItemsRename,
 } from './review-protocol';
 
 export const REVIEW_SOCKET_BASE = 'https://360-review-sockets.eu.articulate.com';
@@ -252,6 +253,24 @@ export async function uploadStorylinePackage(
   assertAckOk(REVIEW_EVENTS.upload, uploadAck);
 
   return { itemId, key };
+}
+
+/**
+ * Rename a Review 360 item: one `items:update {title, id}` with ack. Runs AFTER
+ * the upload's contentPrefix is published (the unzip overwrites the title the
+ * item was created with). Throws on an error ack.
+ */
+export async function renameReviewItem(
+  socket: AckSocket,
+  args: { id: string; title: string; ackTimeoutMs?: number },
+): Promise<void> {
+  const ack = await emitAck(
+    socket,
+    REVIEW_EVENTS.update,
+    [buildItemsRename({ id: args.id, title: args.title })],
+    args.ackTimeoutMs,
+  );
+  assertAckOk(REVIEW_EVENTS.update, ack);
 }
 
 /**

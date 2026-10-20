@@ -456,6 +456,8 @@ export { isAuthError } from './storyline-shared';
 export {
   MAX_UPLOAD_ZIP_BYTES,
   uploadStorylineToReview360,
+  renameReviewItemsToBlockTitles,
+  type StorylineRenameSummary,
   type StorylineUploadDeps,
   type StorylineUploadRecord,
   type StorylineUploadSummary,

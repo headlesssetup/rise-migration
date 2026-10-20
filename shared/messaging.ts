@@ -102,11 +102,15 @@ type BackgroundRequestBody =
       type: 'STORYLINE_UPLOAD';
       zipB64: string;
       fileName: string;
-      /** Review 360 item name for items:create (default: fileName). */
+      /** Review 360 item name; applied by a RENAME after the upload is
+       *  published (items:create's title is overwritten by the unzip). */
       title?: string;
       md5Base64: string;
       md5Hex: string;
-    };
+    }
+  // Rename an existing Review 360 item (repair pass for items uploaded before
+  // v0.9.14e, which all show the package's internal project title).
+  | { type: 'STORYLINE_RENAME'; itemId: string; title: string };
 
 /**
  * A request, optionally PINNED to one resolved Rise tab. `pin` is the whole C4
@@ -151,8 +155,18 @@ export type BackgroundResponse =
     }
   | {
       type: 'STORYLINE_UPLOAD_RESULT';
-      result: FetchResult<{ itemId: string; contentPrefix: string; key: string }>;
+      result: FetchResult<{
+        itemId: string;
+        contentPrefix: string;
+        key: string;
+        /** The title the item carries after the post-publish rename (absent
+         *  when no title was requested); `renameError` when the rename failed
+         *  but the upload itself is published. */
+        title?: string;
+        renameError?: string;
+      }>;
     }
+  | { type: 'STORYLINE_RENAME_RESULT'; result: FetchResult<{ itemId: string; title: string }> }
   | {
       type: 'REAUTH_RESULT';
       // `advanced`: the token's `exp` actually moved forward (a real rotation).

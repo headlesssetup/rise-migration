@@ -445,6 +445,22 @@ bundle, so download alone doesn't enable recreation.)
 
 ---
 
+**Review 360 item title (captured 2026-10-20, EU, console hook on `WebSocket.send`).**
+The server REPLACES an item's title with the package's internal project title
+(`meta.title`, usually "Untitled1") when it unzips the upload (`items:upload`), so a
+title passed to `items:create` does not survive. The library's own Rename action is
+one socket frame on the `/user/{userId}` namespace:
+
+```
+42/user/aid|…,8["items:update",{"title":"<new name>","id":"<item uuid>"}]
+42/user/aid|…,9["items:get","<item uuid>",{"pass":null,"protectedLinksFlagEnabled":true}]   ← UI refresh only
+```
+
+Stage D (v0.9.14e) sends that `items:update` right after the contentPrefix is
+published, naming the item after the block's `media.storyline.title` (the Review
+item name the author sees), and a "Rename uploaded Review items" repair pass does
+the same for items uploaded earlier.
+
 ## 8a. Mondrian ("Custom block") blockuments ✅ captured 2026-08-31
 
 UI name **Custom block**; block JSON `{type:"custom", family:"mondrian",
