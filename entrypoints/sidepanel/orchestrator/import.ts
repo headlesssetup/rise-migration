@@ -274,10 +274,16 @@ export async function runImport(
           'reusing its target ID map, but re-running final parity before this course can be considered imported',
       });
     }
-    if (!opts.dryRun && prior?.completed) {
+    // The skip applies to a DRY run too: a dry run used to plan every selected
+    // course and OVERWRITE its report with a dry-run report, which never counts
+    // as completed — so one accidental "select all + dry run" made the next live
+    // run re-import (duplicate) every finished course. Live DFO 2026-10-20: 39
+    // of 112 live reports lost that way. A completed live report is never
+    // overwritten by a dry run.
+    if (prior?.completed) {
       onEvent({
         kind: 'log',
-        message: `${pfx} Skipped "${courseTitle ?? courseId}" — already imported (target course ${prior.report.newCourseId}); delete _import/${courseId}.report.json to force a re-import`,
+        message: `${pfx} Skipped "${courseTitle ?? courseId}" — already imported (target course ${prior.report.newCourseId})${opts.dryRun ? '; a dry run never re-plans or overwrites a finished course' : ''}; delete _import/${courseId}.report.json to force a re-import`,
       });
       outcomes.push({
         courseId,

@@ -50,7 +50,7 @@ export function emitRunSummary(
     });
   }
   const orphanBanks = outcomes.flatMap((o) =>
-    o.report.flags.filter((f) => f.kind === 'orphan-bank').map((f) => f.detail),
+    (o.report.flags ?? []).filter((f) => f.kind === 'orphan-bank').map((f) => f.detail),
   );
   if (orphanBanks.length) {
     onEvent({ kind: 'log', message: `  orphaned/incomplete banks left in place (delete manually if needed):` });

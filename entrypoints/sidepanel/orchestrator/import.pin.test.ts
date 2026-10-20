@@ -153,6 +153,38 @@ describe('runImport — run tab pin (C4)', () => {
     expect(logs.some((l) => l.includes('could not GET_COURSE newC1'))).toBe(true);
   });
 
+  it('a DRY run skips a completed course and never overwrites its live report', async () => {
+    // Live DFO 2026-10-20: an accidental select-all dry run overwrote 39 live
+    // reports with dry-run reports, so the next live run would have duplicated
+    // 39 courses on the target.
+    mockBackground(true);
+    const writes: string[] = [];
+    const completedStorage = {
+      ...storage,
+      readImportArtifact: async (name: string) =>
+        name === 'C1.report.json'
+          ? JSON.stringify({
+              ok: true,
+              dryRun: false,
+              stopped: false,
+              sourceCourseId: 'C1',
+              newCourseId: 'newC1',
+              readBackPolicyVersion: 2,
+              flags: [],
+              idMap: { C1: 'newC1' },
+            })
+          : null,
+      writeImportArtifact: async (name: string) => void writes.push(name),
+    } as unknown as Storage;
+    const { onEvent, logs } = sink();
+    const res = await runImport(completedStorage, ['C1'], TARGET, { dryRun: true, pacing: NO_PACING }, onEvent);
+
+    expect(res.outcomes[0]).toMatchObject({ courseId: 'C1', status: 'imported' });
+    expect(logs.some((l) => l.includes('already imported'))).toBe(true);
+    expect(writes.filter((w) => w.startsWith('C1.report'))).toEqual([]);
+    expect(sent().some((r) => r.type === 'RELAY_WRITE')).toBe(false);
+  });
+
   it('does not trust a completed report from the older permissive parity policy', async () => {
     mockBackground(true);
     const oldReportStorage = {
