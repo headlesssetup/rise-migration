@@ -230,6 +230,15 @@ describe('verifyParity — lesson links', () => {
     expect(issue?.detail).toContain('still the SOURCE lesson id');
   });
 
+  it('treats a destination dead in the SOURCE too as an expected divergence, not a blocker', () => {
+    // Live DFO 2026-10-19 ("Innovative anskaffelser"): a button to a lesson
+    // deleted long ago — inert on both sides, copied verbatim.
+    const r = verifyParity(doc(['SA', 'SB'], 'GONE'), doc(['TA', 'TB'], 'GONE'));
+    expect(r.issues.filter((i) => i.path.includes('lesson link'))).toEqual([]);
+    const exp = r.expectedDivergences.find((i) => i.path.includes('lesson link'));
+    expect(exp?.detail).toContain('source course either');
+  });
+
   it('passes when the destination resolves on the target', () => {
     const r = verifyParity(doc(['SA', 'SB'], 'SB'), doc(['TA', 'TB'], 'TB'));
     expect(r.issues.filter((i) => i.path.includes('lesson link'))).toEqual([]);

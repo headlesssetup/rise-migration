@@ -77,9 +77,13 @@ export async function handleSetCourseDescription(
   } = ctx;
           // Best-effort like set-title — a missing description ref surfaces in
           // the read-back, not as a course failure.
+          // Authored HTML may link an attachment by its usercontent URL: remap
+          // the key to the uploaded target key (blanked keys strip the media
+          // reference, keeping the text) and retarget the host to the plane.
+          const value = retargetMediaHosts(remapMediaKeys(step.value, keyMap), deps.targetPlane);
           try {
             await send(
-              env.updateCourseFieldThrottle(ctx.newCourseId, 'description', step.value),
+              env.updateCourseFieldThrottle(ctx.newCourseId, 'description', value),
               step.kind,
             );
           } catch (e) {

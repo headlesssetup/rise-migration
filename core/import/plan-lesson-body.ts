@@ -299,6 +299,12 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
       if (isStoryline(block)) {
         const legacy = isKnownLegacyStorylineBlock(block);
         const attach = input.storylineAttach?.get(blockKey(sourceLessonId, sourceBlockId));
+        // The block's `media.storyline.title` is the Review 360 ITEM name the
+        // author sees ("Kurs for attestanter"), NOT the package's internal
+        // project title (`meta.title`, often "Untitled1"). The attach must
+        // carry the former — live DFO 2026-10-19: 13 courses went partial on
+        // exactly this field. The package title is only the fallback.
+        const sourceTitle = storylineBlockTitle(block);
         // On a STACK (idea 2) each language's package lives in its own cell
         // (docs/rise-multilang.md §4.3b). The DEFAULT locale's package attaches
         // like a monolingual block DURING the pre-conversion build (a plain
@@ -323,7 +329,7 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
               sourceBlockId,
               reviewPrefix: defPkg.reviewPrefix,
               meta: defPkg.meta,
-              title: defPkg.title,
+              title: sourceTitle ?? defPkg.title,
               summary: `Attach Storyline [${stackDefaultLocale}] from ${defPkg.reviewPrefix} (default language, pre-conversion)`,
             });
             if (cellId) attached?.add(stackDefaultLocale);
@@ -376,7 +382,7 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
             sourceBlockId,
             reviewPrefix: attach.reviewPrefix,
             meta: attach.meta,
-            title: attach.title,
+            title: sourceTitle ?? attach.title,
             summary: `Attach Storyline from ${attach.reviewPrefix}`,
           });
         } else {
@@ -484,4 +490,13 @@ export function makeLessonPlanners(ctx: LessonPlanContext) {
   };
 
   return { planCourseImages, planLessonBody };
+}
+
+/** The Review 360 item name a storyline block displays — `items[0].media.storyline.title`
+ *  (monolingual, or the materialized twin of a stack block). Undefined when absent. */
+function storylineBlockTitle(block: Block): string | undefined {
+  const items = Array.isArray(block.items) ? block.items : [];
+  const first = items[0] as { media?: { storyline?: { title?: unknown } } } | undefined;
+  const t = first?.media?.storyline?.title;
+  return typeof t === 'string' && t ? t : undefined;
 }

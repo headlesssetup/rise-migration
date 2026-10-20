@@ -61,7 +61,18 @@ export function compareLessonLinks(
             ? `destination ${d} is still the SOURCE lesson id — the link was never remapped`
             : `destination ${d} names no target lesson`,
         };
-        if (flaggedBlocks.has(bid)) expected.push({ ...issue, expected: true });
+        // A destination that names no lesson in the SOURCE either was already
+        // dead when exported (a button to a deleted lesson — live DFO
+        // 2026-10-19, "Innovative anskaffelser"). It is copied verbatim and
+        // inert on both sides: nothing to remap, so not a blocking divergence.
+        const deadAtSource = !sourceLessonIds.has(d);
+        if (deadAtSource) {
+          expected.push({
+            ...issue,
+            detail: `destination ${d} names no lesson in the source course either — dead link copied verbatim (fix the button manually if wanted)`,
+            expected: true,
+          });
+        } else if (flaggedBlocks.has(bid)) expected.push({ ...issue, expected: true });
         else issues.push(issue);
       }
     });

@@ -620,6 +620,23 @@ export function buildPlan(input: PlanInput): PlanStep[] {
     });
   }
 
+  // Monolingual course description — AFTER every upload, so authored HTML that
+  // links an attachment by its usercontent URL is remapped to the TARGET key
+  // (live DFO 2026-10-19: the description used to ride the first-lesson title
+  // write, before the attachment in lesson 3 was uploaded, and shipped the
+  // SOURCE url — one surviving foreign key, course marked partial). A stack's
+  // description is its own pre-conversion step (3b) and is not re-written.
+  if (!stack) {
+    const desc = (course as Record<string, unknown>).description;
+    if (typeof desc === 'string' && desc) {
+      steps.push({
+        kind: 'set-course-description',
+        value: desc,
+        summary: 'Set course description (media refs remapped to the target)',
+      });
+    }
+  }
+
   // Publish/export settings — LAST, so the (possibly quiz) lessons all exist
   // and `quizId` remaps to a real new lesson id (handover 2026-08-31, blocker 3).
   {

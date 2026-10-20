@@ -120,9 +120,24 @@ import type { ExecCtx } from './executor-run-state';
         result.flags.push({ kind: 'typeface', detail: `Custom font "${tf.name}" has no archived bytes — provision it manually on the target` });
         continue;
       }
-      const cresp = payloadOf(
-        await send(env.createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }), 'set-theme'),
-      );
+      // A rejected CREATE_TYPEFACE (live DFO 2026-10-19: HTTP 400 for a custom
+      // "Arial" built from one ArialUnicodeMS.ttf) must not abort a course whose
+      // lessons and blocks are already written — flag the font as manual work
+      // and keep going; the theme ships with the unmapped id (Rise falls back).
+      let cresp: Record<string, unknown> | null = null;
+      try {
+        cresp = payloadOf(
+          await send(env.createTypeface({ name: tf.name, fonts: buildCreateTypefaceFonts(tf, uploaded) }), 'set-theme'),
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`WARN CREATE_TYPEFACE failed for "${tf.name}" (continuing): ${msg}`);
+        result.flags.push({
+          kind: 'typeface',
+          detail: `Custom font "${tf.name}" could not be created on the target (${msg.slice(0, 160)}) — provision it manually`,
+        });
+        continue;
+      }
       const newId = dryRun ? mint() : String(cresp.id ?? '');
       if (newId) idMap.set(tf.id, newId);
       else result.flags.push({ kind: 'typeface', detail: `CREATE_TYPEFACE returned no id for "${tf.name}"` });
@@ -331,15 +346,9 @@ export async function handleSetTitle(
           // title/description (confirmed envelope, but flag if it doesn't take).
           try {
             await send(env.updateCourseTitle(ctx.newCourseId, step.title), step.kind);
-            // The monolingual description rides the (single) `final` title
-            // write; a stack's description is its own pre-conversion step.
-            const desc = deps.input.course.course?.description;
-            if (step.final && typeof desc === 'string' && desc) {
-              await send(
-                env.updateCourseFieldThrottle(ctx.newCourseId, 'description', desc),
-                step.kind,
-              );
-            }
+            // The description is its own `set-course-description` step — LAST
+            // on a monolingual course (after every upload, so its media refs
+            // remap), pre-conversion on a stack.
           } catch (e) {
             log(`WARN title/description not set (continuing): ${(e as Error).message}`);
             result.flags.push({

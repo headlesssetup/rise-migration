@@ -208,7 +208,29 @@ export function s3PutHeaders(url: string, contentType?: string): Record<string, 
  * the presigned URL carries its own signature, so no cookies/bearer. Lifts the old
  * 64MB cap — the only ceiling is now memory (see MAX_UPLOAD_BASE64).
  */
+/** Attempts for a presigned PUT whose fetch THREW (HTTP 0: connection reset, DNS
+ *  blip, sleep/wake). Live DFO 2026-10-19: 4 of 131 courses died on a single such
+ *  blip over four hours, each on a 1–8 MB file. A thrown fetch sent nothing the
+ *  server acted on, so retrying the same presigned PUT is idempotent and safe;
+ *  an HTTP error status (403/5xx) is NOT retried — that is a real answer.
+ *  S3 byte transfers are outside the authoring-API pacing invariant. */
+const S3_PUT_ATTEMPTS = 3;
+const S3_PUT_RETRY_DELAYS_MS = [2000, 5000];
+
 async function panelS3Put(spec: WriteSpec): Promise<RelayResponse> {
+  let last: RelayResponse = { ok: false, status: 0, text: '', error: 'not attempted' };
+  for (let attempt = 1; attempt <= S3_PUT_ATTEMPTS; attempt++) {
+    last = await panelS3PutOnce(spec);
+    if (last.ok || last.status !== 0) return last;
+    const delay = S3_PUT_RETRY_DELAYS_MS[attempt - 1];
+    if (delay === undefined) break;
+    console.warn(`[rise-migration] S3 PUT network failure (attempt ${attempt}/${S3_PUT_ATTEMPTS}): ${last.error ?? ''} — retrying in ${delay}ms`);
+    await new Promise((r) => setTimeout(r, delay));
+  }
+  return last;
+}
+
+async function panelS3PutOnce(spec: WriteSpec): Promise<RelayResponse> {
   try {
     const body = base64ToBlob(spec.base64Body ?? '', spec.contentType || 'application/octet-stream');
     const res = await fetch(spec.url, {

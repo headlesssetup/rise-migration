@@ -703,6 +703,71 @@ describe('executePlan — typography migration', () => {
     expect(coverBody.theme.bodyTypefaceId).toBe('NEWTF');
   });
 
+  it('flags and CONTINUES when CREATE_TYPEFACE is rejected (lessons already written)', async () => {
+    // Live DFO 2026-10-19: HTTP 400 for a custom "Arial" (one ArialUnicodeMS.ttf)
+    // aborted a 45-lesson course at the theme step.
+    const input: PlanInput = {
+      author: 'auth0|t',
+      targetFolderId: 'all',
+      assets: [],
+      banksById: new Map(),
+      course: {
+        course: {
+          id: 'SRC',
+          title: 'C',
+          bodyTypefaceId: 'src-brand',
+          theme: { themeId: 'organic', bodyTypefaceId: 'src-brand' },
+        },
+        lessons: [
+          { id: 'L1', position: 0, type: 'blocks', title: 'L', items: [{ id: 'cb1aaaaaaaaaaaaaaaaaaaaaa', family: 'text', variant: 'p', items: [] }] },
+        ],
+      },
+    };
+    const sourceTypefaces = parseTypefaces({
+      typefaces: [
+        { id: 'src-brand', name: 'AcmeBrand', default: false, fonts: [{ key: 'rise/fonts/a.woff', style: 'regular', original: 'Acme.woff' }] },
+      ],
+    });
+    const seen: string[] = [];
+    let coverBody: any = null;
+    const relay: Relay = async (spec) => {
+      seen.push(spec.label);
+      if (spec.url.includes('/manage/api/content')) return { ok: true, status: 200, text: JSON.stringify({ id: 'NEWCOURSE' }) };
+      if (spec.label.includes('GET_COURSE')) return { ok: true, status: 200, text: JSON.stringify({ payload: { course: { id: 'NEWCOURSE', lessons: [] } } }) };
+      if (spec.label.includes('GET_YURL'))
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { key: 'rise/fonts/NEW.woff', url: 'https://s3/f', type: 'font/woff', filename: 'NEW.woff' } }) };
+      if (spec.label.includes('CREATE_TYPEFACE')) return { ok: false, status: 400, text: '{"message":"Bad Request","name":"BadRequestError"}' };
+      // The theme write is the plain UPDATE_COURSE (NOT UPDATE_COURSE_FIELD_THROTTLE).
+      if (spec.label.endsWith('/UPDATE_COURSE')) { coverBody = JSON.parse(spec.body!).payload; return { ok: true, status: 200, text: '{}' }; }
+      if (spec.label.includes('CREATE_LESSON')) return { ok: true, status: 200, text: JSON.stringify({ payload: { lesson: { id: 'NEWLESSON' } } }) };
+      if (spec.label.includes('CREATE_BLOCKS')) {
+        const id = JSON.parse(spec.body!).payload.blocks[0].id;
+        return { ok: true, status: 200, text: JSON.stringify({ payload: { success: true, blockMetadata: [{ id, globalBlockId: 'g' }] } }) };
+      }
+      return { ok: true, status: 200, text: '{}' };
+    };
+    const res = await executePlan(steps2(input), {
+      input,
+      relay,
+      readAsset: async () => null,
+      sourceTypefaces,
+      // Target account has only Lato (a built-in) — the source brand font
+      // "AcmeBrand" isn't there by name, so it must be recreated.
+      targetTypefaces: parseTypefaces({
+        typefaces: [{ id: 'tgt-lato', name: 'Lato', default: true, fonts: [] }],
+      }),
+      readFontBytes: async () => ({ base64: 'AAAA', contentType: 'font/woff' }),
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(seen.some((s) => s.includes('CREATE_TYPEFACE'))).toBe(true);
+    expect(res.flags.some((f) => f.kind === 'typeface' && /could not be created/.test(f.detail))).toBe(true);
+    // The theme write still happens; the unmapped id ships as-is (Rise falls back).
+    expect(coverBody).not.toBeNull();
+    expect(coverBody.bodyTypefaceId).toBe('src-brand');
+  });
+
   it('reuses a pre-resolved typefaceIdMap (step A) without re-uploading fonts', async () => {
     const input: PlanInput = {
       author: 'auth0|t',

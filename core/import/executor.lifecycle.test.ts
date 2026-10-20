@@ -190,7 +190,7 @@ describe('executePlan — dry run predicts surviving keys (8b)', () => {
 });
 
 describe('executePlan — title lifecycle', () => {
-  it('writes the CLEAN title exactly once (+description on the same step) — no markers', async () => {
+  it('writes the CLEAN title exactly once (+description in its own final step) — no markers', async () => {
     // Operator decision 2026-08-04: no `!importing:`/`!unfinished:` mangling.
     const input = imageCourse();
     (input.course.course as Record<string, unknown>).description = 'A course about things';
@@ -215,7 +215,37 @@ describe('executePlan — title lifecycle', () => {
     });
     expect(res.ok).toBe(true);
     expect(titles).toEqual(['My Course']); // once, clean, never a marker
-    expect(descs).toEqual(['A course about things']); // rides the same step
+    expect(descs).toEqual(['A course about things']); // its own set-course-description step
+  });
+
+  it('remaps a usercontent URL inside the description to the uploaded target key', async () => {
+    // Live DFO 2026-10-19 ("Gruppeprosess"): the description linked an
+    // attachment by its SOURCE url; written before the upload, it survived.
+    const input = imageCourse();
+    (input.course.course as Record<string, unknown>).description =
+      '<p><a href="https://articulateusercontent.com/rise/courses/SRC/a.jpg">bilde</a></p>';
+    const descs: string[] = [];
+    const { relay } = mockRelay({
+      UPDATE_COURSE_FIELD_THROTTLE: (body: any) => {
+        const c = body?.payload?.course ?? {};
+        if (typeof c.description === 'string') descs.push(c.description);
+        return { payload: {} };
+      },
+      ...happyHandlers,
+    });
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay,
+      readAsset: async () => ({ base64: 'AAAA', contentType: 'image/jpeg' }),
+      targetPlane: 'eu',
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+    });
+    expect(res.ok).toBe(true);
+    expect(descs).toHaveLength(1);
+    expect(descs[0]).toContain('rise/courses/NEWCOURSE/server.jpg');
+    expect(descs[0]).toContain('articulateusercontent.eu/');
+    expect(descs[0]).not.toContain('rise/courses/SRC/');
   });
 });
 

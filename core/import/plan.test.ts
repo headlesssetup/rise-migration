@@ -216,7 +216,7 @@ describe('buildPlan ordering', () => {
     }>;
     expect(titles).toHaveLength(1);
     expect(titles[0]!.title).toBe('My Course'); // clean, never a marker
-    expect(titles[0]!.final).toBe(true); // the description rides this write
+    expect(titles[0]!.final).toBe(true);
     // …and it comes right after the first create-lesson (the shell can't be
     // titled while lesson-less).
     const firstLesson = steps.findIndex((s) => s.kind === 'create-lesson');
@@ -553,6 +553,75 @@ describe('buildPlan media + flags', () => {
     // cb2 has no uploaded package → still flagged
     expect(steps.some((s) => s.kind === 'flag-storyline' && s.sourceBlockId === 'cb2')).toBe(true);
     expect(steps.some((s) => s.kind === 'attach-storyline' && s.sourceBlockId === 'cb2')).toBe(false);
+  });
+
+  it('attaches with the SOURCE block\'s Review-item title, falling back to the package title', () => {
+    // Live DFO 2026-10-19: every package's internal `meta.title` was "Untitled1"
+    // while the block showed the Review 360 item name — 13 courses went partial
+    // on `items[0].media.storyline.title`.
+    const course = {
+      course: { id: 'SRC', title: 'C' },
+      lessons: [
+        {
+          id: 'L1',
+          position: 0,
+          type: 'blocks',
+          title: 'L',
+          items: [
+            {
+              id: 'cb1',
+              family: '360',
+              variant: 'storyline',
+              items: [{ id: 'ci1', media: { storyline: { title: 'Kurs for attestanter', src: 'x' } } }],
+            },
+            { id: 'cb2', family: '360', variant: 'storyline', items: [{ id: 'ci2', media: { storyline: {} } }] },
+          ],
+        },
+      ],
+    };
+    const steps = buildPlan(
+      input({
+        course,
+        storylineAttach: new Map([
+          [blockKey('L1', 'cb1'), { reviewPrefix: 'review/items/LEAF1', meta: { title: 'Untitled1' }, title: 'Untitled1' }],
+          [blockKey('L1', 'cb2'), { reviewPrefix: 'review/items/LEAF2', meta: { title: 'Untitled2' }, title: 'Untitled2' }],
+        ]),
+      }),
+    );
+    const attaches = steps.filter((s) => s.kind === 'attach-storyline') as Array<{ sourceBlockId: string; title?: string }>;
+    expect(attaches.find((a) => a.sourceBlockId === 'cb1')?.title).toBe('Kurs for attestanter');
+    expect(attaches.find((a) => a.sourceBlockId === 'cb2')?.title).toBe('Untitled2');
+  });
+
+  it('writes the monolingual description LAST — after every upload, before export settings', () => {
+    // Live DFO 2026-10-19: the description linked an attachment by its
+    // usercontent URL and used to ride the first-lesson title write, before
+    // that attachment uploaded — the source URL survived.
+    const steps = buildPlan(
+      input({
+        assets: [{ key: 'rise/courses/SRC/doc.pdf', kind: 'media-other', file: 'assets/d.pdf' }],
+        course: {
+          course: {
+            id: 'SRC',
+            title: 'C',
+            description: '<p><a href="https://articulateusercontent.com/rise/courses/SRC/doc.pdf">x</a></p>',
+            exportSettings: { completionType: 'all' },
+          },
+          lessons: [
+            {
+              id: 'L1', position: 0, type: 'blocks', title: 'L',
+              items: [{ id: 'cb1', family: 'attachment', variant: 'attachment', items: [{ media: { attachment: { key: 'rise/courses/SRC/doc.pdf' } } }] }],
+            },
+          ],
+        },
+      }),
+    );
+    const kinds = steps.map((s) => s.kind);
+    const desc = kinds.indexOf('set-course-description');
+    expect(desc).toBeGreaterThan(kinds.lastIndexOf('upload-asset'));
+    expect(desc).toBeGreaterThan(kinds.lastIndexOf('create-blocks'));
+    expect(desc).toBeLessThan(kinds.indexOf('set-export-settings'));
+    expect(kinds.filter((k) => k === 'set-course-description')).toHaveLength(1);
   });
 
   it('legacy Storyline wins over a stale uploaded package and requests a text replacement', () => {
