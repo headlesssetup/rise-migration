@@ -20,6 +20,7 @@ const course = {
                 storyline: {
                   contentPrefix: 'rise/courses/C1/k3sFdQgN6xRXAoBp',
                   src: 'rise/courses/C1/k3sFdQgN6xRXAoBp/story.html',
+                  title: 'Geography basics',
                   meta: { title: 'Geo 101', version: '7' },
                 },
               },
@@ -48,6 +49,8 @@ describe('findStorylineBlocks', () => {
     expect(attached.itemId).toBe('item_1');
     expect(attached.leaf).toBe('k3sFdQgN6xRXAoBp');
     expect(attached.meta).toEqual({ title: 'Geo 101', version: '7' });
+    // The Review ITEM name, distinct from the package's internal project title.
+    expect(attached.title).toBe('Geography basics');
 
     const placeholder = refs.find((r) => r.blockId === 'blk_empty')!;
     expect(placeholder.lessonId).toBe('les_2');

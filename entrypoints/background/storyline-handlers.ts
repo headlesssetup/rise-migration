@@ -164,6 +164,7 @@ export async function handleStorylineUpload(
             socket,
             userId,
             fileName: msg.fileName,
+            ...(msg.title ? { title: msg.title } : {}),
             zipBytes,
             md5Base64: msg.md5Base64,
             md5Hex: msg.md5Hex,

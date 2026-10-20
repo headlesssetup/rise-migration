@@ -537,6 +537,39 @@ describe('uploadStorylineToReview360 — scoped to selection (M16)', () => {
   });
 });
 
+describe('uploadStorylineToReview360 — Review item title', () => {
+  const ok = (n: string) => ({ ok: true as const, itemId: `it_${n}`, contentPrefix: `review/items/${n}` });
+
+  it('names the item after the manifest block title, else the course doc, else meta.title', async () => {
+    // Live DFO 2026-10-20: 13 items landed as "Untitled1" (the package's
+    // internal project title) because the upload sent only the zip file name.
+    const manifests = new Map<string, string>([
+      ['C1', JSON.stringify({ courseId: 'C1', title: 'C1', blocks: [{ blockId: 'b1', leaf: 'L1', title: 'From manifest' }] })],
+      ['C2', JSON.stringify({ courseId: 'C2', title: 'C2', blocks: [{ blockId: 'b2', leaf: 'L2', meta: { title: 'Untitled1' } }] })],
+      ['C3', JSON.stringify({ courseId: 'C3', title: 'C3', blocks: [{ blockId: 'b3', leaf: 'L3', meta: { title: 'Untitled1' } }] })],
+    ]);
+    const courseDoc = (leaf: string, title: string) =>
+      JSON.stringify({
+        course: { id: 'x' },
+        lessons: [{ id: 'les', items: [{ id: 'blk', family: '360', variant: 'storyline', items: [{ id: 'i', media: { storyline: { contentPrefix: `rise/courses/x/${leaf}`, title, meta: { title: 'Untitled1' } } } }] }] }],
+      });
+    const store = {
+      listSaved: async () => ['C1', 'C2', 'C3'],
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      readStorylineZip: async () => new Uint8Array([1, 2, 3]),
+      // C2's older manifest lacks the title → the live course doc supplies it;
+      // C3 has neither → the package's meta.title is the last resort.
+      readCourse: async (id: string) => (id === 'C2' ? courseDoc('L2', 'From course doc') : null),
+    } as any;
+    const { onEvent } = sink();
+    const uploadOne = vi.fn(async (a: { fileName: string; title?: string }) => ok(a.fileName.replace('.zip', '')));
+    await uploadStorylineToReview360(store, onEvent, { uploadOne, refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } });
+    const titles = Object.fromEntries(uploadOne.mock.calls.map((c) => [c[0].fileName, c[0].title]));
+    expect(titles).toEqual({ 'L1.zip': 'From manifest', 'L2.zip': 'From course doc', 'L3.zip': 'Untitled1' });
+  });
+});
+
 describe('uploadStorylineToReview360 — legacy exclusion', () => {
   it('does not retrigger an old 3.48 manifest but still uploads a 3.49 package', async () => {
     const doc = courseWithVersions([

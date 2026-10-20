@@ -27,6 +27,10 @@ export function StorylineUploadSection({
   /** The step-C course selection — scopes this upload the same way. */
   selected: Set<string>;
 }) {
+  // Force re-upload: creates NEW Review items for packages already uploaded and
+  // re-points the manifest's upload record at them. Deliberately only offered
+  // with a selection — never a silent mass re-upload of every staged package.
+  const [force, setForce] = useState(false);
   const go = useCallback(async () => {
     if (!storage) return;
     logBreak('Upload storyline packages → Review 360');
@@ -35,7 +39,10 @@ export function StorylineUploadSection({
       // Scope to the courses picked in C so the operator can test 1-2 of many;
       // with nothing selected this stays the previous "every staged manifest".
       const onlyCourseIds = selected.size > 0 ? new Set(selected) : undefined;
-      const s = await uploadStorylineToReview360(storage, onEvent, { onlyCourseIds });
+      const s = await uploadStorylineToReview360(storage, onEvent, {
+        onlyCourseIds,
+        force: force && selected.size > 0,
+      });
       onEvent({
         kind: 'log',
         message: `Done: ${s.uploaded} uploaded, ${s.skipped} skipped, ${s.failed} failed${s.notAttempted ? `, ${s.notAttempted} not attempted` : ''}.`,
@@ -48,7 +55,7 @@ export function StorylineUploadSection({
     } finally {
       setRunning(false);
     }
-  }, [storage, onEvent, logBreak, setRunning, selected]);
+  }, [storage, onEvent, logBreak, setRunning, selected, force]);
 
   return (
     <CollapsibleStep title="D · Storyline → Review 360" defaultOpen={false}>
@@ -60,6 +67,13 @@ export function StorylineUploadSection({
         import uses to attach Storyline blocks. Run on the target tab. Resumable (skips packages
         already uploaded).
       </p>
+      {selected.size > 0 && (
+        <label className="hint" style={{ display: 'block', marginBottom: 6 }}>
+          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />{' '}
+          Re-upload even if already uploaded (creates NEW Review items for the selected courses; the
+          manifest will point at the new items)
+        </label>
+      )}
       <button onClick={go} disabled={!liveOk || running}>
         {running
           ? 'Uploading…'

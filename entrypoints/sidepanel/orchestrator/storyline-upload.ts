@@ -58,6 +58,10 @@ export interface StorylineUploadDeps {
   uploadOne?: (args: {
     zipB64: string;
     fileName: string;
+    /** The Review 360 item name to create the item with (the source block's
+     *  `media.storyline.title`); absent → the zip file name, which the server
+     *  then replaces with the package's internal project title. */
+    title?: string;
     md5Base64: string;
     md5Hex: string;
     pin?: TabPin;
@@ -100,6 +104,7 @@ interface StoredManifest {
     leaf?: string;
     blockId: string;
     meta?: unknown;
+    title?: string;
     compatibility?: StorylineManifestEntry['compatibility'];
   }>;
   uploads?: Record<string, StorylineUploadRecord>;
@@ -163,9 +168,16 @@ export async function uploadStorylineToReview360(
   // known legacy packages. Old manifests predate `compatibility`, so also read
   // their saved course metadata; this prevents already-staged 3.42/3.48 ZIPs
   // from being retriggered after this policy ships.
-  const work: Array<{ courseId: string; title?: string; leaf: string }> = [];
+  const work: Array<{ courseId: string; title?: string; leaf: string; itemTitle?: string }> = [];
   for (const m of manifests) {
     const legacyLeaves = new Set<string>();
+    // Review item name per leaf: the manifest's recorded block title (Stage B
+    // since v0.9.14d), else the live course doc's `media.storyline.title`
+    // (older manifests), else the package's internal `meta.title`.
+    const itemTitleByLeaf = new Map<string, string>();
+    for (const block of m.blocks ?? []) {
+      if (block.leaf && block.title) itemTitleByLeaf.set(block.leaf, block.title);
+    }
     for (const block of m.blocks ?? []) {
       if (
         block.leaf &&
@@ -180,6 +192,9 @@ export async function uploadStorylineToReview360(
           for (const block of findStorylineBlocks(unwrap(raw))) {
             if (block.leaf && isKnownLegacyStorylineMeta(block.meta)) {
               legacyLeaves.add(block.leaf);
+            }
+            if (block.leaf && block.title && !itemTitleByLeaf.has(block.leaf)) {
+              itemTitleByLeaf.set(block.leaf, block.title);
             }
           }
         } catch {
@@ -200,7 +215,13 @@ export async function uploadStorylineToReview360(
       const leaf = block.leaf;
       if (!leaf || legacyLeaves.has(leaf) || seen.has(leaf)) continue;
       seen.add(leaf);
-      work.push({ courseId: m.courseId, title: m.title, leaf });
+      const metaTitle =
+        block.meta && typeof block.meta === 'object'
+          ? (block.meta as { title?: unknown }).title
+          : undefined;
+      const itemTitle =
+        itemTitleByLeaf.get(leaf) ?? (typeof metaTitle === 'string' && metaTitle ? metaTitle : undefined);
+      work.push({ courseId: m.courseId, title: m.title, leaf, itemTitle });
     }
   }
 
@@ -253,7 +274,7 @@ export async function uploadStorylineToReview360(
       summary.notAttempted += 1;
       continue;
     }
-    const { courseId, title, leaf } = work[i]!;
+    const { courseId, title, leaf, itemTitle } = work[i]!;
     const label = `[${i + 1}/${work.length}]`;
     onEvent({ kind: 'course', index: i, total: work.length, courseId, title });
     onEvent(
@@ -294,10 +315,14 @@ export async function uploadStorylineToReview360(
     if (summary.uploaded + summary.failed > 0) await pacedDelay(pacing);
 
     try {
-      onEvent({ kind: 'log', message: `${label} ${title ?? courseId} / ${leaf}: uploading…` });
+      onEvent({
+        kind: 'log',
+        message: `${label} ${title ?? courseId} / ${leaf}: uploading${itemTitle ? ` as "${itemTitle}"` : ''}…`,
+      });
       const res = await uploadOne({
         zipB64: toBase64(bytes),
         fileName: `${leaf}.zip`,
+        ...(itemTitle ? { title: itemTitle } : {}),
         md5Base64: md5Base64(bytes),
         md5Hex: md5Hex(bytes),
         pin,

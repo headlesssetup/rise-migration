@@ -222,6 +222,7 @@ describe('uploadStorylinePackage', () => {
       socket: sock,
       userId: 'auth0|u',
       fileName: 'blk_9.zip',
+      title: 'Kurs for attestanter',
       createdAt: '2026-06-24T00:00:00.000Z',
       zipBytes,
       md5Base64: 'MD5B64==',
@@ -230,6 +231,9 @@ describe('uploadStorylinePackage', () => {
     });
 
     expect(res).toEqual({ itemId: 'item-uuid', key: 'review/uploads/PFX/blk_9.zip' });
+    // items:create names the item after the block's Review-item title, not the zip.
+    const create = sock.calls.find((c) => c.event === 'items:create')!.args[0] as any;
+    expect(create.title).toBe('Kurs for attestanter');
     expect(sock.calls.map((c) => c.event)).toEqual([
       'items:create',
       'yurl:get',

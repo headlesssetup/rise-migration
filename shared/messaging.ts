@@ -102,6 +102,8 @@ type BackgroundRequestBody =
       type: 'STORYLINE_UPLOAD';
       zipB64: string;
       fileName: string;
+      /** Review 360 item name for items:create (default: fileName). */
+      title?: string;
       md5Base64: string;
       md5Hex: string;
     };

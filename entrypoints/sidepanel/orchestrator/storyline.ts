@@ -52,6 +52,10 @@ export interface StorylineManifestEntry {
   itemId?: string;
   leaf?: string;
   meta?: unknown;
+  /** The block's Review 360 item name (`media.storyline.title`) — what Stage C
+   *  names the uploaded item, so the target library does not show the
+   *  package's internal project title ("Untitled1" ×13, live DFO 2026-10-20). */
+  title?: string;
   /** Stored Review-360 upload zip, relative to the archive root. */
   zip?: string;
   /** Preserved legacy runtime package, outside the uploadable store. */
@@ -219,6 +223,7 @@ export async function exportStorylinePackages(
         itemId: block.itemId,
         leaf: block.leaf,
         meta: block.meta,
+        ...(block.title ? { title: block.title } : {}),
         compatibility: isKnownLegacyStorylineMeta(block.meta)
           ? 'legacy-unsupported'
           : 'source-placeholder',
@@ -342,6 +347,7 @@ export async function exportStorylinePackages(
           itemId: block.itemId,
           leaf: block.leaf,
           meta: block.meta,
+          ...(block.title ? { title: block.title } : {}),
           ...(block.leaf && legacy
             ? { archiveZip: `storyline-legacy/${courseId}/${block.leaf}.zip` }
             : block.leaf

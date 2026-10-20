@@ -24,6 +24,9 @@ export interface StorylineBlockRef {
   leaf?: string;
   /** Existing `media.storyline.meta` (== the package's threeSixty.json). */
   meta?: StorylineMeta;
+  /** `media.storyline.title` — the Review 360 ITEM name the author sees (NOT
+   *  the package's internal project title `meta.title`, often "Untitled1"). */
+  title?: string;
   /** JSON path of the block (diagnostics). */
   path: string;
   /**
@@ -49,11 +52,13 @@ function isStorylineBlock(o: Record<string, unknown>): boolean {
 function readPackage(storyline: Record<string, unknown>): {
   leaf?: string;
   meta?: StorylineMeta;
+  title?: string;
 } {
   const contentPrefix = typeof storyline.contentPrefix === 'string' ? storyline.contentPrefix : '';
   const leaf = contentPrefix ? contentPrefix.split('/').filter(Boolean).pop() : undefined;
   const meta = isObject(storyline.meta) ? (storyline.meta as StorylineMeta) : undefined;
-  return { leaf, meta };
+  const title = typeof storyline.title === 'string' && storyline.title.trim() ? storyline.title : undefined;
+  return { leaf, meta, title };
 }
 
 /** Per-locale translation tables of a stack doc (empty for a plain course). */
@@ -80,7 +85,7 @@ function readBlockMedia(
   tables: Record<string, Record<string, unknown>>,
 ): {
   itemId?: string;
-  packages: { leaf?: string; meta?: StorylineMeta; locale?: string; l10nId?: string }[];
+  packages: { leaf?: string; meta?: StorylineMeta; title?: string; locale?: string; l10nId?: string }[];
 } {
   const items = Array.isArray(block.items) ? block.items : [];
   const first = items.find(isObject);
@@ -92,7 +97,7 @@ function readBlockMedia(
   // Stack: media is an l10n ref → resolve each locale's cell.
   const l10nId = typeof media.l10nId === 'string' ? media.l10nId : undefined;
   if (l10nId) {
-    const packages: { leaf?: string; meta?: StorylineMeta; locale?: string; l10nId: string }[] = [];
+    const packages: { leaf?: string; meta?: StorylineMeta; title?: string; locale?: string; l10nId: string }[] = [];
     for (const [locale, table] of Object.entries(tables)) {
       const cell = table[l10nId];
       if (!isObject(cell)) continue;
