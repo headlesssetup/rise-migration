@@ -41,7 +41,8 @@ import {
 import { parseWebExportRuntimeData } from '@/core/storyline/web-export';
 import type { TabPin } from '@/shared/messaging';
 import { pinnedRpc, pinTargetTab } from './import-shared';
-import { etaStatus, unwrap, type ProgressEvent } from './shared';
+import { nowStamp } from '../log-lines';
+import { courseRef, etaStatus, unwrap, type ProgressEvent } from './shared';
 
 
 
@@ -83,7 +84,7 @@ export interface StorylineExportSummary {
   /** Set when the run aborted early; the reason (shown to the operator). */
   aborted?: string;
   /** Per-course failures (courseId → message) for the report. */
-  errors: Array<{ courseId: string; error: string }>;
+  errors: Array<{ courseId: string; title?: string; error: string }>;
 }
 
 /** Public CDN fetch of the export zip (default; injectable for tests). */
@@ -200,9 +201,10 @@ export async function exportStorylinePackages(
 
     if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
       summary.skipped += 1;
+      // ✓: a resume skip is a success — the packages are already staged.
       onEvent({
         kind: 'log',
-        message: `${target.title ?? target.courseId}: already exported, skipped`,
+        message: `✓ ${target.title ?? target.courseId}: already exported, skipped`,
       });
       continue;
     }
@@ -257,7 +259,7 @@ export async function exportStorylinePackages(
     onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
     onEvent({
       kind: 'log',
-      message: `Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
+      message: `✓ Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
     });
     return summary;
   }
@@ -282,7 +284,7 @@ export async function exportStorylinePackages(
     // it removes the old requirement that the operator keep an editor open just
     // to start a long Storyline export from the dashboard.
     const r = await refresh(pin, pending[0]!.courseId);
-    if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+    if (r) onEvent({ kind: 'log', message: `${r.valid ? '' : '⚠ '}Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
     if (r && r.valid === false) {
       summary.aborted = 'stale session token';
       summary.notAttempted = pending.length;
@@ -314,7 +316,8 @@ export async function exportStorylinePackages(
     if (i > 0) await pacedDelay(pacing); // pace between course builds (authoring write)
 
     try {
-      onEvent({ kind: 'log', message: `${label} ${title ?? courseId}: triggering web export…` });
+      // Stamped: a web-export build takes tens of seconds to minutes per course.
+      onEvent({ kind: 'log', message: `${nowStamp()} ${label} ${title ?? courseId}: triggering web export…` });
       const res = await exportOne(courseId, title ?? courseId, pin);
       if (!res.ok) throw new Error(res.error);
 
@@ -420,8 +423,8 @@ export async function exportStorylinePackages(
     } catch (e) {
       const error = (e as Error).message;
       summary.failed += 1;
-      summary.errors.push({ courseId, error });
-      onEvent({ kind: 'log', message: `${label} ${title ?? courseId}: FAILED — ${error}` });
+      summary.errors.push({ courseId, title, error });
+      onEvent({ kind: 'log', message: `${label} ${courseRef(title, courseId)}: FAILED — ${error}` });
 
       // A stale session 403s every build — abort instead of looping 152×.
       if (isAuthError(error)) {
@@ -439,7 +442,7 @@ export async function exportStorylinePackages(
   onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
   onEvent({
     kind: 'log',
-    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
+    message: `${summary.failed || summary.aborted ? '⚠' : '✓'} Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
   });
   return summary;
 }

@@ -37,6 +37,30 @@ export function appendLogLines(
   return [trimMarker(dropped + overflow), ...body.slice(overflow)];
 }
 
+// --- Timestamps ---------------------------------------------------------------
+// Operations that take real time (an operation header, a course fetch, a
+// Storyline build/upload) carry a leading `HH:MM:SS ` wall-clock stamp so the
+// operator can tell when a step started and how long it took. Per-asset lines
+// (sub-second) are deliberately unstamped. The stamp is a presentation prefix:
+// the classifier strips it before looking for status markers.
+const TIME_STAMP = /^\s*\d\d:\d\d:\d\d\s+/;
+
+/** Current wall-clock time as `HH:MM:SS` (local), for operation-start lines. */
+export function nowStamp(now: Date = new Date()): string {
+  return [now.getHours(), now.getMinutes(), now.getSeconds()]
+    .map((n) => String(n).padStart(2, '0'))
+    .join(':');
+}
+
+/** Elapsed duration (ms) as `Xs` / `Xm Ys` / `Xh Ym` for end-of-run lines. */
+export function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
 // Status markers only count in "status position" — at the start of the line
 // (after an optional `[i/N …]` progress prefix) or straight after a `label: `.
 // Those are the two shapes every emitter uses (`[3/20 folders] OK   created "X"`,
@@ -53,27 +77,71 @@ const RULES: Array<[RegExp, string]> = [
   // fetched; it is blanked without a flag at import, so its HTTP status is a
   // warning, never a failure (the later `HTTP 4xx` rule must not see it).
   [/^(?:WARN|PARTIAL|STOPPED|OPTIONAL)\b|^⚠/, 'log-warn'],
-  [/^DRY\b/, 'log-dry'],
-  [/^(?:OK|Done|Imported|Planned)\b|^✓/, 'log-ok'],
+  // `Planned` is a dry run's per-course outcome — grey like every other DRY
+  // line, never green (it looked like a real import success).
+  [/^(?:DRY|Planned)\b/, 'log-dry'],
+  [/^(?:OK|Done|Imported)\b|^✓/, 'log-ok'],
   // `<label>: MARKER` — the per-course/per-item form.
   [/:[ \t](?:FAILED|BLOCKED|ERROR)\b|:[ \t][⛔✗]/, 'log-error'],
   [/:[ \t](?:WARN|PARTIAL|STOPPED)\b|:[ \t]⚠/, 'log-warn'],
-  [/:[ \t]DRY\b/, 'log-dry'],
-  [/:[ \t](?:OK|Imported|Planned)\b|:[ \t]✓/, 'log-ok'],
+  [/:[ \t](?:DRY|Planned)\b/, 'log-dry'],
+  [/:[ \t](?:OK|Imported)\b|:[ \t]✓/, 'log-ok'],
   // `List error: …`, `Folders unavailable: …` — the word labels the failure.
   [/\b(?:error|failed|unauthorized|unavailable):/i, 'log-error'],
   // A quoted HTTP failure status anywhere is a failure, whoever emitted it.
   [/\bHTTP [45]\d\d\b/, 'log-error'],
-  // `Search OK (HTTP 200)` — an OK marker inside the leading label text, which
-  // (letters/spaces only, no colon) can't be a `Saved: <course title>` tail.
-  [/^[A-Za-z ]{0,20}\bOK\b/, 'log-ok'],
+  // `Search OK (HTTP 200)`, `storyline read-back OK — …` — an OK marker inside
+  // the leading label text, which (letters/spaces/hyphens only, no colon) can't
+  // be a `Saved: <course title>` tail.
+  [/^[A-Za-z -]{0,24}\bOK\b/, 'log-ok'],
 ];
 
 /** Classify a log line for colorization (CSS in style.css). */
 export function logLineClass(line: string): string {
+  const unstamped = line.replace(TIME_STAMP, '');
   // Operation/course headers are emitted with a leading ▶ marker — render bold.
-  if (/^\s*▶/.test(line)) return 'log-line log-head';
-  const body = line.replace(PROGRESS_PREFIX, '');
+  if (/^\s*▶/.test(unstamped)) return 'log-line log-head';
+  const body = unstamped.replace(PROGRESS_PREFIX, '');
   for (const [re, cls] of RULES) if (re.test(body)) return `log-line ${cls}`;
   return 'log-line';
+}
+
+// --- Filtering ----------------------------------------------------------------
+
+/** Log view filter: everything, only warnings+errors, or only errors. */
+export type LogFilter = 'all' | 'problems' | 'errors';
+
+const KEEP: Record<LogFilter, ReadonlySet<string>> = {
+  all: new Set(),
+  problems: new Set(['log-line log-error', 'log-line log-warn']),
+  errors: new Set(['log-line log-error']),
+};
+
+/**
+ * Reduce the log to the lines a filter keeps. A `▶` header survives only when
+ * at least one kept line follows it (before the next header) — otherwise a
+ * 170-course import would show 170 bold headers with nothing under them. A
+ * surviving header is preceded by a gap, as in the unfiltered log.
+ */
+export function filterLogLines(lines: readonly string[], filter: LogFilter): string[] {
+  if (filter === 'all') return [...lines];
+  const keep = KEEP[filter];
+  const out: string[] = [];
+  let pendingHead: string | null = null;
+  for (const line of lines) {
+    if (line === '') continue;
+    const cls = logLineClass(line);
+    if (cls === 'log-line log-head') {
+      pendingHead = line;
+      continue;
+    }
+    if (!keep.has(cls)) continue;
+    if (pendingHead !== null) {
+      if (out.length > 0) out.push('');
+      out.push(pendingHead);
+      pendingHead = null;
+    }
+    out.push(line);
+  }
+  return out;
 }

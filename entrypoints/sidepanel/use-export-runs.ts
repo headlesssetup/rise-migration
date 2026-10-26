@@ -40,6 +40,8 @@ import {
 } from '@/core/local-archive';
 import type { SessionState } from '@/shared/messaging';
 import type { SearchResultItem } from '@/shared/types/rise';
+import { fmtElapsed } from './log-lines';
+import { courseRef } from './orchestrator/shared';
 import {
   mergeById,
   parseIdRows,
@@ -238,6 +240,7 @@ export function useExportRuns({
       guarded('Fetch courses', async () => {
         if (!storage) return;
         logBreak('Fetch courses');
+        const t0 = Date.now();
         setPhase('exporting');
         setCensus(null);
         setNovelty(null);
@@ -315,10 +318,12 @@ export function useExportRuns({
         setCensus(built);
         setNovelty(nov);
         setPhase('done');
+        // Verdict colour follows the outcome: ✓ only when nothing failed and
+        // nothing was left unattempted (a green "failed 47" hid real failures).
         addLog(
           stopped
-            ? `Stopped safely — saved ${saved}, skipped ${skipped}, failed ${failed.length}; ${stopped.remaining} course(s) not attempted. Partial census + catalog + novelty written.`
-            : `Done — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
+            ? `⚠ Stopped safely after ${fmtElapsed(Date.now() - t0)} — saved ${saved}, skipped ${skipped}, failed ${failed.length}; ${stopped.remaining} course(s) not attempted. Partial census + catalog + novelty written.`
+            : `${failed.length ? '⚠' : '✓'} Done in ${fmtElapsed(Date.now() - t0)} — saved ${saved}, skipped ${skipped}, failed ${failed.length}. Census + catalog + novelty written.`,
         );
         addLog(
           `Catalog: ${nov.variantCount} variant(s). Novelty: ${nov.newVariants.length} new variant(s), ${nov.newFields.length} new field(s). Manifest lists ${courseList.length} course(s).`,
@@ -356,7 +361,7 @@ export function useExportRuns({
         setBanks(cat);
         setPhase('done');
         if (res.failed.length) {
-          addLog(`Question banks: ${res.failed.length} failed to fetch.`);
+          addLog(`⚠ Question banks: ${res.failed.length} failed to fetch.`);
         }
         addLog(
           `Question banks: ${cat.bankCount} bank(s), ${cat.questionCount} question(s); types: ${
@@ -382,6 +387,7 @@ export function useExportRuns({
       guarded('Download assets', async () => {
         if (!storage) return;
         logBreak('Download assets');
+        const t0 = Date.now();
         setPhase('exporting');
         setAssets(null);
         setProgress(null);
@@ -413,7 +419,7 @@ export function useExportRuns({
           0,
         );
         addLog(
-          `Assets: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
+          `${summary.failed || !summary.complete ? '⚠' : '✓'} Assets in ${fmtElapsed(Date.now() - t0)}: ${summary.written} written, ${summary.deduped} deduped, ${summary.reused} reused, ${summary.failed} failed across ${summary.owners} owner(s)${
             summary.skipped ? ` (${summary.skipped} already done)` : ''
           }. → assets/, *.assets.json, assets-summary.json.`,
         );
@@ -459,8 +465,8 @@ export function useExportRuns({
             });
             addLog(
               summary.complete
-                ? 'Archive preflight state: READY.'
-                : 'Archive preflight state: INCOMPLETE — asset retries are required before import.',
+                ? '✓ Archive preflight state: READY.'
+                : '⚠ Archive preflight state: INCOMPLETE — asset retries are required before import.',
             );
           }
         } catch (e) {
@@ -475,6 +481,7 @@ export function useExportRuns({
       guarded('Export storyline packages', async () => {
         if (!storage) return;
         logBreak('Export storyline packages');
+        const t0 = Date.now();
         setPhase('exporting');
         setStoryline(null);
         setProgress(null);
@@ -492,10 +499,10 @@ export function useExportRuns({
         setStoryline(summary);
         setPhase('done');
         addLog(
-          `Storyline: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved. → storyline/<courseId>/<leaf>.zip, storyline-legacy/<courseId>/<leaf>.zip + manifest.`,
+          `${summary.failed || summary.aborted ? '⚠' : '✓'} Storyline in ${fmtElapsed(Date.now() - t0)}: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved. → storyline/<courseId>/<leaf>.zip, storyline-legacy/<courseId>/<leaf>.zip + manifest.`,
         );
         if (summary.failed) {
-          for (const e of summary.errors) addLog(`⚠ ${e.courseId}: ${e.error}`);
+          for (const e of summary.errors) addLog(`⚠ ${courseRef(e.title, e.courseId)}: ${e.error}`);
         }
       }),
     [guarded, storage, onEvent, addLog, logBreak, selected],

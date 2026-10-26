@@ -1,6 +1,44 @@
 # Project Status
 
-_Last updated: 2026-10-19 (v0.9.13: DFO export analysis + mondrian schema-version fix). Keep this current at each phase boundary._
+_Last updated: 2026-10-26 (v0.9.16: log-window + import-ordering QOL). Keep this current at each phase boundary._
+
+## v0.9.16 (2026-10-26) — Log window QOL + import-ordering preflight
+
+Operator QOL after the DFO run; no protocol changes.
+
+- **Log filter.** The log card has All / Problems / Errors chips
+  (`LogCard.tsx`, `filterLogLines` in `log-lines.ts`). Problems = amber + red;
+  a `▶` header survives only when a kept line sits under it, so a 170-course
+  import shows just the courses that went wrong. Copy still copies everything.
+- **Timestamps.** Every `▶` operation header, each export course fetch
+  (`HH:MM:SS [i/N] Fetching: …`), each Storyline web-export trigger and each
+  Review 360 upload start carry a wall-clock stamp; export/assets/storyline
+  "Done" lines and the import run summary report elapsed time. Per-asset lines
+  stay unstamped. The classifier strips the stamp before reading markers.
+- **Status colours audited** (emitter-side markers, not classifier guessing):
+  resume skips (`✓ Skipped (already saved)`, `✓ … already exported, skipped`,
+  `✓ Assets already done`) and export `✓ Saved:` are green; `Done — … failed N`
+  is ⚠ when N > 0; read-back verdicts are `✓`/`✗`; the import run summary and
+  every "needs attention" list are ⚠ unless clean; `flags:` roll-ups, token
+  INVALID, archive INCOMPLETE, unreadable-skips, "not in archive" are ⚠;
+  `Planned` (dry run) is grey, not green; the bounded `GET_COURSE not ready yet
+  (attempt i/N)` poll no longer paints red; the SKIPPED-for-missing-assets
+  course is red (it is a `failed` outcome).
+- **Course names on problem lines.** Problem lines name a course as
+  `"Title" (id)` (`courseRef` in `orchestrator/shared.ts`); unreadable/absent
+  courses get the title from the manifest (`readCourseTitleIndex`). Export
+  `FAILED`, asset owner failures, storyline errors and import skips no longer
+  print a bare id.
+- **Import-ordering preflight** (`orchestrator/import-preflight.ts`). Before a
+  live course import, three archive-only checks: courses in a source folder
+  with "Re-create folders" off (→ root), Storyline packages not yet uploaded by
+  step D, draw-from-bank banks not imported by step B. Findings show a
+  Continue anyway / Abort box in step C; a dry run just logs them. The Import
+  view + README now state the real order **A → B → D → C** (D must precede C:
+  the course import attaches only what D recorded in the manifest).
+- **Setup card shows the connected archive folder name** (was Home-only).
+- **Assets failure table** relabelled (`failed keys`, `example location`) with
+  a caption explaining it is the per-owner download-failure report.
 
 ## v0.9.13 (2026-10-19) — DFO US→EU: novelty acceptance + mondrian `_v` adoption
 

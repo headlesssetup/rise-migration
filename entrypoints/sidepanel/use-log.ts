@@ -2,7 +2,7 @@
 // The hook is called by App so the log survives view navigation; views only
 // receive the returned handles.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { appendLogLines } from './log-lines';
+import { appendLogLines, nowStamp } from './log-lines';
 
 export function useLog() {
   const [log, setLog] = useState<string[]>([]);
@@ -33,12 +33,13 @@ export function useLog() {
   }, []);
 
   // Visually separate each new user-launched operation in the log: drop a blank
-  // line before it (never as the very first line), then an optional bold ▶ header.
+  // line before it (never as the very first line), then an optional bold ▶ header
+  // stamped with the wall-clock start time (operations take minutes to hours).
   const logBreak = useCallback((label?: string) => {
     setLog((l) =>
       appendLogLines(l, [
         ...(l.length === 0 ? [] : ['']),
-        ...(label ? [`▶ ${label}`] : []),
+        ...(label ? [`${nowStamp()} ▶ ${label}`] : []),
       ]),
     );
   }, []);

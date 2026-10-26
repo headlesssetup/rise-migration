@@ -248,7 +248,9 @@ export async function handleCreateCourse(
                   );
                 }
               } else {
-                log(`${pfx()} …    GET_COURSE not ready yet (attempt ${attempt}/${tries}, HTTP ${r.status})`);
+                // "status N", not "HTTP N": an expected poll in a bounded retry
+                // loop must not paint red like a real HTTP failure.
+                log(`${pfx()} …    GET_COURSE not ready yet (attempt ${attempt}/${tries}, status ${r.status} — retrying)`);
               }
             }
             if (!confirmed) {

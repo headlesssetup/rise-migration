@@ -321,6 +321,27 @@ button:disabled {
   margin: 0;
 }
 
+/* All / Problems / Errors view filter — segmented, always visible (unlike the
+   hover-only Copy/Clear buttons: hunting for a failure must not need a hover). */
+.log-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+}
+.log-filter-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.log-filter-btn.active {
+  opacity: 1;
+  font-weight: 600;
+  outline: 1px solid currentColor;
+}
+
 /* Tiny copy button — subtle until you hover the Log card. */
 .copy-btn {
   display: inline-flex;

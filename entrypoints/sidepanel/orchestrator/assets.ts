@@ -26,7 +26,7 @@ import {
   type OptionalAssetReason,
 } from '@/core/assets';
 import type { Storage } from '@/core/storage/storage';
-import { unwrap, type ProgressEvent } from './shared';
+import { courseRef, readCourseTitleIndex, unwrap, type ProgressEvent } from './shared';
 
 const CDN_US = 'https://articulateusercontent.com/';
 const CDN_EU = 'https://articulateusercontent.eu/';
@@ -243,13 +243,17 @@ export async function downloadAllAssets(
 ): Promise<AssetsSummary> {
   // Gather owners (courses + banks) and their parsed docs.
   const owners: Owner[] = [];
+  const titles = await readCourseTitleIndex(storage);
   for (const id of await storage.listSaved()) {
     const raw = await storage.readCourse(id);
     if (!raw) continue;
     try {
       owners.push({ scope: 'courses', ownerType: 'course', id, doc: unwrap(raw) });
     } catch {
-      onEvent({ kind: 'log', message: `Skipped unreadable course: ${id}` });
+      onEvent({
+        kind: 'log',
+        message: `⚠ Skipped unreadable course: ${courseRef(titles.get(id), id)}`,
+      });
     }
   }
   for (const id of await storage.listSavedBanks()) {
@@ -258,7 +262,7 @@ export async function downloadAllAssets(
     try {
       owners.push({ scope: 'question-banks', ownerType: 'bank', id, doc: JSON.parse(raw) });
     } catch {
-      onEvent({ kind: 'log', message: `Skipped unreadable bank: ${id}` });
+      onEvent({ kind: 'log', message: `⚠ Skipped unreadable bank: ${id}` });
     }
   }
 
@@ -285,6 +289,10 @@ export async function downloadAllAssets(
     // run streams thousands of `[i/N assets]` lines and the operator must see
     // which owner-of-total they belong to without scrolling back.
     const pfx = `[${i + 1}/${owners.length}]`;
+    // Success lines name the owner by title; problem lines add the id so the
+    // archive files can be found too.
+    const name = ownerTitle(owner) ?? owner.id;
+    const ref = courseRef(ownerTitle(owner), owner.id);
 
     try {
       // Custom-block (mondrian) assets live in the course's archived blockument
@@ -364,21 +372,25 @@ export async function downloadAllAssets(
           recordOwnerFailures(summary, owner, priorTerminal);
           const optionalCount = priorTerminal.filter((f) => f.optionalReason).length;
           const orphanCount = priorTerminal.length - optionalCount;
+          // ✓ when the resume skip is clean; ⚠ when the owner still carries
+          // active media that is gone at the source.
           onEvent({
             kind: 'log',
-            message: `${pfx} Assets already done: ${owner.id}${
-              orphanCount ? ` (⚠ ${orphanCount} active asset(s) unavailable)` : ''
-            }${
-              optionalCount ? ` (${optionalCount} optional source ref(s) unavailable)` : ''
-            }`,
+            message: orphanCount
+              ? `${pfx} ⚠ Assets already done: ${ref} (${orphanCount} active asset(s) unavailable)${
+                  optionalCount ? ` (${optionalCount} optional source ref(s) unavailable)` : ''
+                }`
+              : `${pfx} ✓ Assets already done: ${name}${
+                  optionalCount ? ` (${optionalCount} optional source ref(s) unavailable)` : ''
+                }`,
           });
           continue;
         }
         onEvent({
           kind: 'log',
           message: lostBlob
-            ? `${pfx} Assets re-run ${owner.id}: stored blob missing (${lostBlob})`
-            : `${pfx} Assets re-run ${owner.id}: ${newKeys.length} key(s) not covered by the prior manifest (e.g. ${newKeys[0]})`,
+            ? `${pfx} Assets re-run ${name}: stored blob missing (${lostBlob})`
+            : `${pfx} Assets re-run ${name}: ${newKeys.length} key(s) not covered by the prior manifest (e.g. ${newKeys[0]})`,
         });
       }
 
@@ -411,7 +423,7 @@ export async function downloadAllAssets(
       if (stats.orphaned || stats.failed) {
         onEvent({
           kind: 'log',
-          message: `${pfx} ⚠ ${owner.id}: ${stats.orphaned} active unavailable, ${stats.failed} failed${
+          message: `${pfx} ⚠ ${ref}: ${stats.orphaned} active unavailable, ${stats.failed} failed${
             stats.optionalUnavailable
               ? `, ${stats.optionalUnavailable} optional source ref(s) unavailable`
               : ''
@@ -420,7 +432,7 @@ export async function downloadAllAssets(
       } else {
         onEvent({
           kind: 'log',
-          message: `${pfx} Assets ${owner.id}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
+          message: `${pfx} ✓ Assets ${name}: ${stats.written} new, ${stats.deduped} deduped, ${stats.reused} reused${
             stats.fetched || stats.reused ? '' : ' (no media)'
           }${stats.optionalUnavailable ? `; ${stats.optionalUnavailable} optional source ref(s) unavailable` : ''}`,
         });
@@ -437,7 +449,7 @@ export async function downloadAllAssets(
       });
       onEvent({
         kind: 'log',
-        message: `${pfx} ⚠ owner FAILED ${owner.id}: ${String(e)}`,
+        message: `${pfx} ⚠ owner FAILED ${ref}: ${String(e)}`,
       });
     }
   }
@@ -446,7 +458,7 @@ export async function downloadAllAssets(
     onEvent({
       kind: 'log',
       message: `⚠ ${summary.failedOwners.length} owner(s) failed entirely: ${summary.failedOwners
-        .map((f) => f.ownerId)
+        .map((f) => courseRef(f.title, f.ownerId))
         .join(', ')}`,
     });
   }

@@ -1,7 +1,14 @@
 // The always-visible log card — split out of App.tsx (v0.9.0 restructure).
 // Renders in EVERY view: paced jobs must be watchable from anywhere.
-import type { RefObject } from 'react';
+import { useMemo, useState, type RefObject } from 'react';
+import { filterLogLines, type LogFilter } from '../log-lines';
 import { LogLines } from './LogLines';
+
+const FILTERS: Array<[LogFilter, string, string]> = [
+  ['all', 'All', 'Show every line'],
+  ['problems', 'Problems', 'Only warnings and errors (plus the headers they sit under)'],
+  ['errors', 'Errors', 'Only errors (plus the headers they sit under)'],
+];
 
 /** Live run status for the log-header countdown (import/export/upload). */
 export interface RunStatus {
@@ -38,6 +45,11 @@ export function LogCard({
   logRef,
   onLogScroll,
 }: Props) {
+  // View filter — presentation only; the stored log is untouched, and Copy
+  // always copies the full log. Filtering re-classifies every retained line
+  // (≤ LOG_MAX_LINES regex passes), memoized on the line array like LogLines.
+  const [filter, setFilter] = useState<LogFilter>('all');
+  const shown = useMemo(() => filterLogLines(log, filter), [log, filter]);
   return (
     <section className="card log-card">
       <div className="log-header">
@@ -54,7 +66,25 @@ export function LogCard({
             </span>
           )}
         </span>
-        <span style={{ display: 'flex', gap: 6 }}>
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="log-filter" role="group" aria-label="Log filter">
+            {FILTERS.map(([key, label, title]) => (
+              <button
+                key={key}
+                className={`log-filter-btn${filter === key ? ' active' : ''}`}
+                onClick={() => setFilter(key)}
+                title={title}
+                aria-pressed={filter === key}
+              >
+                {label}
+              </button>
+            ))}
+            {filter !== 'all' && (
+              <span className="hint" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                {shown.filter((l) => l !== '').length} of {log.length}
+              </span>
+            )}
+          </span>
           <button
             className="copy-btn"
             onClick={copyLog}
@@ -94,7 +124,13 @@ export function LogCard({
         </span>
       </div>
       <div className="log" ref={logRef} onScroll={onLogScroll}>
-        <LogLines lines={log} />
+        {filter !== 'all' && shown.length === 0 && log.length > 0 ? (
+          <div className="log-line hint">
+            {filter === 'errors' ? 'No errors.' : 'No warnings or errors.'}
+          </div>
+        ) : (
+          <LogLines lines={shown} />
+        )}
       </div>
     </section>
   );

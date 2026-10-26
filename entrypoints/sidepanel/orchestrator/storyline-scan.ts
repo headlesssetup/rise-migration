@@ -15,7 +15,7 @@ import {
   withImportability,
   type InventoryRow,
 } from '@/core/census/inventory';
-import { unwrap, type ProgressEvent } from './shared';
+import { courseRef, readCourseTitleIndex, unwrap, type ProgressEvent } from './shared';
 
 export interface StorylineCourseScan {
   courseId: string;
@@ -51,6 +51,7 @@ export async function scanSavedCoursesForStoryline(
       : `Scanning ${ids.length} saved course(s) for Storyline blocks…`,
   });
   const out: StorylineCourseScan[] = [];
+  const titles = await readCourseTitleIndex(storage);
   for (let i = 0; i < ids.length; i++) {
     const courseId = ids[i]!;
     const raw = await storage.readCourse(courseId);
@@ -59,7 +60,10 @@ export async function scanSavedCoursesForStoryline(
     try {
       doc = unwrap(raw);
     } catch {
-      onEvent({ kind: 'log', message: `[${i + 1}/${ids.length}] ${courseId}: unreadable, skipped` });
+      onEvent({
+        kind: 'log',
+        message: `[${i + 1}/${ids.length}] ⚠ ${courseRef(titles.get(courseId), courseId)}: unreadable, skipped`,
+      });
       continue;
     }
     const blocks = findStorylineBlocks(doc);

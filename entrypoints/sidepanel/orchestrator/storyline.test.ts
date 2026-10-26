@@ -370,7 +370,7 @@ describe('exportStorylinePackages', () => {
     });
     expect(summary).toMatchObject({ packaged: 0, failed: 1, notAttempted: 0 });
     expect(summary.aborted).toBeUndefined();
-    expect(summary.errors[0]).toEqual({ courseId: 'C1', error: 'zip download HTTP 500' });
+    expect(summary.errors[0]).toMatchObject({ courseId: 'C1', error: 'zip download HTTP 500' });
   });
 
   it('aborts the whole run on an auth (403) failure', async () => {

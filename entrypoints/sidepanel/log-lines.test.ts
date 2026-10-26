@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { LOG_MAX_LINES, appendLogLines, logLineClass } from './log-lines';
+import {
+  LOG_MAX_LINES,
+  appendLogLines,
+  filterLogLines,
+  fmtElapsed,
+  logLineClass,
+  nowStamp,
+} from './log-lines';
 
 describe('appendLogLines', () => {
   it('appends untouched while under the cap', () => {
@@ -41,8 +48,29 @@ describe('appendLogLines', () => {
 describe('logLineClass', () => {
   const cls = (line: string) => logLineClass(line).replace(/^log-line ?/, '');
 
-  it('marks ▶ operation headers', () => {
+  it('marks ▶ operation headers, with or without a timestamp', () => {
     expect(cls('▶ Fetch courses')).toBe('log-head');
+    expect(cls('14:03:22 ▶ Fetch courses')).toBe('log-head');
+  });
+
+  it('sees through a leading HH:MM:SS stamp to the status marker', () => {
+    expect(cls('14:03:22 [3/170] ✓ Saved: Course')).toBe('log-ok');
+    expect(cls('14:03:22 [3/170] FAILED "Course" (abc): boom')).toBe('log-error');
+    expect(cls('14:03:22 [3/170] Fetching "Course"…')).toBe('');
+  });
+
+  it('paints a dry-run outcome grey, not green', () => {
+    expect(cls('Planned "Course" — 12 block(s), 0 flag(s)')).toBe('log-dry');
+    expect(cls('[2/5] Course: Planned')).toBe('log-dry');
+  });
+
+  it('accepts an OK marker after a hyphenated label', () => {
+    expect(cls('[1/3] storyline read-back OK — review/items/x/story.html')).toBe('log-ok');
+    expect(cls('Language parity OK — 12 cell(s) match')).toBe('log-ok');
+  });
+
+  it('keeps an expected retry poll white even though it quotes the status', () => {
+    expect(cls('[1/3] …    GET_COURSE not ready yet (attempt 2/3, status 404 — retrying)')).toBe('');
   });
 
   it('classifies leading markers, incl. after an [i/N] prefix', () => {
@@ -95,5 +123,68 @@ describe('logLineClass', () => {
   it('leaves plain progress lines unstyled', () => {
     expect(logLineClass('Fetching course list — page 2…')).toBe('log-line');
     expect(logLineClass('… 12 earlier line(s) trimmed')).toBe('log-line');
+  });
+});
+
+describe('nowStamp / fmtElapsed', () => {
+  it('formats HH:MM:SS zero-padded', () => {
+    expect(nowStamp(new Date(2026, 9, 26, 9, 5, 7))).toBe('09:05:07');
+  });
+
+  it('formats an elapsed duration coarsely', () => {
+    expect(fmtElapsed(4_200)).toBe('4s');
+    expect(fmtElapsed(125_000)).toBe('2m 5s');
+    expect(fmtElapsed(3_900_000)).toBe('1h 5m');
+  });
+});
+
+describe('filterLogLines', () => {
+  const log = [
+    '14:00:00 ▶ Fetch courses',
+    '[1/3] ✓ Saved: A',
+    '[2/3] FAILED "B" (b1): boom',
+    '[3/3] ⚠ Skipped unreadable course: "C" (c1)',
+    '',
+    '14:10:00 ▶ Download assets',
+    '[1/2] ✓ Assets "A": 3 new',
+    '[2/2] ✓ Assets "B": 0 new',
+    '',
+    '14:20:00 ▶ Courses — import',
+    'Imported "A" — 12 block(s), 0 flag(s)',
+  ];
+
+  it('returns everything for "all"', () => {
+    expect(filterLogLines(log, 'all')).toEqual(log);
+  });
+
+  it('keeps warnings + errors and only the headers they sit under', () => {
+    expect(filterLogLines(log, 'problems')).toEqual([
+      '14:00:00 ▶ Fetch courses',
+      '[2/3] FAILED "B" (b1): boom',
+      '[3/3] ⚠ Skipped unreadable course: "C" (c1)',
+    ]);
+  });
+
+  it('keeps only errors for "errors"', () => {
+    expect(filterLogLines(log, 'errors')).toEqual([
+      '14:00:00 ▶ Fetch courses',
+      '[2/3] FAILED "B" (b1): boom',
+    ]);
+  });
+
+  it('separates surviving sections with a gap', () => {
+    const two = [...log, '⚠ flags: storyline:1'];
+    expect(filterLogLines(two, 'problems')).toEqual([
+      '14:00:00 ▶ Fetch courses',
+      '[2/3] FAILED "B" (b1): boom',
+      '[3/3] ⚠ Skipped unreadable course: "C" (c1)',
+      '',
+      '14:20:00 ▶ Courses — import',
+      '⚠ flags: storyline:1',
+    ]);
+  });
+
+  it('is empty when nothing matches', () => {
+    expect(filterLogLines(['▶ Op', '✓ fine'], 'problems')).toEqual([]);
   });
 });

@@ -1,13 +1,17 @@
 import type { AssetsSummary } from '../orchestrator';
 
+/** One row per course/question bank that has media the exporter could not
+ *  download: how many keys failed for it, and where the FIRST one sits in the
+ *  course (lesson › block) so the operator can find it in Rise. The full
+ *  per-key list is in `_metadata/assets-summary.json`. */
 function ownerTable(rows: AssetsSummary['orphaned']): React.ReactElement {
   return (
     <table>
       <thead>
         <tr>
           <th>course / bank</th>
-          <th>keys</th>
-          <th>first location</th>
+          <th title="How many media keys of this course/bank could not be downloaded">failed keys</th>
+          <th title="Where the first failed key sits in the course (lesson › block); every key is listed in assets-summary.json">example location</th>
         </tr>
       </thead>
       <tbody>
@@ -55,6 +59,15 @@ export function AssetsView({ summary }: { summary: AssetsSummary }) {
           {Object.entries(summary.statusHistogram)
             .map(([code, n]) => `${code}:${n}`)
             .join(' · ')}
+        </p>
+      )}
+      {(summary.undownloaded.length > 0 ||
+        summary.orphaned.length > 0 ||
+        optionalCount > 0) && (
+        <p className="hint">
+          Tables below: one row per course/bank with media that could not be
+          downloaded — how many keys failed, and where the first one sits in
+          the course. The full per-key list is in _metadata/assets-summary.json.
         </p>
       )}
       {summary.undownloaded.length > 0 && (

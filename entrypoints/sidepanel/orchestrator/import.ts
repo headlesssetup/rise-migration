@@ -55,7 +55,7 @@ import {
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
-import { unwrap, type ProgressEvent } from './shared';
+import { courseRef, readCourseTitleIndex, unwrap, type ProgressEvent } from './shared';
 import {
   courseAssetScanDoc,
   missingAssetKeys,
@@ -206,6 +206,7 @@ export async function runImport(
   onEvent: (e: ProgressEvent) => void,
 ): Promise<ImportRunResult> {
   const pacing = opts.pacing ?? DEFAULT_PACING;
+  const runStartMs = Date.now();
   const outcomes: CourseImportOutcome[] = [];
   // Rows for the single run-level CSV (one file for the whole run), built per course.
   const csvCourses: RunCsvCourse[] = [];
@@ -236,6 +237,9 @@ export async function runImport(
     emitStatus,
   } = setup;
 
+  // Titles for courses whose JSON is absent/unreadable (the manifest still
+  // knows the name the operator sees in Rise).
+  const titleIndex = await readCourseTitleIndex(storage);
 
   let stopped = false;
   for (const [i, courseId] of courseIds.entries()) {
@@ -249,7 +253,10 @@ export async function runImport(
     // Read the course first so the per-course log header can show its real name.
     const raw = await storage.readCourse(courseId);
     if (!raw) {
-      onEvent({ kind: 'log', message: `Skipped (not in archive): ${courseId}` });
+      onEvent({
+        kind: 'log',
+        message: `[${i + 1}/${courseIds.length}] ⚠ Skipped (not in archive): ${courseRef(titleIndex.get(courseId), courseId)}`,
+      });
       continue;
     }
     const course = unwrap(raw);
@@ -346,7 +353,8 @@ export async function runImport(
         `${absent.length} referenced asset(s) are not in the archive (e.g. ${absent[0]}) — ` +
         'run Export → "Download assets" for this archive, then import again. ' +
         'Nothing was created for this course.';
-      onEvent({ kind: 'log', message: `${pfx} SKIPPED "${courseTitle ?? courseId}": ${error}` });
+      // Recorded as a FAILED outcome (nothing was created) — red, not white.
+      onEvent({ kind: 'log', message: `${pfx} FAILED "${courseTitle ?? courseId}": SKIPPED — ${error}` });
       const report = buildFidelityReport([], abortedResult(error), courseId, courseTitle);
       outcomes.push({ courseId, title: courseTitle, status: 'failed', report });
       csvCourses.push({ title: courseTitle, courseId, status: 'failed', manual: [] });
@@ -650,7 +658,9 @@ export async function runImport(
     // Break flags down by kind so the operator knows WHAT needs manual handling
     // (storyline vs orphan vs cover/header media …) without opening the report.
     if (res.flags.length) {
-      onEvent({ kind: 'log', message: `  flags: ${summarizeFlags(res.flags)}` });
+      // Every flag is manual work left for the operator — amber like the
+      // per-flag lines above it, never a quiet white roll-up.
+      onEvent({ kind: 'log', message: `  ⚠ flags: ${summarizeFlags(res.flags)}` });
     }
 
     // The executor halted this course mid-build → stop the whole run here.
@@ -679,7 +689,7 @@ export async function runImport(
   await storage.writeImportArtifact(csvName, buildRunCsv(csvCourses));
   onEvent({ kind: 'log', message: `Wrote run summary → ${csvName}` });
 
-  emitRunSummary(onEvent, outcomes, notStarted, stopped, opts.dryRun);
+  emitRunSummary(onEvent, outcomes, notStarted, stopped, opts.dryRun, Date.now() - runStartMs);
 
   if (!opts.dryRun) {
     onEvent({

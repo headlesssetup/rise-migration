@@ -37,6 +37,7 @@ export {
   type StorylineExportSummary,
   type StorylineUploadSummary,
 } from './storyline';
+export { checkImportPreconditions, type ImportPreflightWarning } from './import-preflight';
 export {
   runImport,
   estimateCourses,
