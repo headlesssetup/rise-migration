@@ -231,6 +231,8 @@ export async function uploadStorylineToReview360(
     for (const block of m.blocks ?? []) {
       const leaf = block.leaf;
       if (!leaf || legacyLeaves.has(leaf) || seen.has(leaf)) continue;
+      // Never staged (e.g. the course was not exportable): no zip to upload.
+      if (block.compatibility === 'source-placeholder') continue;
       seen.add(leaf);
       const itemTitle = itemTitleByLeaf.get(leaf) ?? metaTitleOf(block.meta);
       work.push({ courseId: m.courseId, title: m.title, leaf, itemTitle });

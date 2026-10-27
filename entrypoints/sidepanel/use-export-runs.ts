@@ -499,7 +499,7 @@ export function useExportRuns({
         setStoryline(summary);
         setPhase('done');
         addLog(
-          `${summary.failed || summary.aborted ? '⚠' : '✓'} Storyline in ${fmtElapsed(Date.now() - t0)}: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved. → storyline/<courseId>/<leaf>.zip, storyline-legacy/<courseId>/<leaf>.zip + manifest.`,
+          `${summary.failed || summary.aborted || summary.notExportable ? '⚠' : '✓'} Storyline in ${fmtElapsed(Date.now() - t0)}: ${summary.packaged} packaged, ${summary.skipped} skipped${summary.notExportable ? ` (${summary.notExportable} not exportable from this account)` : ''}, ${summary.failed} failed of ${summary.courses} course(s) with storyline blocks; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved. → storyline/<courseId>/<leaf>.zip, storyline-legacy/<courseId>/<leaf>.zip + manifest.`,
         );
         if (summary.failed) {
           for (const e of summary.errors) addLog(`⚠ ${courseRef(e.title, e.courseId)}: ${e.error}`);

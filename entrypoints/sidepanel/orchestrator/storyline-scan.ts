@@ -23,6 +23,20 @@ export interface StorylineCourseScan {
   blocks: StorylineBlockRef[];
   /** Packages in the capture-confirmed legacy-incompatible generation. */
   legacyBlocks: StorylineBlockRef[];
+  /** Set when the saved `authorPermissions` show this account may not export
+   *  the course (a collaborator on someone else's course): Rise answers the
+   *  web-export build with a 404, so the build is never attempted. Absent when
+   *  the archive carries no permission list — that course is tried as before. */
+  exportBlocked?: string;
+}
+
+/** Why the web export is not permitted, from the saved `authorPermissions`
+ *  (live 2026-10-27: an edit-only collaborator lacks `export`/`publish:web`
+ *  and `build/raw` 404s). Undefined = permitted or unknown. */
+export function exportBlockedReason(doc: unknown): string | undefined {
+  const perms = (doc as { authorPermissions?: unknown })?.authorPermissions;
+  if (!Array.isArray(perms) || perms.includes('export')) return undefined;
+  return 'this account has no export permission on the course (not the owner)';
 }
 
 /** Read `course.title` from a saved doc, tolerant of nesting. */
@@ -69,7 +83,14 @@ export async function scanSavedCoursesForStoryline(
     const blocks = findStorylineBlocks(doc);
     if (blocks.length) {
       const legacyBlocks = blocks.filter((block) => isKnownLegacyStorylineMeta(block.meta));
-      out.push({ courseId, title: courseTitle(doc), blocks, legacyBlocks });
+      const exportBlocked = exportBlockedReason(doc);
+      out.push({
+        courseId,
+        title: courseTitle(doc),
+        blocks,
+        legacyBlocks,
+        ...(exportBlocked ? { exportBlocked } : {}),
+      });
       onEvent({
         kind: 'log',
         // A STACK yields one ref PER LANGUAGE for the same block (each language
@@ -83,7 +104,8 @@ export async function scanSavedCoursesForStoryline(
             : '') +
           (legacyBlocks.length
             ? `; ⚠ ${legacyBlocks.length} legacy package(s) require manual replacement`
-            : ''),
+            : '') +
+          (exportBlocked ? '; ⚠ not exportable from this account' : ''),
       });
     }
   }

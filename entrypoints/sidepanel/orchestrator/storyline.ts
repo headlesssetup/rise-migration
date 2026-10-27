@@ -81,6 +81,9 @@ export interface StorylineExportSummary {
   legacySaved: number;
   /** Courses not attempted because the run aborted early (e.g. auth). */
   notAttempted: number;
+  /** Courses whose saved permissions forbid the web export — never built;
+   *  a manual-review manifest is written instead (counted in `skipped` too). */
+  notExportable: number;
   /** Set when the run aborted early; the reason (shown to the operator). */
   aborted?: string;
   /** Per-course failures (courseId → message) for the report. */
@@ -117,6 +120,27 @@ export interface StorylineExportDeps {
   force?: boolean;
   /** Restrict to these course ids (the operator's selection); omit for all. */
   onlyCourseIds?: Set<string>;
+}
+
+/** A manifest entry for a package that was NOT staged (no zip path). */
+function manifestEntryWithoutZip(block: StorylineBlockRef): StorylineManifestEntry {
+  return {
+    blockId: block.blockId,
+    lessonId: block.lessonId,
+    itemId: block.itemId,
+    leaf: block.leaf,
+    meta: block.meta,
+    ...(block.title ? { title: block.title } : {}),
+    compatibility: isKnownLegacyStorylineMeta(block.meta)
+      ? 'legacy-unsupported'
+      : 'source-placeholder',
+    ...(block.locale ? { locale: block.locale } : {}),
+    ...(block.l10nId ? { l10nId: block.l10nId } : {}),
+  };
+}
+
+function notExportableNote(summary: StorylineExportSummary): string {
+  return summary.notExportable ? ` (${summary.notExportable} not exportable from this account)` : '';
 }
 
 const defaultExportOne: NonNullable<StorylineExportDeps['exportOne']> = async (
@@ -158,6 +182,7 @@ export async function exportStorylinePackages(
     legacySkipped: 0,
     legacySaved: 0,
     notAttempted: 0,
+    notExportable: 0,
     errors: [],
   };
   if (!targets.length) return summary;
@@ -209,6 +234,36 @@ export async function exportStorylinePackages(
       continue;
     }
 
+    // No export permission (an edit-only collaborator): the build would 404
+    // on every run, so never attempt it. Record a manual-review manifest —
+    // modern blocks become `source-placeholder` (no zip: upload skips them,
+    // import flags them for manual attach), legacy blocks stay legacy.
+    if (target.exportBlocked) {
+      await storage.writeStorylineManifest(
+        target.courseId,
+        JSON.stringify(
+          {
+            ...(previousManifest ?? {}),
+            courseId: target.courseId,
+            title: target.title,
+            exportBlocked: target.exportBlocked,
+            blocks: target.blocks.map((block) => manifestEntryWithoutZip(block)),
+          },
+          null,
+          2,
+        ),
+      );
+      summary.skipped += 1;
+      summary.notExportable += 1;
+      onEvent({
+        kind: 'log',
+        message:
+          `⚠ ${courseRef(target.title, target.courseId)}: not exported — ${target.exportBlocked}; ` +
+          `${target.blocks.length} Storyline package(s) need manual review. Once the owner grants export rights (or sends a copy), re-save the course and re-run with Force.`,
+      });
+      continue;
+    }
+
     const blocksToSave = target.blocks.filter((block) => {
       if (!block.leaf) return false;
       if (isKnownLegacyStorylineMeta(block.meta)) {
@@ -219,19 +274,7 @@ export async function exportStorylinePackages(
       return deps.force || !rawManifest;
     });
     if (!blocksToSave.length) {
-      const entries: StorylineManifestEntry[] = target.blocks.map((block) => ({
-        blockId: block.blockId,
-        lessonId: block.lessonId,
-        itemId: block.itemId,
-        leaf: block.leaf,
-        meta: block.meta,
-        ...(block.title ? { title: block.title } : {}),
-        compatibility: isKnownLegacyStorylineMeta(block.meta)
-          ? 'legacy-unsupported'
-          : 'source-placeholder',
-        ...(block.locale ? { locale: block.locale } : {}),
-        ...(block.l10nId ? { l10nId: block.l10nId } : {}),
-      }));
+      const entries = target.blocks.map((block) => manifestEntryWithoutZip(block));
       await storage.writeStorylineManifest(
         target.courseId,
         JSON.stringify(
@@ -259,7 +302,7 @@ export async function exportStorylinePackages(
     onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
     onEvent({
       kind: 'log',
-      message: `✓ Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
+      message: `${summary.notExportable ? '⚠' : '✓'} Storyline export: 0 packaged, ${summary.skipped} skipped${notExportableNote(summary)}, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
     });
     return summary;
   }
@@ -442,7 +485,7 @@ export async function exportStorylinePackages(
   onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
   onEvent({
     kind: 'log',
-    message: `${summary.failed || summary.aborted ? '⚠' : '✓'} Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
+    message: `${summary.failed || summary.aborted || summary.notExportable ? '⚠' : '✓'} Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped${notExportableNote(summary)}, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
   });
   return summary;
 }

@@ -1,6 +1,26 @@
 # Project Status
 
-_Last updated: 2026-10-26 (v0.9.16: log-window + import-ordering QOL). Keep this current at each phase boundary._
+_Last updated: 2026-10-27 (v0.9.16a: Storyline export-permission preflight). Keep this current at each phase boundary._
+
+## v0.9.16a (2026-10-27) — Storyline export-permission preflight
+
+Live (intea dump, 2026-10-27): "Droša un veselībai draudzīga darba vide Swedbank
+2024" failed Stage D on every run with `build/raw HTTP 404`. The exporting
+account is an edit-only collaborator on someone else's course; its saved
+`authorPermissions` lack `export` / `publish:*` / `duplicate`, and Rise answers
+the web-export build with 404. All 5 packages are legacy, so the missing
+`storyline-legacy/` zips kept the course "unfinished" and it was retried forever.
+
+- The scan reads `authorPermissions`; a list without `export` marks the course
+  `exportBlocked` (no list → unknown → attempted as before).
+- Such a course is never built (not even with Force): a manual-review manifest
+  is written (`exportBlocked` reason, legacy blocks `legacy-unsupported`, modern
+  blocks `source-placeholder`, no zip paths), counted as skipped + `notExportable`
+  and logged ⚠. Summaries add "(N not exportable from this account)".
+- Stage C upload skips `source-placeholder` entries (never staged); import
+  already flags un-uploaded Storyline blocks for manual attach.
+- To recover after the owner grants export rights: re-save the course, then
+  re-run D with Force.
 
 ## v0.9.16 (2026-10-26) — Log window QOL + import-ordering preflight
 

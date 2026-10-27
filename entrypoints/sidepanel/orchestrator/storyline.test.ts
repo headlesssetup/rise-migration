@@ -251,6 +251,62 @@ describe('exportStorylinePackages', () => {
     expect(exportOne).not.toHaveBeenCalled();
   });
 
+  it('never builds a course this account may not export; writes a manual-review manifest', async () => {
+    const doc = {
+      ...courseWithVersions([
+        { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
+        { blockId: 'new', leaf: 'NEW', version: '3.49.24347.0' },
+      ]),
+      // live 2026-10-27: an edit-only collaborator; build/raw answered 404
+      authorPermissions: ['view', 'edit', 'review-export'],
+    };
+    const manifests = new Map<string, string>();
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      hasLegacyStorylineZip: async () => false,
+    } as any;
+    const { onEvent, logs } = sink();
+    const exportOne = vi.fn();
+    const deps = { exportOne, fetchZip: vi.fn(), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } };
+
+    const summary = await exportStorylinePackages(store, onEvent, deps);
+    expect(summary).toMatchObject({ packaged: 0, skipped: 1, failed: 0, notExportable: 1 });
+    expect(exportOne).not.toHaveBeenCalled();
+    const manifest = JSON.parse(manifests.get('C1')!);
+    expect(manifest.exportBlocked).toMatch(/no export permission/);
+    expect(manifest.blocks.map((b: { compatibility: string }) => b.compatibility)).toEqual([
+      'legacy-unsupported',
+      'source-placeholder',
+    ]);
+    expect(manifest.blocks.every((b: { zip?: string; archiveZip?: string }) => !b.zip && !b.archiveZip)).toBe(true);
+    expect(logs.some((l) => l.includes('not exported'))).toBe(true);
+
+    // a re-run (even forced) still never fires the build
+    const again = await exportStorylinePackages(store, onEvent, { ...deps, force: true });
+    expect(again).toMatchObject({ failed: 0, notExportable: 1 });
+    expect(exportOne).not.toHaveBeenCalled();
+  });
+
+  it('still builds a course whose saved permissions include export', async () => {
+    const { store } = makeStorage();
+    store.readCourse = async () =>
+      JSON.stringify({ payload: { ...COURSE_DOC, authorPermissions: ['view', 'edit', 'export'] } });
+    const { onEvent } = sink();
+    const exportOne = vi.fn(async () => ({ ok: true as const, location: 'https://cdn/x.zip', jobId: '1' }));
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne,
+      fetchZip: vi.fn(async () => webExportZip()),
+      refresh: vi.fn(),
+      pinTab,
+      pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ packaged: 1, notExportable: 0 });
+    expect(exportOne).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves a legacy package unchanged in the quarantined store', async () => {
     const doc = courseWithVersions([
       { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
@@ -671,6 +727,34 @@ describe('uploadStorylineToReview360 — legacy exclusion', () => {
     expect(uploadOne).toHaveBeenCalledTimes(1);
     expect(uploadOne.mock.calls[0]![0].fileName).toBe('NEW.zip');
     expect(JSON.parse(manifest).uploads.OLD).toBeUndefined();
+  });
+});
+
+describe('uploadStorylineToReview360 — unstaged placeholders', () => {
+  it('skips source-placeholder entries (never staged, e.g. not exportable)', async () => {
+    const doc = courseWithVersions([{ blockId: 'new', leaf: 'NEW', version: '3.49.24347.0' }]);
+    const manifest = JSON.stringify({
+      courseId: 'C1',
+      exportBlocked: 'no export permission',
+      blocks: [{ blockId: 'new', leaf: 'NEW', compatibility: 'source-placeholder' }],
+    });
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async () => manifest,
+      writeStorylineManifest: vi.fn(),
+      readStorylineZip: vi.fn(async () => null),
+    } as any;
+    const { onEvent } = sink();
+    const uploadOne = vi.fn();
+    const summary = await uploadStorylineToReview360(store, onEvent, {
+      uploadOne,
+      refresh: vi.fn(),
+      pinTab,
+      pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ uploaded: 0, failed: 0 });
+    expect(uploadOne).not.toHaveBeenCalled();
   });
 });
 
