@@ -14,12 +14,40 @@ import { findBankRef } from '@/core/import';
 import type { Block } from '@/shared/types/rise';
 import { readBankIdMap } from './import-shared';
 import { readCourseFolders, readStorylineAttach } from './import-run-inputs';
-import { unwrap } from './shared';
+import { unwrap, type ProgressEvent } from './shared';
 
 export interface ImportPreflightWarning {
-  kind: 'folders' | 'storyline' | 'banks';
+  kind: 'folders' | 'storyline' | 'storyline-manual' | 'banks';
   /** One operator-facing sentence: what will happen and which step fixes it. */
   message: string;
+}
+
+/** What the Storyline manifest says about a course's packages: which leaves
+ *  step D can never stage (the course is not exportable from this account, or
+ *  the entry is a never-staged `source-placeholder`). Tolerant: no/unreadable
+ *  manifest → nothing is manual (D has simply not run yet). */
+async function readManualStorylineLeaves(
+  storage: Storage,
+  courseId: string,
+): Promise<{ exportBlocked: boolean; leaves: Set<string> }> {
+  const out = { exportBlocked: false, leaves: new Set<string>() };
+  const raw = await storage.readStorylineManifest(courseId);
+  if (!raw) return out;
+  try {
+    const m = JSON.parse(raw) as {
+      exportBlocked?: unknown;
+      blocks?: Array<{ leaf?: string; compatibility?: string }>;
+    };
+    out.exportBlocked = !!m.exportBlocked;
+    for (const b of m.blocks ?? []) {
+      if (b.leaf && (out.exportBlocked || b.compatibility === 'source-placeholder')) {
+        out.leaves.add(b.leaf);
+      }
+    }
+  } catch {
+    /* tolerate — the run reports an unreadable manifest */
+  }
+  return out;
 }
 
 const DRAW_FROM_BANK = 'knowledgeCheck/draw from question bank';
@@ -42,9 +70,13 @@ export async function checkImportPreconditions(
   storage: Storage,
   courseIds: string[],
   opts: { recreateFolders: boolean },
+  onEvent: (e: ProgressEvent) => void = () => {},
 ): Promise<ImportPreflightWarning[]> {
   const warnings: ImportPreflightWarning[] = [];
   const n = courseIds.length;
+  // Archive reads only, but hundreds of courses take seconds — the operator
+  // must see the click registered and which course is being checked.
+  onEvent({ kind: 'log', message: `Preflight: checking ${n} selected course(s) for skipped steps…` });
 
   // --- Folders: off + the course lives in a folder at the source → root. ---
   if (!opts.recreateFolders) {
@@ -65,10 +97,13 @@ export async function checkImportPreconditions(
   const boundBanks = await readBankIdMap(storage);
   const storylineShort: string[] = [];
   let storylineMissing = 0;
+  const manualShort: string[] = [];
+  let storylineManual = 0;
   const bankShort: string[] = [];
   const unboundBanks = new Set<string>();
 
-  for (const id of courseIds) {
+  for (const [i, id] of courseIds.entries()) {
+    onEvent({ kind: 'import-status', label: `Preflight [${i + 1}/${n}]`, etaSeconds: null, done: false });
     const raw = await storage.readCourse(id);
     if (!raw) continue; // reported by the run itself ("not in archive")
     let doc: ReturnType<typeof unwrap>;
@@ -88,7 +123,18 @@ export async function checkImportPreconditions(
     if (packages.length) {
       const attach = await readStorylineAttach(storage, id);
       const uploaded = attach ? attach.byBlock.size + attach.byBlockLocale.size : 0;
-      const missing = Math.max(0, packages.length - uploaded);
+      // Packages step D can never stage (not exportable from this account /
+      // never-staged placeholders) are MANUAL work, not a "run D first" — the
+      // hint must not send the operator back to a step that skips them again.
+      const manual = await readManualStorylineLeaves(storage, id);
+      const manualCount = manual.exportBlocked
+        ? packages.length - uploaded
+        : packages.filter((b) => b.leaf && manual.leaves.has(b.leaf)).length;
+      const missing = Math.max(0, packages.length - uploaded - Math.max(0, manualCount));
+      if (manualCount > 0) {
+        storylineManual += manualCount;
+        manualShort.push(title);
+      }
       if (missing) {
         storylineMissing += missing;
         storylineShort.push(title);
@@ -119,6 +165,16 @@ export async function checkImportPreconditions(
         `BEFORE importing, or those blocks become manual-attach flags: ${few(storylineShort)}.`,
     });
   }
+  if (manualShort.length) {
+    warnings.push({
+      kind: 'storyline-manual',
+      message:
+        `${manualShort.length} selected course(s) contain ${storylineManual} Storyline/Mighty ` +
+        `package(s) that step D cannot stage (the course is not exportable from this account, or ` +
+        `the package was never staged) — those blocks will be imported as manual-attach flags; ` +
+        `attach them by hand on the target afterwards: ${few(manualShort)}.`,
+    });
+  }
   if (bankShort.length) {
     warnings.push({
       kind: 'banks',
@@ -129,5 +185,12 @@ export async function checkImportPreconditions(
     });
   }
 
+  onEvent({ kind: 'import-status', label: 'Preflight complete', etaSeconds: null, done: true });
+  onEvent({
+    kind: 'log',
+    message: warnings.length
+      ? `⚠ Preflight: ${warnings.length} finding(s) across ${n} course(s).`
+      : `✓ Preflight: no skipped steps across ${n} course(s).`,
+  });
   return warnings;
 }

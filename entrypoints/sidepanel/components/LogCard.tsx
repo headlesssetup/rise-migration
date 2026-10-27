@@ -81,7 +81,7 @@ export function LogCard({
             ))}
             {filter !== 'all' && (
               <span className="hint" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-                {shown.filter((l) => l !== '').length} of {log.length}
+                {shown.filter((l) => l !== '').length} of {log.filter((l) => l !== '').length}
               </span>
             )}
           </span>

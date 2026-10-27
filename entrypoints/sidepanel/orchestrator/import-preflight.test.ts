@@ -93,6 +93,40 @@ describe('checkImportPreconditions', () => {
     expect(await checkImportPreconditions(s, ['c1'], { recreateFolders: true })).toEqual([]);
   });
 
+  it('names a not-exportable course as MANUAL attach, never "run step D first"', async () => {
+    const s = storage({
+      courses: { c1: course('c1', 'Blocked', [storylineBlock('B1', 'leaf1')]) },
+      storylineManifests: {
+        c1: {
+          courseId: 'c1',
+          exportBlocked: 'the saved authorPermissions lack `export`',
+          blocks: [{ blockId: 'B1', lessonId: 'L1', leaf: 'leaf1', compatibility: 'source-placeholder' }],
+        },
+      },
+    });
+    const w = await checkImportPreconditions(s, ['c1'], { recreateFolders: true });
+    expect(w.map((x) => x.kind)).toEqual(['storyline-manual']);
+    expect(w[0]!.message).toMatch(/step D cannot stage/);
+    expect(w[0]!.message).not.toMatch(/run step D/);
+    expect(w[0]!.message).toContain('"Blocked"');
+  });
+
+  it('reports progress + a verdict line through onEvent', async () => {
+    const s = storage({ courses: { c1: course('c1', 'Plain', []), c2: course('c2', 'Plain 2', []) } });
+    const events: string[] = [];
+    await checkImportPreconditions(s, ['c1', 'c2'], { recreateFolders: true }, (e) => {
+      if (e.kind === 'log') events.push(e.message);
+      if (e.kind === 'import-status') events.push(`status:${e.label}${e.done ? ' done' : ''}`);
+    });
+    expect(events).toEqual([
+      'Preflight: checking 2 selected course(s) for skipped steps…',
+      'status:Preflight [1/2]',
+      'status:Preflight [2/2]',
+      'status:Preflight complete done',
+      '✓ Preflight: no skipped steps across 2 course(s).',
+    ]);
+  });
+
   it('ignores never-attached Storyline placeholders (nothing to upload)', async () => {
     const s = storage({
       courses: { c1: course('c1', 'Placeholder', [storylineBlock('B1')]) },

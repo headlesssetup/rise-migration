@@ -37,9 +37,7 @@ import {
   type AssetEntry,
   type SourceBank,
   type AccountIdentity,
-  type ExecResult,
   type FidelityReport,
-  type ManualWorkItem,
   type ParityReport,
   type PendingSetReport,
   type L10nParityReport,
@@ -52,7 +50,7 @@ import {
   isOrphanStatus,
   type OptionalAssetReason,
 } from '@/core/assets';
-import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
+import { DEFAULT_PACING, pacedDelay } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { Block } from '@/shared/types/rise';
 import { courseRef, readCourseTitleIndex, unwrap, type ProgressEvent } from './shared';
@@ -98,105 +96,24 @@ export {
 } from './import-banks';
 
 
-export interface ImportOptions {
-  dryRun: boolean;
-  /** Override the Source ≠ Target guard (same-account write). */
-  override?: boolean;
-  pacing?: PacingConfig;
-  targetFolderId?: string | null;
-  /** Recreate referenced question banks + bind draw-from-bank blocks. Default
-   *  OFF — draw-from-bank blocks become unbound placeholders (manual). */
-  recreateBanks?: boolean;
-  /** "Re-create folders" checkbox. ON → create the folder chains of the
-   *  SELECTED courses on the target (deduped by name+parent against the live
-   *  target tree, so folders from the account-settings step or a prior run are
-   *  reused, never duplicated) and place each course into its folder. OFF
-   *  (default) → nothing is created or moved; courses land in the root. */
-  recreateFolders?: boolean;
-  /** Recreate typefaces SHARED IN from another tenant (archived as `foreign`).
-   *  Default OFF → flagged as manual work (someone else's font: licensing). */
-  rehostForeignTypefaces?: boolean;
-  /** Cooperative cancel for the Stop button. Polled between courses and (via the
-   *  executor) between paced write steps — never mid-write. */
-  shouldStop?: () => boolean;
-}
-
-/** Per-course outcome status for the run summary / outcome table. */
-export type CourseStatus =
-  | 'planned' // dry-run
-  | 'imported' // live, fully imported + (where applicable) parity-checked
-  | 'partial' // live, confirmed course but failed mid-build — resumable on re-run
-  | 'stopped' // live, halted by Stop mid-course — resumable on re-run
-  | 'failed'; // live, failed before/at confirmation (orphan shell left in place)
-
-export interface CourseImportOutcome {
-  courseId: string;
-  title?: string;
-  status: CourseStatus;
-  report: FidelityReport;
-  /** A created-but-unconfirmed course shell left on the target (no auto-delete). */
-  orphanedCourseId?: string;
-  /** Read-back parity (live runs only): GET_COURSE the new course + diff vs source. */
-  parity?: ParityReport;
-}
-
-export interface ImportRunResult {
-  /** Set when the run was blocked before any write (guard failure). */
-  blocked?: string;
-  outcomes: CourseImportOutcome[];
-  /** True when the run was halted early by the Stop button. */
-  stopped?: boolean;
-  /** Course ids that were queued but never started (Stop pressed before them). */
-  notStarted?: string[];
-}
-
-/** A course we refuse to start (missing media of unknown state, …): a real
- *  failed outcome, never a silent skip. */
-function abortedResult(error: string): ExecResult {
-  return { ok: false, dryRun: false, envelopes: [], flags: [], idMap: {}, survivingKeys: [], error };
-}
-
-/** What a persisted `<courseId>.report.json` tells us on a re-run. */
-interface PriorCourseReport {
-  report: FidelityReport;
-  parity?: ParityReport;
-  manual: ManualWorkItem[];
-  idMap?: Record<string, string>;
-  /** Whether this report proves completion under the current parity contract. */
-  currentReadBackPolicy: boolean;
-  /** A FINISHED live import: ok, not stopped, with a real target course id. */
-  completed: boolean;
-}
-
-function parsePriorReport(raw: string | null | undefined): PriorCourseReport | null {
-  if (!raw) return null;
-  try {
-    const p = JSON.parse(raw) as FidelityReport & {
-      readBackPolicyVersion?: number;
-      parity?: ParityReport | null;
-      manualWork?: ManualWorkItem[];
-      idMap?: Record<string, string>;
-    };
-    const currentReadBackPolicy = p.readBackPolicyVersion === READ_BACK_POLICY_VERSION;
-    return {
-      report: p,
-      parity: p.parity ?? undefined,
-      manual: p.manualWork ?? [],
-      idMap: p.idMap,
-      currentReadBackPolicy,
-      completed:
-        currentReadBackPolicy &&
-        p.ok === true &&
-        p.dryRun === false &&
-        !p.stopped &&
-        typeof p.newCourseId === 'string' &&
-        !!p.newCourseId,
-    };
-  } catch {
-    return null; // corrupt report — treat as no prior run
-  }
-}
-
+// Run types + per-course helpers split to ./import-types (v0.9.16b) — the
+// ORIGINAL path stays the public door via this re-export block.
+export {
+  abortedResult,
+  parsePriorReport,
+  type ImportOptions,
+  type CourseStatus,
+  type CourseImportOutcome,
+  type ImportRunResult,
+} from './import-types';
+import {
+  abortedResult,
+  parsePriorReport,
+  type CourseImportOutcome,
+  type CourseStatus,
+  type ImportOptions,
+  type ImportRunResult,
+} from './import-types';
 
 export async function runImport(
   storage: Storage,

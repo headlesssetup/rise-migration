@@ -276,7 +276,7 @@ describe('exportStorylinePackages', () => {
     expect(summary).toMatchObject({ packaged: 0, skipped: 1, failed: 0, notExportable: 1 });
     expect(exportOne).not.toHaveBeenCalled();
     const manifest = JSON.parse(manifests.get('C1')!);
-    expect(manifest.exportBlocked).toMatch(/no export permission/);
+    expect(manifest.exportBlocked).toMatch(/lack `export`/);
     expect(manifest.blocks.map((b: { compatibility: string }) => b.compatibility)).toEqual([
       'legacy-unsupported',
       'source-placeholder',
@@ -288,6 +288,74 @@ describe('exportStorylinePackages', () => {
     const again = await exportStorylinePackages(store, onEvent, { ...deps, force: true });
     expect(again).toMatchObject({ failed: 0, notExportable: 1 });
     expect(exportOne).not.toHaveBeenCalled();
+  });
+
+  it('keeps a blocked course ⚠ + counted on every run (never a green resume skip)', async () => {
+    // Only MODERN blocks: run 1's manifest has no missing legacy zip, which used
+    // to satisfy the "already exported" resume skip on run 2.
+    const doc = {
+      ...courseWithVersions([{ blockId: 'new', leaf: 'NEW', version: '3.49.24347.0' }]),
+      authorPermissions: ['view', 'edit'],
+    };
+    const manifests = new Map<string, string>();
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      hasLegacyStorylineZip: async () => false,
+    } as any;
+    const { onEvent, logs } = sink();
+    const deps = { exportOne: vi.fn(), fetchZip: vi.fn(), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } };
+    await exportStorylinePackages(store, onEvent, deps);
+    const second = await exportStorylinePackages(store, onEvent, deps);
+    expect(second).toMatchObject({ skipped: 1, notExportable: 1 });
+    expect(logs.filter((l) => l.includes('already exported'))).toEqual([]);
+    expect(logs.filter((l) => l.startsWith('⚠') && l.includes('not exported'))).toHaveLength(2);
+    expect(deps.exportOne).not.toHaveBeenCalled();
+  });
+
+  it('keeps packages staged by an earlier export when the course is blocked now', async () => {
+    const doc = {
+      ...courseWithVersions([
+        { blockId: 'old', leaf: 'OLD', version: '3.48.24159.0' },
+        { blockId: 'new', leaf: 'NEW', version: '3.49.24347.0' },
+      ]),
+      authorPermissions: ['view', 'edit'],
+    };
+    const lessonId = doc.lessons[0]!.id;
+    const prior = {
+      courseId: 'C1',
+      blocks: [
+        { blockId: 'new', lessonId, leaf: 'NEW', compatibility: 'automatic', zip: 'storyline/C1/NEW.zip' },
+        { blockId: 'old', lessonId, leaf: 'OLD', compatibility: 'legacy-unsupported' },
+      ],
+      uploads: { NEW: { reviewPrefix: 'review/items/NEW' } },
+    };
+    const manifests = new Map<string, string>([['C1', JSON.stringify(prior)]]);
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      hasLegacyStorylineZip: async () => false,
+    } as any;
+    const { onEvent, logs } = sink();
+    const exportOne = vi.fn();
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne, fetchZip: vi.fn(), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 }, force: true,
+    });
+    expect(summary).toMatchObject({ notExportable: 1 });
+    expect(exportOne).not.toHaveBeenCalled();
+    const manifest = JSON.parse(manifests.get('C1')!);
+    const byId = Object.fromEntries(manifest.blocks.map((b: { blockId: string }) => [b.blockId, b]));
+    // the staged modern package survives with its zip (+ the upload record)
+    expect(byId.new).toMatchObject({ compatibility: 'automatic', zip: 'storyline/C1/NEW.zip' });
+    expect(manifest.uploads.NEW.reviewPrefix).toBe('review/items/NEW');
+    // the never-preserved legacy package is the plain no-zip entry
+    expect(byId.old).toMatchObject({ compatibility: 'legacy-unsupported' });
+    expect(byId.old.archiveZip).toBeUndefined();
+    expect(logs.some((l) => l.includes('1 Storyline package(s) need manual review (1 kept from an earlier export)'))).toBe(true);
   });
 
   it('still builds a course whose saved permissions include export', async () => {

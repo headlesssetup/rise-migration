@@ -1,6 +1,28 @@
 # Project Status
 
-_Last updated: 2026-10-27 (v0.9.16a: Storyline export-permission preflight). Keep this current at each phase boundary._
+_Last updated: 2026-10-27 (v0.9.16b: review fixes on the export-permission preflight). Keep this current at each phase boundary._
+
+## v0.9.16b (2026-10-27) — Review fixes on v0.9.16/16a (PR #13)
+
+- **Blocked course stays ⚠ on every run.** The `exportBlocked` check now runs
+  BEFORE the "already exported" resume skip: a blocked course with only modern
+  blocks turned green (`✓ already exported`, `notExportable` 0) on its second
+  run. Entries a previous manifest had STAGED (a `zip`/`archiveZip`, from a run
+  when the account could export) are kept by block+locale; only the unstaged
+  blocks become `source-placeholder` (`mergeStagedEntries`).
+- **Import preflight: manual attach, not "run D first".** A course whose
+  manifest is `exportBlocked` (or whose packages are `source-placeholder`) gets
+  its own `storyline-manual` finding — step D can never stage those, so the
+  hint no longer sends the operator back to D. The preflight logs a start line,
+  `[i/N]` status, and a ✓/⚠ verdict (CLAUDE.md progress convention).
+- **Confirm box snapshots what it checked.** Continue anyway runs exactly the
+  selection + folder toggle the preflight saw; changing either discards the
+  box. Both buttons are disabled while the check runs (`Checking…`).
+- The blocked reason states what the archive shows (`authorPermissions` lack
+  `export`) instead of guessing "not the owner".
+- `orchestrator/import.ts` split: run types + the prior-report helpers moved to
+  `import-types.ts` (re-exported; 709 → ~620 lines, back under the cap).
+- Log filter badge counts real lines on both sides of "N of M".
 
 ## v0.9.16a (2026-10-27) — Storyline export-permission preflight
 

@@ -51,7 +51,21 @@ export function CoursesSection({
   const [estimate, setEstimate] = useState<string | null>(null);
   // Ordering preflight (folders / step D / step B skipped?) awaiting the
   // operator's Continue anyway / Abort. Live runs only — a dry run just logs it.
-  const [pending, setPending] = useState<ImportPreflightWarning[] | null>(null);
+  // The box carries a SNAPSHOT of what was checked (selection + folder toggle):
+  // Continue anyway runs exactly that snapshot, and any change to the selection
+  // or the toggle while the box is open discards it (the findings would be
+  // stale for the new selection).
+  const [pending, setPending] = useState<{
+    warnings: ImportPreflightWarning[];
+    courseIds: string[];
+    recreateFolders: boolean;
+  } | null>(null);
+  // The preflight itself is seconds of archive reads on a big selection — both
+  // buttons are disabled meanwhile so a second click cannot start a second scan.
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    setPending(null);
+  }, [selected, recreateFolders]);
 
   useEffect(() => {
     if (!storage || selected.size === 0) {
@@ -98,7 +112,12 @@ export function CoursesSection({
   );
 
   const run = useCallback(
-    async (dryRun: boolean, acknowledged: ImportPreflightWarning[] = []) => {
+    async (
+      dryRun: boolean,
+      courseIds: string[],
+      recreateFoldersNow: boolean,
+      acknowledged: ImportPreflightWarning[] = [],
+    ) => {
       if (!storage) return;
       logBreak(`Courses — ${dryRun ? 'dry-run' : 'import'}`);
       stop.reset();
@@ -114,9 +133,15 @@ export function CoursesSection({
       try {
         const res = await runImport(
           storage,
-          [...selected],
+          courseIds,
           target,
-          { dryRun, override, recreateFolders, rehostForeignTypefaces, shouldStop: stop.shouldStop },
+          {
+            dryRun,
+            override,
+            recreateFolders: recreateFoldersNow,
+            rehostForeignTypefaces,
+            shouldStop: stop.shouldStop,
+          },
           onEvent,
         );
         if (res.blocked) setBlocked(res.blocked);
@@ -130,31 +155,43 @@ export function CoursesSection({
         setRunning(false);
       }
     },
-    [storage, target, override, recreateFolders, rehostForeignTypefaces, selected, onEvent, logBreak, setRunning, stop],
+    [storage, target, override, rehostForeignTypefaces, onEvent, logBreak, setRunning, stop],
   );
 
   // Button entry: run the ordering preflight first. A live run with findings
   // waits for Continue anyway / Abort; a dry run proceeds and logs them.
   const start = useCallback(
     async (dryRun: boolean) => {
-      if (!storage) return;
+      if (!storage || checking) return;
       setPending(null);
+      // Snapshot what is checked: the run (now or after Continue anyway) uses
+      // exactly this, never whatever the selection has become meanwhile.
+      const courseIds = [...selected];
+      const recreateFoldersNow = recreateFolders;
       let warnings: ImportPreflightWarning[] = [];
+      setChecking(true);
       try {
-        warnings = await checkImportPreconditions(storage, [...selected], { recreateFolders });
+        warnings = await checkImportPreconditions(
+          storage,
+          courseIds,
+          { recreateFolders: recreateFoldersNow },
+          onEvent,
+        );
       } catch (e) {
         onEvent({
           kind: 'log',
           message: `⚠ preflight check failed (${e instanceof Error ? e.message : String(e)}) — continuing without it`,
         });
+      } finally {
+        setChecking(false);
       }
       if (warnings.length && !dryRun) {
-        setPending(warnings);
+        setPending({ warnings, courseIds, recreateFolders: recreateFoldersNow });
         return;
       }
-      await run(dryRun, warnings);
+      await run(dryRun, courseIds, recreateFoldersNow, warnings);
     },
-    [storage, selected, recreateFolders, onEvent, run],
+    [storage, checking, selected, recreateFolders, onEvent, run],
   );
 
   return (
@@ -226,7 +263,7 @@ export function CoursesSection({
             >
               <b style={{ color: '#b00' }}>⚠ Before importing — a step looks skipped:</b>
               <ul style={{ margin: '4px 0 6px', paddingLeft: 18 }}>
-                {pending.map((w) => (
+                {pending.warnings.map((w) => (
                   <li key={w.kind} className="hint" style={{ color: '#8a5a00' }}>
                     {w.message}
                   </li>
@@ -236,9 +273,9 @@ export function CoursesSection({
                 <button onClick={() => setPending(null)}>Abort</button>
                 <button
                   onClick={() => {
-                    const ack = pending;
+                    const snap = pending;
                     setPending(null);
-                    void run(false, ack);
+                    void run(false, snap.courseIds, snap.recreateFolders, snap.warnings);
                   }}
                   style={{ background: '#b00', color: '#fff' }}
                 >
@@ -248,13 +285,20 @@ export function CoursesSection({
             </div>
           )}
           <div className="row">
-            <button onClick={() => start(true)} disabled={!storage || selected.size === 0 || running}>
-              {running ? 'Working…' : `Dry-run (${selected.size})`}
+            <button
+              onClick={() => start(true)}
+              disabled={!storage || selected.size === 0 || running || checking}
+            >
+              {running ? 'Working…' : checking ? 'Checking…' : `Dry-run (${selected.size})`}
             </button>
             <button
               onClick={() => start(false)}
-              disabled={!liveOk || selected.size === 0 || pending !== null}
-              style={liveOk && selected.size > 0 && pending === null ? { background: '#b00', color: '#fff' } : undefined}
+              disabled={!liveOk || selected.size === 0 || pending !== null || checking}
+              style={
+                liveOk && selected.size > 0 && pending === null && !checking
+                  ? { background: '#b00', color: '#fff' }
+                  : undefined
+              }
             >
               Import courses →
             </button>

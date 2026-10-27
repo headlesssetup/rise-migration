@@ -139,6 +139,31 @@ function manifestEntryWithoutZip(block: StorylineBlockRef): StorylineManifestEnt
   };
 }
 
+/** Rebuild a manifest's `blocks` for a course that cannot be exported NOW:
+ *  an entry the previous manifest already STAGED (a `zip` or `archiveZip` on
+ *  disk, from a run when this account could export) is kept verbatim, every
+ *  other block gets a no-zip entry. Keyed by block + locale (a stack carries one
+ *  entry per language). Returns how many were kept. */
+function mergeStagedEntries(
+  previous: Record<string, unknown> | undefined,
+  blocks: StorylineBlockRef[],
+): { entries: StorylineManifestEntry[]; kept: number } {
+  const staged = new Map<string, StorylineManifestEntry>();
+  const prevBlocks = Array.isArray(previous?.blocks) ? (previous!.blocks as StorylineManifestEntry[]) : [];
+  for (const e of prevBlocks) {
+    if (e && typeof e === 'object' && (e.zip || e.archiveZip)) {
+      staged.set(`${e.lessonId}|${e.blockId}|${e.locale ?? ''}`, e);
+    }
+  }
+  let kept = 0;
+  const entries = blocks.map((block) => {
+    const prior = staged.get(`${block.lessonId}|${block.blockId}|${block.locale ?? ''}`);
+    if (prior) kept += 1;
+    return prior ?? manifestEntryWithoutZip(block);
+  });
+  return { entries, kept };
+}
+
 function notExportableNote(summary: StorylineExportSummary): string {
   return summary.notExportable ? ` (${summary.notExportable} not exportable from this account)` : '';
 }
@@ -224,21 +249,15 @@ export async function exportStorylinePackages(
       if (!exists) missingLegacyLeaves.add(block.leaf);
     }
 
-    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
-      summary.skipped += 1;
-      // ✓: a resume skip is a success — the packages are already staged.
-      onEvent({
-        kind: 'log',
-        message: `✓ ${target.title ?? target.courseId}: already exported, skipped`,
-      });
-      continue;
-    }
-
-    // No export permission (an edit-only collaborator): the build would 404
-    // on every run, so never attempt it. Record a manual-review manifest —
-    // modern blocks become `source-placeholder` (no zip: upload skips them,
-    // import flags them for manual attach), legacy blocks stay legacy.
+    // No export permission: the build would 404 on every run, so never attempt
+    // it (not even with Force). Checked BEFORE the resume skip so the course is
+    // ⚠ + counted `notExportable` on EVERY run — a manual-review manifest from
+    // run 1 must not turn it into a green "already exported" on run 2. Entries
+    // staged on an earlier run (when this account still had export rights) are
+    // KEPT by leaf+locale; only the unstaged blocks become `source-placeholder`
+    // (no zip: upload skips them, import flags them for manual attach).
     if (target.exportBlocked) {
+      const { entries, kept } = mergeStagedEntries(previousManifest, target.blocks);
       await storage.writeStorylineManifest(
         target.courseId,
         JSON.stringify(
@@ -247,7 +266,7 @@ export async function exportStorylinePackages(
             courseId: target.courseId,
             title: target.title,
             exportBlocked: target.exportBlocked,
-            blocks: target.blocks.map((block) => manifestEntryWithoutZip(block)),
+            blocks: entries,
           },
           null,
           2,
@@ -255,11 +274,24 @@ export async function exportStorylinePackages(
       );
       summary.skipped += 1;
       summary.notExportable += 1;
+      const unstaged = target.blocks.length - kept;
       onEvent({
         kind: 'log',
         message:
           `⚠ ${courseRef(target.title, target.courseId)}: not exported — ${target.exportBlocked}; ` +
-          `${target.blocks.length} Storyline package(s) need manual review. Once the owner grants export rights (or sends a copy), re-save the course and re-run with Force.`,
+          `${unstaged} Storyline package(s) need manual review` +
+          (kept ? ` (${kept} kept from an earlier export)` : '') +
+          `. Once this account may export the course (the owner grants export rights or sends a copy), re-save it in Rise and re-run with Force.`,
+      });
+      continue;
+    }
+
+    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
+      summary.skipped += 1;
+      // ✓: a resume skip is a success — the packages are already staged.
+      onEvent({
+        kind: 'log',
+        message: `✓ ${target.title ?? target.courseId}: already exported, skipped`,
       });
       continue;
     }

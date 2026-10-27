@@ -36,7 +36,10 @@ export interface StorylineCourseScan {
 export function exportBlockedReason(doc: unknown): string | undefined {
   const perms = (doc as { authorPermissions?: unknown })?.authorPermissions;
   if (!Array.isArray(perms) || perms.includes('export')) return undefined;
-  return 'this account has no export permission on the course (not the owner)';
+  // State what the archive SHOWS, not why: the list may be short because the
+  // account is a collaborator on someone else's course, or because a tenant
+  // policy strips `export` from a course it owns — the archive cannot tell.
+  return 'the saved authorPermissions lack `export` (this account may not run the web export)';
 }
 
 /** Read `course.title` from a saved doc, tolerant of nesting. */
