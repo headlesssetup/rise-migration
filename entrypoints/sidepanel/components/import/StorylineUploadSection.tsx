@@ -59,7 +59,7 @@ export function StorylineUploadSection({
       });
       onEvent({
         kind: 'log',
-        message: `Done: ${s.uploaded} uploaded, ${s.skipped} skipped, ${s.failed} failed${s.notAttempted ? `, ${s.notAttempted} not attempted` : ''}.`,
+        message: `${s.failed || s.aborted ? '⚠' : '✓'} Done: ${s.uploaded} uploaded, ${s.skipped} skipped, ${s.failed} failed${s.notAttempted ? `, ${s.notAttempted} not attempted` : ''}.`,
       });
     } catch (e) {
       onEvent({

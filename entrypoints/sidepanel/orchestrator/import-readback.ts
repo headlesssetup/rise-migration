@@ -282,7 +282,7 @@ export async function verifyCourseReadBack(args: ReadBackArgs): Promise<ReadBack
           report.error =
             `Read-back FAILED: ${readBackForeign.length} foreign media key(s) survived on the target ` +
             `course ${newCourseId} (${readBackForeign.slice(0, 3).join(', ')}${readBackForeign.length > 3 ? ', …' : ''})`;
-          onEvent({ kind: 'log', message: `${pfx} ${report.error} — course kept; re-run to repair, or fix those blocks manually` });
+          onEvent({ kind: 'log', message: `${pfx} ✗ ${report.error} — course kept; re-run to repair, or fix those blocks manually` });
         }
 
         // Multi-language stack: verify the translation tables cell-by-cell
@@ -357,8 +357,8 @@ export async function verifyCourseReadBack(args: ReadBackArgs): Promise<ReadBack
           onEvent({
             kind: 'log',
             message: l10nParity.ok
-              ? `Language parity OK — ${l10nParity.cells.compared} cell(s) match across ${l10nParity.locales.target.length} language(s)`
-              : `Language parity DIVERGENCES — ${l10nParity.issues.length} issue(s) (see ${courseId}.report.md)`,
+              ? `✓ Language parity OK — ${l10nParity.cells.compared} cell(s) match across ${l10nParity.locales.target.length} language(s)`
+              : `⚠ Language parity DIVERGENCES — ${l10nParity.issues.length} issue(s) (see ${courseId}.report.md)`,
           });
           if (!l10nParity.ok) {
             report.ok = false;
@@ -431,12 +431,13 @@ export async function verifyCourseReadBack(args: ReadBackArgs): Promise<ReadBack
           (l10nParity?.issues.length ?? 0);
         onEvent({
           kind: 'log',
+          // The authoritative "is this course faithful" verdict: ✓ / ✗, never white.
           message: blockingReadBackIssues === 0
-            ? `Read-back confirmation OK — ${parity.blocks.compared} block(s), course fields/settings, media ownership${l10nParity ? ', and language cells' : ''} match (${parity.expectedDivergences.length} announced exception(s))`
-            : `Read-back confirmation FAILED — ${blockingReadBackIssues} blocking divergence(s) (see ${courseId}.report.md)`,
+            ? `✓ Read-back confirmation OK — ${parity.blocks.compared} block(s), course fields/settings, media ownership${l10nParity ? ', and language cells' : ''} match (${parity.expectedDivergences.length} announced exception(s))`
+            : `✗ Read-back confirmation FAILED — ${blockingReadBackIssues} blocking divergence(s) (see ${courseId}.report.md)`,
         });
       } else {
-        onEvent({ kind: 'log', message: `Parity read-back failed — could not GET_COURSE ${newCourseId}` });
+        onEvent({ kind: 'log', message: `✗ Parity read-back failed — could not GET_COURSE ${newCourseId}` });
       }
 
   return { parity, readBackForeign, l10nParity, l10nPending, l10nPendingSet, aiTextCells };

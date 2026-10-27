@@ -16,7 +16,7 @@ import {
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import { rpc } from '../rpc';
-import { describeShape, unwrap, type ProgressEvent } from './shared';
+import { courseRef, describeShape, unwrap, type ProgressEvent } from './shared';
 
 export interface BankFetchResult {
   bankCount: number;
@@ -68,7 +68,7 @@ export async function fetchQuestionBanks(
       skipped += 1;
       onEvent({
         kind: 'log',
-        message: `[${i + 1}/${banks.length} banks] Skipped (already saved): ${b.title ?? b.id}`,
+        message: `[${i + 1}/${banks.length} banks] ✓ Skipped (already saved): ${b.title ?? b.id}`,
       });
       continue;
     }
@@ -79,7 +79,7 @@ export async function fetchQuestionBanks(
       saved += 1;
       onEvent({
         kind: 'log',
-        message: `[${i + 1}/${banks.length} banks] Saved bank: ${b.title ?? b.id}`,
+        message: `[${i + 1}/${banks.length} banks] ✓ Saved bank: ${b.title ?? b.id}`,
       });
       continue;
     }
@@ -92,7 +92,7 @@ export async function fetchQuestionBanks(
       failed.push(b.id);
       onEvent({
         kind: 'log',
-        message: `[${i + 1}/${banks.length} banks] Failed bank ${b.id}`,
+        message: `[${i + 1}/${banks.length} banks] FAILED bank ${courseRef(b.title, b.id)}`,
       });
       continue;
     }
@@ -100,7 +100,7 @@ export async function fetchQuestionBanks(
     saved += 1;
     onEvent({
       kind: 'log',
-      message: `[${i + 1}/${banks.length} banks] Saved bank: ${b.title ?? b.id}`,
+      message: `[${i + 1}/${banks.length} banks] ✓ Saved bank: ${b.title ?? b.id}`,
     });
   }
   return { bankCount: banks.length, saved, skipped, failed };
@@ -120,7 +120,7 @@ export async function scanSavedBanks(
     try {
       out.push({ id, doc: JSON.parse(raw) });
     } catch {
-      onEvent({ kind: 'log', message: `Skipped unreadable bank: ${id}` });
+      onEvent({ kind: 'log', message: `⚠ Skipped unreadable bank: ${id}` });
     }
   }
   return out;

@@ -2,7 +2,38 @@
 // (courses / folders / banks / assets); this module holds what they have in
 // common — the progress event type and the tolerant response-shape parsers.
 
+import type { Storage } from '@/core/storage/storage';
 import type { GetCourseDocument, SearchResultItem } from '@/shared/types/rise';
+
+/** How a PROBLEM line names a course: `"Title" (id)` — the title so the
+ *  operator can find it in Rise's own UI, the id because it names the archive
+ *  files. Just the id when no title is known. Success lines use the plain title. */
+export function courseRef(title: string | null | undefined, id: string): string {
+  return title ? `"${title}" (${id})` : id;
+}
+
+/** Course id → title from the archive manifest, for lines about courses whose
+ *  JSON can no longer be parsed (the manifest is written from the listing, so
+ *  it still knows the name). Tolerant: no/unreadable manifest → empty map. */
+export async function readCourseTitleIndex(
+  storage: Pick<Storage, 'readManifest'>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const raw = await storage.readManifest();
+    if (!raw) return out;
+    const parsed = JSON.parse(raw) as { courses?: unknown };
+    if (!Array.isArray(parsed.courses)) return out;
+    for (const c of parsed.courses as Array<{ id?: unknown; title?: unknown }>) {
+      if (typeof c?.id === 'string' && typeof c.title === 'string' && c.title) {
+        out.set(c.id, c.title);
+      }
+    }
+  } catch {
+    /* tolerate */
+  }
+  return out;
+}
 
 // Pagination safety valve: with pageSize=16 this caps a listing at ~3200
 // courses. Hitting it means the library was TRUNCATED — the listing loop must

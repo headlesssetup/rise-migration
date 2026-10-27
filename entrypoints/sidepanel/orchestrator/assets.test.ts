@@ -366,7 +366,7 @@ describe('downloadAllAssets', () => {
     ]);
     expect(summary.complete).toBe(false);
     expect(store.manifests.has('courses/c2')).toBe(true); // c2 still processed
-    expect(logs().some((m) => m.includes('owner FAILED c1'))).toBe(true);
+    expect(logs().some((m) => m.includes('owner FAILED "Course c1" (c1)'))).toBe(true);
     expect(logs().some((m) => m.includes('1 owner(s) failed entirely'))).toBe(true);
   });
 
@@ -377,6 +377,6 @@ describe('downloadAllAssets', () => {
     await downloadAllAssets(store.storage, onEvent, servingDownloader([]));
     expect(logs().some((m) => /^\[1\/1\] \[1\/2 assets\] /.test(m))).toBe(true);
     expect(logs().some((m) => /^\[1\/1\] \[2\/2 assets\] /.test(m))).toBe(true);
-    expect(logs().some((m) => /^\[1\/1\] Assets c1: /.test(m))).toBe(true);
+    expect(logs().some((m) => /^\[1\/1\] ✓ Assets Course c1: /.test(m))).toBe(true);
   });
 });

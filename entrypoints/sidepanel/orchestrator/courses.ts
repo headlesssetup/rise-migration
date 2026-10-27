@@ -20,12 +20,15 @@ import {
 import { DEFAULT_PACING, pacedDelay, type PacingConfig } from '@/core/pacing/delay';
 import type { Storage } from '@/core/storage/storage';
 import type { GetCourseDocument, SearchResultItem } from '@/shared/types/rise';
+import { nowStamp } from '../log-lines';
 import { rpc } from '../rpc';
 import {
   MAX_PAGES,
+  courseRef,
   describeShape,
   extractItems,
   pageCapWarning,
+  readCourseTitleIndex,
   unwrap,
   type ProgressEvent,
 } from './shared';
@@ -264,9 +267,10 @@ export async function exportCourses(
       }
       if (!stale) {
         skipped += 1;
+        // ✓: a resume skip is a success — the course is safely in the archive.
         onEvent({
           kind: 'log',
-          message: `${pfx} Skipped (already saved): ${c.title ?? c.id}${mlNote}`,
+          message: `${pfx} ✓ Skipped (already saved): ${c.title ?? c.id}${mlNote}`,
         });
         // Backfill: a pre-0.9.9 archive has the course but not its Custom-block
         // documents — fetch just those so a re-run completes the archive.
@@ -292,6 +296,9 @@ export async function exportCourses(
     if (didNetwork) await pacedDelay(pacing); // human-paced gap between fetches
     didNetwork = true;
 
+    // Stamped: a course fetch takes seconds (paced), and the operator wants to
+    // see when each one started on a multi-hour run.
+    onEvent({ kind: 'log', message: `${nowStamp()} ${pfx} Fetching: ${c.title ?? c.id}…` });
     const resp = await rpc({ type: 'GET_COURSE', courseId: c.id });
     if (resp.type !== 'COURSE_RESULT' || !resp.result.ok) {
       const err =
@@ -301,7 +308,7 @@ export async function exportCourses(
             ? resp.error
             : 'unexpected response';
       failed.push(c.id);
-      onEvent({ kind: 'log', message: `${pfx} Failed ${c.id}: ${err}` });
+      onEvent({ kind: 'log', message: `${pfx} FAILED ${courseRef(c.title, c.id)}: ${err}` });
       // A token is run-wide, not course-specific. The background has already
       // tried one automatic editor bootstrap + one retry; if that bounded
       // recovery failed, draining the rest of the queue would only manufacture
@@ -317,7 +324,7 @@ export async function exportCourses(
         onEvent({
           kind: 'log',
           message:
-            `${pfx} Export stopped after automatic token recovery failed; ` +
+            `${pfx} ⛔ Export stopped after automatic token recovery failed; ` +
             `${remaining} course(s) were left untouched and can be resumed safely.`,
         });
         break;
@@ -327,7 +334,7 @@ export async function exportCourses(
 
     await storage.writeCourse(c.id, resp.result.data.raw);
     saved += 1;
-    onEvent({ kind: 'log', message: `${pfx} Saved: ${c.title ?? c.id}${mlNote}` });
+    onEvent({ kind: 'log', message: `${pfx} ✓ Saved: ${c.title ?? c.id}${mlNote}` });
 
     // Custom-block (mondrian) documents ride the course export — without them
     // the course can never import (dangling blockumentId → boot 404 on target).
@@ -354,12 +361,15 @@ export async function scanSavedCourses(
 ): Promise<CourseScan[]> {
   const ids = await storage.listSaved();
   onEvent({ kind: 'log', message: `Scanning ${ids.length} saved course(s)…` });
+  const titles = await readCourseTitleIndex(storage);
   const scans: CourseScan[] = [];
   for (const id of ids) {
     const raw = await storage.readCourse(id);
     if (!raw) continue;
     try {
       let doc = unwrap(raw) as GetCourseDocument;
+      const title =
+        typeof doc.course?.title === 'string' ? doc.course.title : titles.get(id);
       // Stacks are scanned as their MATERIALIZED default locale: block shapes
       // profile on real values instead of {l10nId} refs (which would flood the
       // novelty report with `*.l10nId` field noise). Asset discovery is
@@ -370,14 +380,17 @@ export async function scanSavedCourses(
         if (m.unresolved.length > 0) {
           onEvent({
             kind: 'log',
-            message: `WARN ${id}: ${m.unresolved.length} l10n ref(s) have no value in any language (kept as refs)`,
+            message: `WARN ${courseRef(title, id)}: ${m.unresolved.length} l10n ref(s) have no value in any language (kept as refs)`,
           });
         }
         doc = m.doc;
       }
       scans.push(scanCourse(doc));
     } catch {
-      onEvent({ kind: 'log', message: `Skipped unreadable course: ${id}` });
+      onEvent({
+        kind: 'log',
+        message: `⚠ Skipped unreadable course: ${courseRef(titles.get(id), id)}`,
+      });
     }
   }
   return scans;

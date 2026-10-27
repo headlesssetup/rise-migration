@@ -85,7 +85,11 @@ See [v0.8.0 rebuild plan](docs/v0.8.0-rebuild-plan.md),
 4. Open/log into the target account.
 5. Choose **Import Data**, inspect archive status, confirm the target, and
    dry-run the required steps.
-6. Run account settings, question banks, and courses in order.
+6. Run account settings, question banks, the Storyline → Review 360 upload
+   (step D, scoped to the courses selected in C), and then courses, in that
+   order — the course import attaches Storyline blocks only to packages D has
+   already uploaded. The courses step warns (continue / abort) when a
+   prerequisite step looks skipped.
 7. Review the saved fidelity/read-back reports under `_import/`.
 
 ### Create locally and import

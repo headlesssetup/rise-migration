@@ -1,6 +1,86 @@
 # Project Status
 
-_Last updated: 2026-10-19 (v0.9.13: DFO export analysis + mondrian schema-version fix). Keep this current at each phase boundary._
+_Last updated: 2026-10-27 (v0.9.16b: review fixes on the export-permission preflight). Keep this current at each phase boundary._
+
+## v0.9.16b (2026-10-27) — Review fixes on v0.9.16/16a (PR #13)
+
+- **Blocked course stays ⚠ on every run.** The `exportBlocked` check now runs
+  BEFORE the "already exported" resume skip: a blocked course with only modern
+  blocks turned green (`✓ already exported`, `notExportable` 0) on its second
+  run. Entries a previous manifest had STAGED (a `zip`/`archiveZip`, from a run
+  when the account could export) are kept by block+locale; only the unstaged
+  blocks become `source-placeholder` (`mergeStagedEntries`).
+- **Import preflight: manual attach, not "run D first".** A course whose
+  manifest is `exportBlocked` (or whose packages are `source-placeholder`) gets
+  its own `storyline-manual` finding — step D can never stage those, so the
+  hint no longer sends the operator back to D. The preflight logs a start line,
+  `[i/N]` status, and a ✓/⚠ verdict (CLAUDE.md progress convention).
+- **Confirm box snapshots what it checked.** Continue anyway runs exactly the
+  selection + folder toggle the preflight saw; changing either discards the
+  box. Both buttons are disabled while the check runs (`Checking…`).
+- The blocked reason states what the archive shows (`authorPermissions` lack
+  `export`) instead of guessing "not the owner".
+- `orchestrator/import.ts` split: run types + the prior-report helpers moved to
+  `import-types.ts` (re-exported; 709 → ~620 lines, back under the cap).
+- Log filter badge counts real lines on both sides of "N of M".
+
+## v0.9.16a (2026-10-27) — Storyline export-permission preflight
+
+Live (intea dump, 2026-10-27): "Droša un veselībai draudzīga darba vide Swedbank
+2024" failed Stage D on every run with `build/raw HTTP 404`. The exporting
+account is an edit-only collaborator on someone else's course; its saved
+`authorPermissions` lack `export` / `publish:*` / `duplicate`, and Rise answers
+the web-export build with 404. All 5 packages are legacy, so the missing
+`storyline-legacy/` zips kept the course "unfinished" and it was retried forever.
+
+- The scan reads `authorPermissions`; a list without `export` marks the course
+  `exportBlocked` (no list → unknown → attempted as before).
+- Such a course is never built (not even with Force): a manual-review manifest
+  is written (`exportBlocked` reason, legacy blocks `legacy-unsupported`, modern
+  blocks `source-placeholder`, no zip paths), counted as skipped + `notExportable`
+  and logged ⚠. Summaries add "(N not exportable from this account)".
+- Stage C upload skips `source-placeholder` entries (never staged); import
+  already flags un-uploaded Storyline blocks for manual attach.
+- To recover after the owner grants export rights: re-save the course, then
+  re-run D with Force.
+
+## v0.9.16 (2026-10-26) — Log window QOL + import-ordering preflight
+
+Operator QOL after the DFO run; no protocol changes.
+
+- **Log filter.** The log card has All / Problems / Errors chips
+  (`LogCard.tsx`, `filterLogLines` in `log-lines.ts`). Problems = amber + red;
+  a `▶` header survives only when a kept line sits under it, so a 170-course
+  import shows just the courses that went wrong. Copy still copies everything.
+- **Timestamps.** Every `▶` operation header, each export course fetch
+  (`HH:MM:SS [i/N] Fetching: …`), each Storyline web-export trigger and each
+  Review 360 upload start carry a wall-clock stamp; export/assets/storyline
+  "Done" lines and the import run summary report elapsed time. Per-asset lines
+  stay unstamped. The classifier strips the stamp before reading markers.
+- **Status colours audited** (emitter-side markers, not classifier guessing):
+  resume skips (`✓ Skipped (already saved)`, `✓ … already exported, skipped`,
+  `✓ Assets already done`) and export `✓ Saved:` are green; `Done — … failed N`
+  is ⚠ when N > 0; read-back verdicts are `✓`/`✗`; the import run summary and
+  every "needs attention" list are ⚠ unless clean; `flags:` roll-ups, token
+  INVALID, archive INCOMPLETE, unreadable-skips, "not in archive" are ⚠;
+  `Planned` (dry run) is grey, not green; the bounded `GET_COURSE not ready yet
+  (attempt i/N)` poll no longer paints red; the SKIPPED-for-missing-assets
+  course is red (it is a `failed` outcome).
+- **Course names on problem lines.** Problem lines name a course as
+  `"Title" (id)` (`courseRef` in `orchestrator/shared.ts`); unreadable/absent
+  courses get the title from the manifest (`readCourseTitleIndex`). Export
+  `FAILED`, asset owner failures, storyline errors and import skips no longer
+  print a bare id.
+- **Import-ordering preflight** (`orchestrator/import-preflight.ts`). Before a
+  live course import, three archive-only checks: courses in a source folder
+  with "Re-create folders" off (→ root), Storyline packages not yet uploaded by
+  step D, draw-from-bank banks not imported by step B. Findings show a
+  Continue anyway / Abort box in step C; a dry run just logs them. The Import
+  view + README now state the real order **A → B → D → C** (D must precede C:
+  the course import attaches only what D recorded in the manifest).
+- **Setup card shows the connected archive folder name** (was Home-only).
+- **Assets failure table** relabelled (`failed keys`, `example location`) with
+  a caption explaining it is the per-owner download-failure report.
 
 ## v0.9.13 (2026-10-19) — DFO US→EU: novelty acceptance + mondrian `_v` adoption
 

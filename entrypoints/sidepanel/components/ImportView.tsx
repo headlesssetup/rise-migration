@@ -175,8 +175,11 @@ export function ImportView({
     <section className="card" style={{ borderColor: '#b00', borderWidth: 2 }}>
       <h2 style={{ color: '#b00' }}>⚠ Import (write mode)</h2>
       <p className="hint">
-        This mode <b>writes into a live Rise account</b>. Run the three steps in
-        order: account settings → question banks → courses. Dry-run each first.
+        This mode <b>writes into a live Rise account</b>. Run the steps in this
+        order: <b>A</b> account settings → <b>B</b> question banks → <b>D</b>{' '}
+        Storyline → Review 360 (select the courses in C first; it scopes to
+        that selection) → <b>C</b> courses. Courses imported before D get their
+        Storyline blocks flagged for manual attach. Dry-run each first.
       </p>
 
       {storage && !archiveInspection && <p className="hint">Checking archive file list…</p>}

@@ -41,7 +41,8 @@ import {
 import { parseWebExportRuntimeData } from '@/core/storyline/web-export';
 import type { TabPin } from '@/shared/messaging';
 import { pinnedRpc, pinTargetTab } from './import-shared';
-import { etaStatus, unwrap, type ProgressEvent } from './shared';
+import { nowStamp } from '../log-lines';
+import { courseRef, etaStatus, unwrap, type ProgressEvent } from './shared';
 
 
 
@@ -80,10 +81,13 @@ export interface StorylineExportSummary {
   legacySaved: number;
   /** Courses not attempted because the run aborted early (e.g. auth). */
   notAttempted: number;
+  /** Courses whose saved permissions forbid the web export — never built;
+   *  a manual-review manifest is written instead (counted in `skipped` too). */
+  notExportable: number;
   /** Set when the run aborted early; the reason (shown to the operator). */
   aborted?: string;
   /** Per-course failures (courseId → message) for the report. */
-  errors: Array<{ courseId: string; error: string }>;
+  errors: Array<{ courseId: string; title?: string; error: string }>;
 }
 
 /** Public CDN fetch of the export zip (default; injectable for tests). */
@@ -116,6 +120,52 @@ export interface StorylineExportDeps {
   force?: boolean;
   /** Restrict to these course ids (the operator's selection); omit for all. */
   onlyCourseIds?: Set<string>;
+}
+
+/** A manifest entry for a package that was NOT staged (no zip path). */
+function manifestEntryWithoutZip(block: StorylineBlockRef): StorylineManifestEntry {
+  return {
+    blockId: block.blockId,
+    lessonId: block.lessonId,
+    itemId: block.itemId,
+    leaf: block.leaf,
+    meta: block.meta,
+    ...(block.title ? { title: block.title } : {}),
+    compatibility: isKnownLegacyStorylineMeta(block.meta)
+      ? 'legacy-unsupported'
+      : 'source-placeholder',
+    ...(block.locale ? { locale: block.locale } : {}),
+    ...(block.l10nId ? { l10nId: block.l10nId } : {}),
+  };
+}
+
+/** Rebuild a manifest's `blocks` for a course that cannot be exported NOW:
+ *  an entry the previous manifest already STAGED (a `zip` or `archiveZip` on
+ *  disk, from a run when this account could export) is kept verbatim, every
+ *  other block gets a no-zip entry. Keyed by block + locale (a stack carries one
+ *  entry per language). Returns how many were kept. */
+function mergeStagedEntries(
+  previous: Record<string, unknown> | undefined,
+  blocks: StorylineBlockRef[],
+): { entries: StorylineManifestEntry[]; kept: number } {
+  const staged = new Map<string, StorylineManifestEntry>();
+  const prevBlocks = Array.isArray(previous?.blocks) ? (previous!.blocks as StorylineManifestEntry[]) : [];
+  for (const e of prevBlocks) {
+    if (e && typeof e === 'object' && (e.zip || e.archiveZip)) {
+      staged.set(`${e.lessonId}|${e.blockId}|${e.locale ?? ''}`, e);
+    }
+  }
+  let kept = 0;
+  const entries = blocks.map((block) => {
+    const prior = staged.get(`${block.lessonId}|${block.blockId}|${block.locale ?? ''}`);
+    if (prior) kept += 1;
+    return prior ?? manifestEntryWithoutZip(block);
+  });
+  return { entries, kept };
+}
+
+function notExportableNote(summary: StorylineExportSummary): string {
+  return summary.notExportable ? ` (${summary.notExportable} not exportable from this account)` : '';
 }
 
 const defaultExportOne: NonNullable<StorylineExportDeps['exportOne']> = async (
@@ -157,6 +207,7 @@ export async function exportStorylinePackages(
     legacySkipped: 0,
     legacySaved: 0,
     notAttempted: 0,
+    notExportable: 0,
     errors: [],
   };
   if (!targets.length) return summary;
@@ -198,11 +249,49 @@ export async function exportStorylinePackages(
       if (!exists) missingLegacyLeaves.add(block.leaf);
     }
 
-    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
+    // No export permission: the build would 404 on every run, so never attempt
+    // it (not even with Force). Checked BEFORE the resume skip so the course is
+    // ⚠ + counted `notExportable` on EVERY run — a manual-review manifest from
+    // run 1 must not turn it into a green "already exported" on run 2. Entries
+    // staged on an earlier run (when this account still had export rights) are
+    // KEPT by leaf+locale; only the unstaged blocks become `source-placeholder`
+    // (no zip: upload skips them, import flags them for manual attach).
+    if (target.exportBlocked) {
+      const { entries, kept } = mergeStagedEntries(previousManifest, target.blocks);
+      await storage.writeStorylineManifest(
+        target.courseId,
+        JSON.stringify(
+          {
+            ...(previousManifest ?? {}),
+            courseId: target.courseId,
+            title: target.title,
+            exportBlocked: target.exportBlocked,
+            blocks: entries,
+          },
+          null,
+          2,
+        ),
+      );
       summary.skipped += 1;
+      summary.notExportable += 1;
+      const unstaged = target.blocks.length - kept;
       onEvent({
         kind: 'log',
-        message: `${target.title ?? target.courseId}: already exported, skipped`,
+        message:
+          `⚠ ${courseRef(target.title, target.courseId)}: not exported — ${target.exportBlocked}; ` +
+          `${unstaged} Storyline package(s) need manual review` +
+          (kept ? ` (${kept} kept from an earlier export)` : '') +
+          `. Once this account may export the course (the owner grants export rights or sends a copy), re-save it in Rise and re-run with Force.`,
+      });
+      continue;
+    }
+
+    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
+      summary.skipped += 1;
+      // ✓: a resume skip is a success — the packages are already staged.
+      onEvent({
+        kind: 'log',
+        message: `✓ ${target.title ?? target.courseId}: already exported, skipped`,
       });
       continue;
     }
@@ -217,19 +306,7 @@ export async function exportStorylinePackages(
       return deps.force || !rawManifest;
     });
     if (!blocksToSave.length) {
-      const entries: StorylineManifestEntry[] = target.blocks.map((block) => ({
-        blockId: block.blockId,
-        lessonId: block.lessonId,
-        itemId: block.itemId,
-        leaf: block.leaf,
-        meta: block.meta,
-        ...(block.title ? { title: block.title } : {}),
-        compatibility: isKnownLegacyStorylineMeta(block.meta)
-          ? 'legacy-unsupported'
-          : 'source-placeholder',
-        ...(block.locale ? { locale: block.locale } : {}),
-        ...(block.l10nId ? { l10nId: block.l10nId } : {}),
-      }));
+      const entries = target.blocks.map((block) => manifestEntryWithoutZip(block));
       await storage.writeStorylineManifest(
         target.courseId,
         JSON.stringify(
@@ -257,7 +334,7 @@ export async function exportStorylinePackages(
     onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
     onEvent({
       kind: 'log',
-      message: `Storyline export: 0 packaged, ${summary.skipped} skipped, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
+      message: `${summary.notExportable ? '⚠' : '✓'} Storyline export: 0 packaged, ${summary.skipped} skipped${notExportableNote(summary)}, 0 failed; ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
     });
     return summary;
   }
@@ -282,7 +359,7 @@ export async function exportStorylinePackages(
     // it removes the old requirement that the operator keep an editor open just
     // to start a long Storyline export from the dashboard.
     const r = await refresh(pin, pending[0]!.courseId);
-    if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+    if (r) onEvent({ kind: 'log', message: `${r.valid ? '' : '⚠ '}Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
     if (r && r.valid === false) {
       summary.aborted = 'stale session token';
       summary.notAttempted = pending.length;
@@ -314,7 +391,8 @@ export async function exportStorylinePackages(
     if (i > 0) await pacedDelay(pacing); // pace between course builds (authoring write)
 
     try {
-      onEvent({ kind: 'log', message: `${label} ${title ?? courseId}: triggering web export…` });
+      // Stamped: a web-export build takes tens of seconds to minutes per course.
+      onEvent({ kind: 'log', message: `${nowStamp()} ${label} ${title ?? courseId}: triggering web export…` });
       const res = await exportOne(courseId, title ?? courseId, pin);
       if (!res.ok) throw new Error(res.error);
 
@@ -420,8 +498,8 @@ export async function exportStorylinePackages(
     } catch (e) {
       const error = (e as Error).message;
       summary.failed += 1;
-      summary.errors.push({ courseId, error });
-      onEvent({ kind: 'log', message: `${label} ${title ?? courseId}: FAILED — ${error}` });
+      summary.errors.push({ courseId, title, error });
+      onEvent({ kind: 'log', message: `${label} ${courseRef(title, courseId)}: FAILED — ${error}` });
 
       // A stale session 403s every build — abort instead of looping 152×.
       if (isAuthError(error)) {
@@ -439,7 +517,7 @@ export async function exportStorylinePackages(
   onEvent({ kind: 'import-status', label: 'Storyline export complete', etaSeconds: null, done: true });
   onEvent({
     kind: 'log',
-    message: `Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
+    message: `${summary.failed || summary.aborted || summary.notExportable ? '⚠' : '✓'} Storyline export: ${summary.packaged} packaged, ${summary.skipped} skipped${notExportableNote(summary)}, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${summary.courses} course(s); ${summary.legacySkipped} legacy package(s) flagged, ${summary.legacySaved} preserved.`,
   });
   return summary;
 }

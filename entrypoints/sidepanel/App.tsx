@@ -172,6 +172,9 @@ export function App() {
             onRefreshCount={refreshCount}
             refreshDisabled={busy}
           />
+          <p className="hint" style={{ marginBottom: 0 }}>
+            Archive folder: <b>{folderName ?? 'not connected'}</b>
+          </p>
           <FolderControls
             folderName={folderName}
             pendingName={pendingHandle?.name ?? null}

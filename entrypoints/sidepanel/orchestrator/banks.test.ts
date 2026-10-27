@@ -41,7 +41,7 @@ describe('fetchQuestionBanks', () => {
     const logs = events
       .filter((e) => e.kind === 'log')
       .map((e) => (e as { message: string }).message);
-    expect(logs.some((m) => m.includes('[1/2 banks] Skipped (already saved): Already saved'))).toBe(true);
-    expect(logs.some((m) => m.includes('[2/2 banks] Saved bank: New bank'))).toBe(true);
+    expect(logs.some((m) => m.includes('[1/2 banks] ✓ Skipped (already saved): Already saved'))).toBe(true);
+    expect(logs.some((m) => m.includes('[2/2 banks] ✓ Saved bank: New bank'))).toBe(true);
   });
 });

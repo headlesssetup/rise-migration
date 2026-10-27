@@ -130,7 +130,7 @@ export async function executePlan(
         // keeps its clean title and is identified via the run report/summary,
         // which lists its id for manual cleanup before a re-import.
         log(
-          `Stopped before step ${ctx.stepIdx + 1}/${total} — partial course ${ctx.newCourseId || '(none)'} kept ` +
+          `STOPPED before step ${ctx.stepIdx + 1}/${total} — partial course ${ctx.newCourseId || '(none)'} kept ` +
             '(no title marker; see the run report for cleanup)',
         );
         return result;

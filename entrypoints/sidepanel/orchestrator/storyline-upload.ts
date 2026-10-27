@@ -10,7 +10,8 @@ import { isKnownLegacyStorylineMeta } from '@/core/storyline/compatibility';
 import { md5Base64, md5Hex } from '@/core/storyline/md5';
 import type { TabPin } from '@/shared/messaging';
 import { pinnedRpc, pinTargetTab } from './import-shared';
-import { etaStatus, unwrap, type ProgressEvent } from './shared';
+import { nowStamp } from '../log-lines';
+import { courseRef, etaStatus, readCourseTitleIndex, unwrap, type ProgressEvent } from './shared';
 import { defaultRefresh, isAuthError } from './storyline-shared';
 // Type-only import back into storyline.ts: erased at compile time, so the
 // storyline → storyline-upload re-export edge stays cycle-free at runtime.
@@ -155,13 +156,17 @@ export async function uploadStorylineToReview360(
   // default remains every staged manifest on disk.
   const ids = deps.onlyCourseIds ? saved.filter((id) => deps.onlyCourseIds!.has(id)) : saved;
   const manifests: StoredManifest[] = [];
+  const titles = await readCourseTitleIndex(storage);
   for (const id of ids) {
     const raw = await storage.readStorylineManifest(id);
     if (!raw) continue;
     try {
       manifests.push(JSON.parse(raw) as StoredManifest);
     } catch {
-      onEvent({ kind: 'log', message: `${id}: unreadable storyline manifest, skipped` });
+      onEvent({
+        kind: 'log',
+        message: `⚠ ${courseRef(titles.get(id), id)}: unreadable storyline manifest, skipped`,
+      });
     }
   }
 
@@ -226,6 +231,8 @@ export async function uploadStorylineToReview360(
     for (const block of m.blocks ?? []) {
       const leaf = block.leaf;
       if (!leaf || legacyLeaves.has(leaf) || seen.has(leaf)) continue;
+      // Never staged (e.g. the course was not exportable): no zip to upload.
+      if (block.compatibility === 'source-placeholder') continue;
       seen.add(leaf);
       const itemTitle = itemTitleByLeaf.get(leaf) ?? metaTitleOf(block.meta);
       work.push({ courseId: m.courseId, title: m.title, leaf, itemTitle });
@@ -260,7 +267,7 @@ export async function uploadStorylineToReview360(
 
   try {
     const r = await refresh(pin);
-    if (r) onEvent({ kind: 'log', message: `Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
+    if (r) onEvent({ kind: 'log', message: `${r.valid ? '' : '⚠ '}Token refresh: ${r.valid ? 'valid' : 'INVALID'}${r.via ? ` (via ${r.via})` : ''}.` });
     if (r && r.valid === false) {
       summary.aborted = 'stale session token';
       onEvent({
@@ -324,7 +331,8 @@ export async function uploadStorylineToReview360(
     try {
       onEvent({
         kind: 'log',
-        message: `${label} ${title ?? courseId} / ${leaf}: uploading${itemTitle ? ` as "${itemTitle}"` : ''}…`,
+        // Stamped: a package upload + Review 360 unpack takes a while.
+        message: `${nowStamp()} ${label} ${title ?? courseId} / ${leaf}: uploading${itemTitle ? ` as "${itemTitle}"` : ''}…`,
       });
       const res = await uploadOne({
         zipB64: toBase64(bytes),
@@ -365,7 +373,7 @@ export async function uploadStorylineToReview360(
 
   onEvent({
     kind: 'log',
-    message: `Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} automatic package(s); ${summary.legacySkipped} legacy package(s) flagged.`,
+    message: `${summary.failed || summary.aborted ? '⚠' : '✓'} Storyline upload: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed${summary.notAttempted ? `, ${summary.notAttempted} not attempted` : ''} of ${work.length} automatic package(s); ${summary.legacySkipped} legacy package(s) flagged.`,
   });
   onEvent({ kind: 'import-status', label: 'Storyline upload complete', etaSeconds: null, done: true });
   return summary;
