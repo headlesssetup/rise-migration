@@ -103,7 +103,12 @@ OOM/crash. Rise's own upload size limit is UNCAPTURED.
 - **U2 — typeface fallback without `account/typefaces.json`.** Build the source
   map from `course.typefaces` (id → name) and name-match built-ins on the target;
   and/or a loud preflight warning "account export missing — fonts will not be
-  remapped" (finding 1).
+  remapped" (finding 1). **Partly done (v0.9.16c, 2026-10-28):** the theme step
+  now ALWAYS sends the top-level heading/body/ui ids (unchanged when there is no
+  map) instead of the theme-only envelope — the theme-only write let Rise adopt
+  stale `theme.*TypefaceId` leftovers (Lato/Merriweather) over the course's
+  Source Sans Pro even within the SAME account (VAS2.5 import). Cross-account
+  name-matching from `course.typefaces` is still open.
 - **U3 — optional-provenance oversize handling.** Decide policy: either flag as
   "optional original not migrated (attach manually if wanted)" with its own
   wording, or blank silently like `optionalUnavailable`. Moot if U1 lands (finding 2).
