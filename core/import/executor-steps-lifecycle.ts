@@ -305,9 +305,29 @@ export async function handleSetTheme(
           // fonts to the TARGET account by name and recreate any custom font it
           // lacks — otherwise the course renders with the wrong (default) font.
           const src = deps.sourceTypefaces;
-          if ((src && src.size) || (deps.typefaceIdMap && deps.typefaceIdMap.size)) {
-            const idMap = await resolveAndRecreateTypefaces(ctx, course, src ?? new Map());
-            const applied = applyTypefaceIds(course, theme, idMap);
+          const hasMap = !!((src && src.size) || (deps.typefaceIdMap && deps.typefaceIdMap.size));
+          // Without an account typeface export (a course-only archive) the ids are
+          // sent UNCHANGED rather than omitted: the TOP-LEVEL heading/body/ui slots
+          // are the authoritative binding (envelopes §7), while `theme.*TypefaceId`
+          // can be stale leftovers of the theme the course was duplicated from.
+          // Writing the theme alone made Rise adopt those stale ids (VAS 2026-10-28:
+          // theme said Lato/Merriweather, course said Source Sans Pro → read-back
+          // `course-field-changed`). Unchanged ids are exact within the same
+          // account; across accounts the read-back still catches a wrong font.
+          const idMap = hasMap
+            ? await resolveAndRecreateTypefaces(ctx, course, src ?? new Map())
+            : new Map<string, string>();
+          if (!hasMap) {
+            log(
+              `${pfx()} ⚠ no account typeface export — sending the course's typeface ids unchanged (exact within the same account; the read-back verifies the fonts)`,
+            );
+          }
+          const applied = applyTypefaceIds(course, theme, idMap);
+          if (!applied.headingTypefaceId && !applied.bodyTypefaceId && !applied.uiTypefaceId) {
+            // Nothing to bind (a course doc without any typeface slot) — the
+            // theme-only envelope is the exact round-trip.
+            await send(env.updateCourseTheme(ctx.newCourseId, theme), step.kind);
+          } else {
             await send(
               env.updateCourseThemeAndTypefaces({
                 courseId: ctx.newCourseId,
@@ -318,8 +338,6 @@ export async function handleSetTheme(
               }),
               step.kind,
             );
-          } else {
-            await send(env.updateCourseTheme(ctx.newCourseId, theme), step.kind);
           }
 }
 
