@@ -153,3 +153,66 @@ export function mergeForeignTypefaces(
       : { ...base, typefaces: list };
   return { merged, added };
 }
+
+// --- Route B: font files from the editor's @font-face rules ------------------
+//
+// When even the per-course FETCH_TYPEFACES does not list a shared-in typeface
+// (mig30oct 2026-10-30: "DB Head", "DB Sans", "DBNeoScreenSans"), the export
+// reads the course editor's `rise-tf-<id>` @font-face rules (background
+// course-fonts.ts) and rebuilds the typeface record from them. The NAME comes
+// from the course document's own `course.typefaces` {id: name} map.
+
+/** `course.typefaces` of a saved course doc (`{course}` or ducks-wrapped). */
+export function courseTypefaceNameMap(courseDoc: unknown): Map<string, string> {
+  const root = isObj(courseDoc) ? (isObj(courseDoc.payload) ? courseDoc.payload : courseDoc) : null;
+  const course = root && isObj(root.course) ? root.course : null;
+  const out = new Map<string, string>();
+  const t = course && isObj(course.typefaces) ? course.typefaces : null;
+  if (t) for (const [id, name] of Object.entries(t)) if (typeof name === 'string' && name) out.set(id, name);
+  return out;
+}
+
+/** CSS weight/style → the typeface font `style` slot Rise uses (regular, bold,
+ *  italic — the three captured slots). Other faces are not representable. */
+function slotOf(weight: string, style: string): string | null {
+  const italic = /italic|oblique/i.test(style);
+  const w = parseInt(weight, 10) || 400;
+  if (!italic && w < 600) return 'regular';
+  if (!italic) return 'bold';
+  if (w < 600) return 'italic';
+  return null;
+}
+
+/** Rebuild typeface records from scraped @font-face rows. Only files under the
+ *  account font store (`rise/fonts/…` on articulateusercontent) count — Rise's
+ *  built-ins live on the CDN and are never recreated. */
+export function typefacesFromFontFaces(
+  faces: { typefaceId: string; weight: string; style: string; url: string }[],
+  names: Map<string, string>,
+): Record<string, unknown>[] {
+  const byId = new Map<string, { key: string; style: string; original: string }[]>();
+  for (const f of faces) {
+    let key: string;
+    try {
+      const u = new URL(f.url);
+      if (!/articulateusercontent\.(com|eu)$/.test(u.hostname)) continue;
+      key = decodeURIComponent(u.pathname.replace(/^\//, ''));
+    } catch {
+      continue;
+    }
+    if (!key.startsWith('rise/fonts/')) continue;
+    const slot = slotOf(f.weight, f.style);
+    if (!slot) continue;
+    const list = byId.get(f.typefaceId) ?? [];
+    if (list.some((x) => x.style === slot)) continue;
+    list.push({ key, style: slot, original: (key.split('/').pop() ?? '').replace(/^[A-Za-z0-9_-]{16}-/, '') });
+    byId.set(f.typefaceId, list);
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const [id, fonts] of byId) {
+    const name = names.get(id);
+    if (!name) continue; // no name → cannot be matched or recreated sensibly
+    out.push({ id, name, default: false, deleted: false, recoveredFrom: 'font-face', fonts });
+  }
+  return out;
+}

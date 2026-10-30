@@ -46,6 +46,9 @@ export function CoursesSection({
   // chains on the target and place the courses there; OFF: courses land in root.
   const [recreateFolders, setRecreateFolders] = useState(false);
   const [rehostForeignTypefaces, setRehostForeignTypefaces] = useState(false);
+  // "Interface language" — built-in label set bound on courses whose source
+  // names none ('' = leave the target account's default).
+  const [labelLanguage, setLabelLanguage] = useState('');
   // "Ready to import?" — rough pre-run time estimate for the selection (local
   // archive reads + pure plans; debounced so rapid clicking doesn't churn disk).
   const [estimate, setEstimate] = useState<string | null>(null);
@@ -140,6 +143,7 @@ export function CoursesSection({
             override,
             recreateFolders: recreateFoldersNow,
             rehostForeignTypefaces,
+            defaultLabelLanguage: labelLanguage || undefined,
             shouldStop: stop.shouldStop,
           },
           onEvent,
@@ -155,7 +159,7 @@ export function CoursesSection({
         setRunning(false);
       }
     },
-    [storage, target, override, rehostForeignTypefaces, onEvent, logBreak, setRunning, stop],
+    [storage, target, override, rehostForeignTypefaces, labelLanguage, onEvent, logBreak, setRunning, stop],
   );
 
   // Button entry: run the ordering preflight first. A live run with findings
@@ -174,7 +178,7 @@ export function CoursesSection({
         warnings = await checkImportPreconditions(
           storage,
           courseIds,
-          { recreateFolders: recreateFoldersNow },
+          { recreateFolders: recreateFoldersNow, defaultLabelLanguage: labelLanguage || undefined },
           onEvent,
         );
       } catch (e) {
@@ -191,7 +195,7 @@ export function CoursesSection({
       }
       await run(dryRun, courseIds, recreateFoldersNow, warnings);
     },
-    [storage, checking, selected, recreateFolders, onEvent, run],
+    [storage, checking, selected, recreateFolders, labelLanguage, onEvent, run],
   );
 
   return (
@@ -251,6 +255,20 @@ export function CoursesSection({
             />{' '}
             Re-host shared-in typefaces (fonts owned by another tenant that the export resolved per
             course — only if you may copy them; off = flagged as manual work)
+          </label>
+          <label
+            className="hint"
+            style={{ display: 'block' }}
+            title="Courses whose source names no label set use the account's default interface language, which the export cannot see. Pick the language the source courses show (quiz feedback buttons, navigation) to bind Rise's built-in set on the target."
+          >
+            Interface language for courses without their own label set:{' '}
+            <select value={labelLanguage} onChange={(e) => setLabelLanguage(e.target.value)}>
+              <option value="">leave target default</option>
+              <option value="de">German</option>
+              <option value="en">English</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+            </select>
           </label>
           {pending && !running && (
             <div

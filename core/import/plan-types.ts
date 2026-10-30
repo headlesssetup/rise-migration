@@ -98,6 +98,10 @@ export interface PlanInput {
    *  plan (loud-fail: the ref is a dangling cross-account id that 404s
    *  preview/publish boot; re-export the course with 0.9.9+). */
   blockuments?: Map<string, BlockumentGraph>;
+  /** Operator choice: ISO 639-1 code of the built-in label set to bind on
+   *  courses whose source names none (`labelSetId: ""`). Absent → leave the
+   *  target account's default. Monolingual courses only. */
+  defaultLabelLanguage?: string;
 }
 
 export type PlanStep =
@@ -213,6 +217,28 @@ export type PlanStep =
       // from the new course id; `shareId`/`activeEdition` are target lifecycle.
       kind: 'set-export-settings';
       hasQuizId: boolean;
+      summary: string;
+    }
+  | {
+      // Monolingual course label set (the learner-facing UI strings: quiz
+      // "Incorrect"/"TAKE AGAIN", navigation, …) via UPDATE_COURSE {id,
+      // labelSetId} — capture-proven 2026-08-31 (`-settings.mitm`). Planned
+      // when the source names a set, or when the operator picks an interface
+      // language for courses that name none (an empty `labelSetId` resolves to
+      // an account default the export cannot see: mig30oct's US courses showed
+      // German, the EU copies English). A built-in set binds the TARGET's own
+      // built-in of the same language; a custom set is recreated (account-
+      // scoped, deduped run-wide via labelSetCache like the stack path).
+      kind: 'set-course-labelset';
+      /** Source set id (custom sets: the labelSetCache key); null when the
+       *  binding comes from the operator's default language. */
+      sourceLabelSetId: string | null;
+      iso639Code: string;
+      name: string;
+      /** true → bind the target's built-in set for `iso639Code`. */
+      builtin: boolean;
+      /** Custom sets: labels that differ from the language's built-in set. */
+      labels: Record<string, unknown>;
       summary: string;
     }
   | {

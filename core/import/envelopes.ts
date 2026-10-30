@@ -56,8 +56,7 @@ export function updateCourseSettings(
 /** UPDATE_COURSE_DEBOUNCE {id, aiTutorConfig} — the AI-tutor name/avatar write
  *  (capture-proven 2026-08-31, `-settings.mitm`). NOTE the same capture also
  *  proved `UPDATE_COURSE {id, labelSetId}` (immediate, not debounced) as the
- *  monolingual label-set binding — recorded for the future label-set migration
- *  (documented gap; not written yet). */
+ *  monolingual label-set binding — see updateCourseLabelSet. */
 export function updateCourseAiTutorConfig(
   courseId: string,
   aiTutorConfig: unknown,
@@ -646,6 +645,12 @@ export function getSubscription(): WriteSpec {
  *  (mirrors every captured call). */
 export function updateL10nBatch(courseId: string, changes: unknown[]): WriteSpec {
   return ducks('l10n', 'UPDATE_L10N_BATCH', { courseId, changes });
+}
+
+/** UPDATE_COURSE {id, labelSetId} — bind a monolingual course's label set
+ *  (immediate, not debounced — capture-proven 2026-08-31, `-settings.mitm`). */
+export function updateCourseLabelSet(courseId: string, labelSetId: string): WriteSpec {
+  return ducks('courses', 'UPDATE_COURSE', { id: courseId, labelSetId });
 }
 
 /** UPDATE_LOCALE — update a locale row, e.g. bind a label set to a language

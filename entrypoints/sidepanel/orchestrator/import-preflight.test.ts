@@ -155,4 +155,18 @@ describe('checkImportPreconditions', () => {
       [],
     );
   });
+
+  it('warns when exported courses name no label set, unless an interface language is chosen', async () => {
+    const unnamed = JSON.stringify({
+      course: { id: 'c1', title: 'Sk', labelSetId: '', lessons: ['L1'] },
+      lessons: [{ id: 'L1', type: 'blocks', title: 'Lesson', items: [] }],
+    });
+    const s = storage({ courses: { c1: unnamed } });
+    const w = await checkImportPreconditions(s, ['c1'], { recreateFolders: false });
+    expect(w.map((x) => x.kind)).toEqual(['labels']);
+    expect(w[0]!.message).toContain('"Sk"');
+    expect(
+      await checkImportPreconditions(s, ['c1'], { recreateFolders: false, defaultLabelLanguage: 'de' }),
+    ).toEqual([]);
+  });
 });

@@ -50,6 +50,8 @@ function pacedEnvelopes(step: PlanStep): number {
       return 2; // copy_review_item + the storyline cell write (per language)
     case 'set-locale-labelset':
       return 3; // CREATE_LABEL_SET + UPDATE_LABELS + UPDATE_LOCALE
+    case 'set-course-labelset':
+      return 1; // UPDATE_COURSE (a custom set adds CREATE_LABEL_SET + UPDATE_LABELS once per run)
     case 'set-stack-titles':
       return 2; // ~one small batch per locale; call it two envelopes
     default:

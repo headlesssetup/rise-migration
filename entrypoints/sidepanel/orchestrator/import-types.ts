@@ -32,6 +32,10 @@ export interface ImportOptions {
   /** Recreate typefaces SHARED IN from another tenant (archived as `foreign`).
    *  Default OFF → flagged as manual work (someone else's font: licensing). */
   rehostForeignTypefaces?: boolean;
+  /** "Interface language" select: ISO 639-1 code of the built-in label set to
+   *  bind on courses whose source names none (`labelSetId: ""` resolves to an
+   *  account default the export cannot see). Empty → leave the target default. */
+  defaultLabelLanguage?: string;
   /** Cooperative cancel for the Stop button. Polled between courses and (via the
    *  executor) between paced write steps — never mid-write. */
   shouldStop?: () => boolean;

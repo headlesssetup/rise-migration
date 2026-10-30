@@ -116,6 +116,7 @@ export interface ManualFlag {
     | 'l10n-storyline' // stack cell holds a Storyline package → manual per-language attach
     | 'l10n-locale' // source table for an archived/row-less locale — not transferable
     | 'builtin-asset' // Rise library/CDN asset copied as-is, unverified on the target plane
+    | 'label-set' // the course's interface-language label set could not be bound
     | 'l10n-ref'; // a source course-level l10n ref had no target counterpart
   sourceBlockId?: string;
   /** The owning SOURCE lesson — block ids repeat across lessons (Rise samples

@@ -56,6 +56,7 @@ import {
 } from './storyline-handlers';
 import { risePlaneFromUrl } from '@/shared/messaging';
 import { courseEditorUrl, editorCourseIdFromUrl } from '@/shared/rise-editor';
+import { scrapeCourseFontFaces } from './course-fonts';
 import type {
   BackgroundRequest,
   BackgroundResponse,
@@ -626,6 +627,14 @@ export default defineBackground(() => {
           'Typefaces response',
           pin,
         );
+
+      case 'SCRAPE_COURSE_FONTS': {
+        const r = await scrapeCourseFontFaces(msg.courseId, pin);
+        return {
+          type: 'COURSE_FONTS_RESULT',
+          result: r.ok ? { ok: true, status: 200, data: { faces: r.faces } } : { ok: false, error: r.error },
+        };
+      }
 
       case 'RELAY_WRITE':
         return { type: 'WRITE_RESULT', result: await relayWrite(msg.spec, pin) };

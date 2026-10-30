@@ -63,6 +63,7 @@ import {
   readStorylineAttach,
 } from './import-run-inputs';
 import { emitRunSummary } from './import-summary';
+import { buildManualActionsMarkdown } from '@/core/import/manual-actions';
 import { verifyCourseReadBack } from './import-readback';
 import { prepareImportRun } from './import-run-setup';
 import {
@@ -344,6 +345,7 @@ export async function runImport(
       targetFolderId: opts.targetFolderId ?? 'all',
       recreateBanks: opts.recreateBanks ?? false,
       boundBanks: boundBanks.size > 0 ? boundBanks : undefined,
+      defaultLabelLanguage: opts.defaultLabelLanguage || undefined,
     };
     // Plan build can ABORT a course loudly (e.g. a mondrian `blockumentId`
     // with no archived graph — the dangling-ref class that 404s target boot).
@@ -605,6 +607,18 @@ export async function runImport(
   const csvName = `import-summary-${csvStamp}.csv`;
   await storage.writeImportArtifact(csvName, buildRunCsv(csvCourses));
   onEvent({ kind: 'log', message: `Wrote run summary → ${csvName}` });
+  // The same items as a checklist grouped by ACTION, with editor links — what
+  // the operator otherwise writes by hand from the CSV (mig30oct 2026-10-30).
+  const actions = buildManualActionsMarkdown(csvCourses, {
+    plane: target?.plane,
+    dryRun: opts.dryRun,
+    generatedAt: new Date().toISOString(),
+  });
+  if (actions) {
+    const actionsName = `manual-actions-${csvStamp}.md`;
+    await storage.writeImportArtifact(actionsName, actions);
+    onEvent({ kind: 'log', message: `Wrote manual-action checklist → ${actionsName}` });
+  }
 
   emitRunSummary(onEvent, outcomes, notStarted, stopped, opts.dryRun, Date.now() - runStartMs);
 

@@ -99,6 +99,67 @@ export function usedTypefaceIds(course: Record<string, unknown>): string[] {
   return [...ids];
 }
 
+/** The typeface ids that actually DRIVE the course's fonts. The top-level
+ *  heading/body/ui slots are authoritative (envelopes §7); `theme.*TypefaceId`
+ *  can be stale leftovers of the theme the course was duplicated from
+ *  (mig30oct Führungssparring: two ids that resolve nowhere). The theme copies
+ *  count only when the course has no top-level slot at all. */
+export function authoritativeTypefaceIds(course: Record<string, unknown>): Set<string> {
+  const pick = (src: Record<string, unknown>): string[] =>
+    ['headingTypefaceId', 'bodyTypefaceId', 'uiTypefaceId']
+      .map((k) => src[k])
+      .filter((v): v is string => typeof v === 'string' && v !== '');
+  const top = pick(course);
+  return new Set(top.length ? top : pick((course.theme ?? {}) as Record<string, unknown>));
+}
+
+/** `course.typefaces` — every GET_COURSE carries `{<typefaceId>: <name>}` for
+ *  the fonts the course binds, even fonts the account does not own (shared in
+ *  from another tenant: mig30oct "DB Head"/"DB Sans"). */
+export function courseTypefaceNames(course: Record<string, unknown>): Map<string, string> {
+  const out = new Map<string, string>();
+  const t = course.typefaces;
+  if (t && typeof t === 'object' && !Array.isArray(t)) {
+    for (const [id, name] of Object.entries(t as Record<string, unknown>)) {
+      if (typeof name === 'string' && name.trim()) out.set(id, name.trim());
+    }
+  }
+  return out;
+}
+
+/** Whitespace/case-insensitive name key ("DBNeoScreenSans" = "DB Neo Screen Sans"). */
+function looseName(name: string): string {
+  return name.toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+/** Look a font NAME up on the target: exact (case-folded) first, then
+ *  ignoring spacing — the same font is often named both ways. */
+export function lookupTargetByName(targetNames: Map<string, string>, name: string): string | undefined {
+  const exact = targetNames.get(name.trim().toLowerCase());
+  if (exact) return exact;
+  const loose = looseName(name);
+  for (const [k, id] of targetNames) if (looseName(k) === loose) return id;
+  return undefined;
+}
+
+/** First word of a font name, splitting camel case ("DBNeoScreenSans" → "db"). */
+function firstToken(name: string): string {
+  const spaced = name.trim().replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  return (spaced.split(/[\s_-]+/)[0] ?? '').toLowerCase();
+}
+
+/** Target fonts that LOOK related (same first word, e.g. "DB Head" → "DB Neo
+ *  Screen Head") — a hint for the operator, never applied automatically. */
+export function similarTargetNames(name: string, target: Map<string, Typeface>): string[] {
+  const tok = firstToken(name);
+  if (tok.length < 2) return [];
+  const out = new Set<string>();
+  for (const t of target.values()) {
+    if (!t.isDefault && firstToken(t.name) === tok && looseName(t.name) !== looseName(name)) out.add(t.name);
+  }
+  return [...out].sort();
+}
+
 export interface TypefaceResolution {
   /** source typeface id → target typeface id (only the already-resolvable ones:
    *  matched by name on the target). Recreated fonts are added by the executor. */
@@ -126,6 +187,9 @@ export function resolveTypefaces(
      *  foreign font is someone else's asset (licensing), so the default is to
      *  HOLD it (flag) — the same reasoning as built-in library assets. */
     rehostForeign?: boolean;
+    /** `course.typefaces` id → name: lets an id with no source catalog entry
+     *  still match a target font of the same name. */
+    courseNames?: Map<string, string>;
   } = {},
 ): TypefaceResolution {
   const idMap = new Map<string, string>();
@@ -137,10 +201,15 @@ export function resolveTypefaces(
   for (const id of usedIds) {
     const src = sourceById.get(id);
     if (!src) {
-      unresolved.push(id);
+      // No catalog entry (shared in, never resolved) — the course's own name
+      // for it can still match a target font that was provisioned by hand.
+      const name = opts.courseNames?.get(id);
+      const byName = name ? lookupTargetByName(targetNames, name) : undefined;
+      if (byName) idMap.set(id, byName);
+      else unresolved.push(id);
       continue;
     }
-    const targetId = targetNames.get(src.name.trim().toLowerCase());
+    const targetId = lookupTargetByName(targetNames, src.name);
     if (targetId) {
       idMap.set(id, targetId); // matched by name (built-in or already-uploaded)
       continue;

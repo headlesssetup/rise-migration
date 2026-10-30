@@ -74,6 +74,9 @@ type BackgroundRequestBody =
   | { type: 'GET_QUESTION_BANK'; bankId: string }
   | { type: 'FETCH_BLOCK_TEMPLATES' }
   | { type: 'FETCH_TYPEFACES'; courseId: string }
+  // Read a course's `rise-tf-*` @font-face rules from a temporary inactive
+  // editor tab — recovers shared-in font files FETCH_TYPEFACES cannot list.
+  | { type: 'SCRAPE_COURSE_FONTS'; courseId: string }
   // Phase 3 — relay a single WRITE envelope through the live Rise tab. The panel
   // orchestrates the sequence + pacing; the background just performs the fetch
   // (supports POST/PUT/DELETE, JSON or base64 binary bodies, presigned S3 PUT).
@@ -149,6 +152,10 @@ export type BackgroundResponse =
       result: FetchResult<{ raw: string; doc: unknown }>;
     }
   | { type: 'WRITE_RESULT'; result: WriteRelayResult }
+  | {
+      type: 'COURSE_FONTS_RESULT';
+      result: FetchResult<{ faces: { typefaceId: string; weight: string; style: string; url: string }[] }>;
+    }
   | {
       type: 'STORYLINE_EXPORT_RESULT';
       result: FetchResult<{ location: string; jobId: string }>;

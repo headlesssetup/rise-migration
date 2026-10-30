@@ -60,6 +60,9 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   // The TARGET course's server-assigned shareId, read at the create handshake —
   // exportSettings must carry the target's own, never the source's.
   let targetShareId = '';
+  // The TARGET account's label sets, read at the same handshake (GET_COURSE
+  // carries `labelSets`) — the course label-set binding picks from these.
+  let targetLabelSets: Record<string, unknown>[] = [];
   // Pre-created SHELL lessons observed on the create-course handshake GET_COURSE
   // (F2, capture-proven: a `onePage` shell ships WITH one empty-titled `blocks`
   // lesson the editor writes straight into; regular/aiOutline shells are
@@ -219,6 +222,19 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   const total = steps.length;
   let stepIdx = 0;
   const pfx = (): string => `[${stepIdx}/${total}]`;
+  // A step that sends several envelopes (course images: GET_YURL ×N +
+  // UPDATE_COURSE) numbers them `[87/90 ·2]` so the log never shows the same
+  // `[87/90]` repeated as if the counter stalled (mig30oct dry run).
+  let sendStep = -1;
+  let sendSub = 0;
+  const sendPfx = (): string => {
+    if (sendStep !== stepIdx) {
+      sendStep = stepIdx;
+      sendSub = 0;
+    }
+    sendSub++;
+    return sendSub > 1 ? `[${stepIdx}/${total} ·${sendSub}]` : pfx();
+  };
 
   // Relay + loud-fail wrapper. In dry-run, record the envelope and return a
   // synthetic empty body (callers synthesize ids separately).
@@ -230,8 +246,9 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
     const where = spec.label.startsWith(`${spec.method} `)
       ? spec.label
       : `${spec.method} ${spec.label}`;
+    const at = sendPfx();
     if (dryRun) {
-      log(`${pfx()} DRY  ${where}`);
+      log(`${at} DRY  ${where}`);
       return {};
     }
     await pace();
@@ -243,7 +260,7 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
         r.text,
       );
     }
-    log(`${pfx()} OK   ${where}`);
+    log(`${at} OK   ${where}`);
     return parseJson(r.text);
   }
 
@@ -349,6 +366,8 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
     set materialized(v: boolean) { materialized = v; },
     get targetShareId() { return targetShareId; },
     set targetShareId(v: string) { targetShareId = v; },
+    get targetLabelSets() { return targetLabelSets; },
+    set targetLabelSets(v: Record<string, unknown>[]) { targetLabelSets = v; },
     get targetStackDoc() { return targetStackDoc; },
     set targetStackDoc(v: GetCourseDocument | null) { targetStackDoc = v; },
     get stepIdx() { return stepIdx; },

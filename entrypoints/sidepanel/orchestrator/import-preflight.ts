@@ -17,7 +17,7 @@ import { readCourseFolders, readStorylineAttach } from './import-run-inputs';
 import { unwrap, type ProgressEvent } from './shared';
 
 export interface ImportPreflightWarning {
-  kind: 'folders' | 'storyline' | 'storyline-manual' | 'banks';
+  kind: 'folders' | 'storyline' | 'storyline-manual' | 'banks' | 'labels';
   /** One operator-facing sentence: what will happen and which step fixes it. */
   message: string;
 }
@@ -69,7 +69,7 @@ function few(names: string[], max = 3): string {
 export async function checkImportPreconditions(
   storage: Storage,
   courseIds: string[],
-  opts: { recreateFolders: boolean },
+  opts: { recreateFolders: boolean; defaultLabelLanguage?: string },
   onEvent: (e: ProgressEvent) => void = () => {},
 ): Promise<ImportPreflightWarning[]> {
   const warnings: ImportPreflightWarning[] = [];
@@ -101,6 +101,7 @@ export async function checkImportPreconditions(
   let storylineManual = 0;
   const bankShort: string[] = [];
   const unboundBanks = new Set<string>();
+  const noLabelSet: string[] = [];
 
   for (const [i, id] of courseIds.entries()) {
     onEvent({ kind: 'import-status', label: `Preflight [${i + 1}/${n}]`, etaSeconds: null, done: false });
@@ -113,6 +114,15 @@ export async function checkImportPreconditions(
       continue; // unreadable → the run reports it
     }
     const title = titleOf(doc, id);
+
+    // Label set: "" resolves to an account default the export cannot see
+    // (mig30oct: German on the US source, English on the EU target).
+    const labelSetId = (doc.course as Record<string, unknown> | undefined)?.labelSetId;
+    // Only an EXPORTED course carries the key ("" = none named); a Creator
+    // build asserts nothing there.
+    if (!opts.defaultLabelLanguage && labelSetId === '') {
+      noLabelSet.push(title);
+    }
 
     // Storyline/Mighty packages the course import could attach — one per
     // package ref (a stack carries one per language), excluding never-attached
@@ -182,6 +192,16 @@ export async function checkImportPreconditions(
         `${bankShort.length} selected course(s) draw from ${unboundBanks.size} question bank(s) that ` +
         `step B has not imported — run step B (Question banks) first, or those draw-from-bank ` +
         `blocks become empty placeholders to attach manually: ${few(bankShort)}.`,
+    });
+  }
+
+  if (noLabelSet.length) {
+    warnings.push({
+      kind: 'labels',
+      message:
+        `${noLabelSet.length} selected course(s) name no label set — learners will see the TARGET ` +
+        `account's default interface language (quiz "Incorrect"/"TAKE AGAIN", navigation), which ` +
+        `may differ from the source. Pick an "Interface language" to bind one: ${few(noLabelSet)}.`,
     });
   }
 

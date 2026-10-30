@@ -1,6 +1,50 @@
 # Project Status
 
-_Last updated: 2026-10-27 (v0.9.16b: review fixes on the export-permission preflight). Keep this current at each phase boundary._
+_Last updated: 2026-10-30 (v0.9.17: lessons from the mig30oct US→EU run). Keep this current at each phase boundary._
+
+## v0.9.17 (2026-10-30) — Lessons from the mig30oct US→EU run
+
+Live (DB, 11 courses US→EU, 2026-10-30): every course imported with clean
+parity, but the operator still had to finish fonts, interface language and
+the completion quiz by hand — and the reports sent them after two non-issues.
+
+- **Shared-in fonts recovered from the editor (route B, automated).** When the
+  per-course `FETCH_TYPEFACES` does not list a shared-in typeface either, the
+  account export boots the course editor in a temporary inactive tab, reads its
+  `rise-tf-<hex>` `@font-face` rules (`<hex>` = the typeface id as 6-digit code
+  points), and archives the files as a `foreign` typeface named from
+  `course.typefaces` (`background/course-fonts.ts`, `typefacesFromFontFaces`).
+  Import then offers them through "Re-host shared-in typefaces" as before.
+- **Fonts matched by the course's own names.** An id with no catalog entry
+  matches a target font by the `course.typefaces` name (spacing-insensitive).
+  Flags name the font and list similar target fonts ("DB Head" → "DB Neo Screen
+  Head"); stale `theme.*TypefaceId` leftovers beside authoritative top-level
+  slots are logged, never flagged.
+- **Interface language (label set) for monolingual courses.** New
+  `set-course-labelset` step → `UPDATE_COURSE {id, labelSetId}` (capture-proven
+  2026-08-31). A named built-in set binds the TARGET's built-in of that
+  language; a named custom set is recreated once per run. `labelSetId: ""`
+  resolves to an account default the export cannot see (US showed German, EU
+  English), so the Courses step has an "Interface language" select and the
+  preflight warns when exported courses name no set and none is chosen.
+- **Stale completion-quiz ids repaired.** A `quizId` naming no lesson binds to
+  the course's only quiz lesson; with several quizzes it is dropped and flagged
+  only when `completeWith: 'quiz'`. Parity reports a source-stale id as info.
+- **Report noise.** `ParityIssue.info` marks residue that needs nothing: the
+  legacy `course.media` slot's random default (it is NOT the visible cover —
+  `coverImage` is), legacy top-level mirrors, source-stale quiz ids. Markdown
+  counts them separately; flags carry their detail into the CSV (the font
+  name, not a generic "Missing font").
+- **Manual-actions checklist per run.** `_import/manual-actions-<stamp>.md`:
+  one checkbox per thing to do, grouped by action (fonts, labels, quiz,
+  Storyline…), required before verify, each course linked to its editor (or
+  `/export` for publish settings) on the target plane.
+- **Dry-run wording.** Settings writes say `DRY  would write` in a dry run
+  (they said `OK … written`); a step sending several envelopes numbers them
+  `[87/90 ·2]` instead of repeating `[87/90]`.
+- `plan.ts` stays at ~709 lines (it was 706 on main); the label-set planner is
+  its own module (`plan-labelset.ts`).
+
 
 ## v0.9.16b (2026-10-27) — Review fixes on v0.9.16/16a (PR #13)
 

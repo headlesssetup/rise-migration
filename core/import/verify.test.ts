@@ -307,6 +307,22 @@ describe('verifyParity — course-field read-back (theme, images, settings)', ()
     expect(
       r.expectedDivergences.every((i) => i.detail?.includes('legacy top-level mirror')),
     ).toBe(true);
+    expect(r.expectedDivergences.every((i) => i.info === true)).toBe(true);
+  });
+
+  it('marks the random default in the legacy `media` slot as info, but not a coverImage default', () => {
+    // mig30oct 2026-10-30: `course.media` is not the visible cover; reporting it
+    // like one sent the operator after a non-issue. coverImage stays expected
+    // (a visible random cover IS worth a look) — never info.
+    const r = verifyParity(
+      base({ media: {}, coverImage: {} }),
+      base({ media: { image: { key: 'assets/rise/x.jpg' } }, coverImage: { media: { image: { key: 'assets/rise/y.jpg' } } } }),
+    );
+    const media = r.expectedDivergences.find((i) => i.path === 'course.media');
+    const cover = r.expectedDivergences.find((i) => i.path === 'course.coverImage');
+    expect(media?.info).toBe(true);
+    expect(media?.detail).toContain('NOT the visible cover');
+    expect(cover?.info).toBeUndefined();
   });
 
   it('settings compares absent booleans as OFF (the panel writes explicit false)', () => {
