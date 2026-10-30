@@ -76,7 +76,11 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "buttons/button": [
     "background",
@@ -465,7 +469,11 @@
     "settings.customPaddingBottom",
     "settings.customPaddingTop",
     "createdAt",
-    "updatedAt"
+    "updatedAt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "divider/numbered divider": [
     "background",
@@ -513,7 +521,11 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "divider/spacing divider": [
     "background",
@@ -553,7 +565,11 @@
     "type",
     "variant",
     "createdAt",
-    "updatedAt"
+    "updatedAt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "flashcard/flashcard": [
     "background",
@@ -974,7 +990,11 @@
     "variant",
     "items[].media.image.alt",
     "createdAt",
-    "updatedAt"
+    "updatedAt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "gallery/three column": [
     "background",
@@ -2312,7 +2332,11 @@
     "items[].media.video.transcodeId",
     "items[].media.video.type",
     "items[].media.video.url",
-    "items[].media.video.existingMediaType"
+    "items[].media.video.existingMediaType",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "interactive-fullscreen/process": [
     "background",
@@ -3806,7 +3830,10 @@
     "items[].media.video.captions[].id",
     "items[].media.video.captions[].key",
     "items[].media.video.captions[].name",
-    "items[].media.video.captionUID"
+    "items[].media.video.captionUID",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "knowledge/knowledge": [
     "family",
@@ -3931,7 +3958,27 @@
     "settings.snippetColorContrast",
     "settings.v",
     "type",
-    "variant"
+    "variant",
+    "items[].feedbackCorrect",
+    "items[].feedbackIncorrect",
+    "items[].feedbackType",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "items[].media",
+    "items[].media.image",
+    "items[].media.image.crushedKey",
+    "items[].media.image.dimensions",
+    "items[].media.image.dimensions.originalHeight",
+    "items[].media.image.dimensions.originalWidth",
+    "items[].media.image.isSkipCrush",
+    "items[].media.image.key",
+    "items[].media.image.originalUrl",
+    "items[].media.image.sourcedFrom",
+    "items[].media.image.type",
+    "items[].media.image.useCrushedKey",
+    "settings.retryCount"
   ],
   "knowledgeCheck/matching": [
     "background",
@@ -4017,7 +4064,10 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "knowledgeCheck/multiple choice": [
     "background",
@@ -4157,7 +4207,8 @@
     "variant",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "items[].media.image.isSkipCrush"
   ],
   "knowledgeCheck/multiple response": [
     "background",
@@ -4263,7 +4314,10 @@
     "settings.retryCount",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "items[].media.image.dimensions",
+    "items[].media.image.dimensions.originalHeight",
+    "items[].media.image.dimensions.originalWidth"
   ],
   "list/bulleted": [
     "background",
@@ -4519,7 +4573,10 @@
     "background.media.image.dimensions",
     "background.media.image.dimensions.originalHeight",
     "background.media.image.dimensions.originalWidth",
-    "background.media.image.originalUrl"
+    "background.media.image.originalUrl",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "mondrian/mondrian": [
     "background",
@@ -5646,7 +5703,9 @@
     "variant",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "background.media.image.crushedKey",
+    "background.media.image.originalUrl"
   ],
   "text/heading paragraph": [
     "background",
