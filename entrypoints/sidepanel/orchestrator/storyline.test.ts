@@ -69,10 +69,13 @@ function courseWithVersions(
   };
 }
 
+// A modern web-export story.html the repackage transform recognises.
+const MODERN_STORY_HTML = '<head><meta name="robots" content="noindex, nofollow"></head><!-- 360 -->';
+
 // A web-export zip carrying that leaf's package.
 function webExportZip(
   leaf = LEAF,
-  storyHtml = '<head><meta name="robots" content="noindex, nofollow"></head><!-- 360 -->',
+  storyHtml = MODERN_STORY_HTML,
 ): Uint8Array {
   return zipSync(
     {
@@ -100,6 +103,7 @@ function makeStorage() {
         void zips.set(`${id}/${leaf}`, bytes),
       writeLegacyStorylineZip: async (id: string, leaf: string, bytes: Uint8Array) =>
         void legacyZips.set(`${id}/${leaf}`, bytes),
+      hasStorylineZip: async (id: string, leaf: string) => zips.has(`${id}/${leaf}`),
       hasLegacyStorylineZip: async (id: string, leaf: string) =>
         legacyZips.has(`${id}/${leaf}`),
     } as any,
@@ -237,9 +241,10 @@ describe('exportStorylinePackages', () => {
     });
   });
 
-  it('skips a course that already has a manifest (resume)', async () => {
-    const { store, manifests } = makeStorage();
+  it('skips a course that already has a manifest AND its zip on disk (resume)', async () => {
+    const { store, manifests, zips } = makeStorage();
     manifests.set('C1', '{}');
+    zips.set(`C1/${LEAF}`, new Uint8Array([1]));
     const { onEvent } = sink();
     const exportOne = vi.fn();
     const summary = await exportStorylinePackages(store, onEvent, {
@@ -323,13 +328,15 @@ describe('exportStorylinePackages', () => {
       authorPermissions: ['view', 'edit'],
     };
     const manifests = new Map<string, string>();
-    const writeStorylineZip = vi.fn();
+    const written = new Set<string>();
+    const writeStorylineZip = vi.fn(async (id: string, leaf: string) => void written.add(`${id}/${leaf}`));
     const store = {
       listSaved: async () => ['C1'],
       readCourse: async () => JSON.stringify({ payload: doc }),
       readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
       writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
       hasLegacyStorylineZip: async () => false,
+      hasStorylineZip: async (id: string, leaf: string) => written.has(`${id}/${leaf}`),
       writeStorylineZip,
     } as any;
     const { onEvent, logs } = sink();
@@ -355,6 +362,112 @@ describe('exportStorylinePackages', () => {
     const third = await exportStorylinePackages(store, onEvent, deps);
     expect(third).toMatchObject({ packaged: 0, skipped: 1 });
     expect(exportOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds a modern leaf whose zip is missing on disk even with a clean manifest (added/re-attached block)', async () => {
+    // A block attached after the last export: the manifest exists and is not a
+    // placeholder, but storyline/C1/NEW2.zip was never written.
+    const doc = courseWithVersions([
+      { blockId: 'a', leaf: 'NEW1', version: '3.90.32893.0' },
+      { blockId: 'b', leaf: 'NEW2', version: '3.90.32893.0' },
+    ]);
+    const { store, zips, manifests } = makeStorage();
+    store.readCourse = async () => JSON.stringify({ payload: doc });
+    zips.set('C1/NEW1', new Uint8Array([1]));
+    manifests.set('C1', JSON.stringify({
+      courseId: 'C1',
+      blocks: [{ blockId: 'a', lessonId: 'les_1', leaf: 'NEW1', compatibility: 'automatic', zip: 'storyline/C1/NEW1.zip' }],
+      uploads: { NEW1: { reviewPrefix: 'review/items/NEW1' } },
+    }));
+    const { onEvent } = sink();
+    const exportOne = vi.fn(async () => ({ ok: true as const, location: 'https://cdn/x.zip', jobId: '9' }));
+    const twoLeaves = zipSync({
+      'content/runtime-data.js': enc('__jsonp("runtime-data.js","")'),
+      'content/assets/NEW1/story.html': enc(MODERN_STORY_HTML),
+      'content/assets/NEW2/story.html': enc(MODERN_STORY_HTML),
+    });
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne, fetchZip: vi.fn(async () => twoLeaves), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ packaged: 1, skipped: 0 });
+    expect(zips.has('C1/NEW2')).toBe(true);
+    const m = JSON.parse(manifests.get('C1')!);
+    // only the missing leaf was rebuilt; the staged one keeps its upload record
+    expect(m.uploads.NEW1.reviewPrefix).toBe('review/items/NEW1');
+    expect(m.blocks.map((b: { leaf: string; zip?: string }) => [b.leaf, b.zip])).toEqual([
+      ['NEW1', 'storyline/C1/NEW1.zip'],
+      ['NEW2', 'storyline/C1/NEW2.zip'],
+    ]);
+  });
+
+  it('drops the stale upload record of a leaf rebuilt with Force', async () => {
+    const { store, zips, manifests } = makeStorage();
+    zips.set(`C1/${LEAF}`, new Uint8Array([1]));
+    manifests.set('C1', JSON.stringify({
+      courseId: 'C1',
+      blocks: [{ blockId: 'b1', lessonId: 'les_1', leaf: LEAF, compatibility: 'automatic', zip: `storyline/C1/${LEAF}.zip` }],
+      uploads: { [LEAF]: { reviewPrefix: 'review/items/OLD' }, OTHER: { reviewPrefix: 'review/items/OTHER' } },
+    }));
+    const { onEvent } = sink();
+    const exportOne = vi.fn(async () => ({ ok: true as const, location: 'https://cdn/x.zip', jobId: '10' }));
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne, fetchZip: vi.fn(async () => webExportZip()), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 }, force: true,
+    });
+    expect(summary).toMatchObject({ packaged: 1 });
+    const m = JSON.parse(manifests.get('C1')!);
+    // the rebuilt zip must be re-uploaded (Stage C resumes on reviewPrefix)
+    expect(m.uploads[LEAF]).toBeUndefined();
+    expect(m.uploads.OTHER.reviewPrefix).toBe('review/items/OTHER');
+  });
+
+  it('stack: rebuilds only the language whose zip is missing', async () => {
+    const doc = {
+      course: { id: 'C1', title: 'Stack' },
+      lessons: [{
+        id: 'les_1',
+        items: [{
+          id: 'sl', family: '360', variant: 'storyline',
+          items: [{ id: 'it', media: { l10nId: 'cell-sl' } }],
+        }],
+      }],
+      l10n: {
+        translations: {
+          en: { 'cell-sl': { storyline: { contentPrefix: 'rise/courses/C1/EN', meta: { version: '3.90.32893.0' } } } },
+          de: { 'cell-sl': { storyline: { contentPrefix: 'rise/courses/C1/DE', meta: { version: '3.90.32893.0' } } } },
+        },
+      },
+    };
+    const { store, zips, manifests } = makeStorage();
+    store.readCourse = async () => JSON.stringify({ payload: doc });
+    zips.set('C1/EN', new Uint8Array([1]));
+    manifests.set('C1', JSON.stringify({
+      courseId: 'C1',
+      blocks: [
+        { blockId: 'sl', lessonId: 'les_1', leaf: 'EN', locale: 'en', l10nId: 'cell-sl', compatibility: 'automatic', zip: 'storyline/C1/EN.zip' },
+        { blockId: 'sl', lessonId: 'les_1', leaf: 'DE', locale: 'de', l10nId: 'cell-sl', compatibility: 'source-placeholder' },
+      ],
+    }));
+    const { onEvent } = sink();
+    const exportOne = vi.fn(async () => ({ ok: true as const, location: 'https://cdn/x.zip', jobId: '11' }));
+    const both = zipSync({
+      'content/runtime-data.js': enc('__jsonp("runtime-data.js","")'),
+      'content/assets/EN/story.html': enc(MODERN_STORY_HTML),
+      'content/assets/DE/story.html': enc(MODERN_STORY_HTML),
+    });
+    const summary = await exportStorylinePackages(store, onEvent, {
+      exportOne, fetchZip: vi.fn(async () => both), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 },
+    });
+    expect(summary).toMatchObject({ packaged: 1 });
+    expect(exportOne).toHaveBeenCalledTimes(1);
+    expect(zips.has('C1/DE')).toBe(true);
+    const m = JSON.parse(manifests.get('C1')!);
+    expect(m.blocks.map((b: { locale: string; compatibility: string }) => [b.locale, b.compatibility])).toEqual([
+      ['en', 'automatic'],
+      ['de', 'automatic'],
+    ]);
+    // a second plain run is a genuine resume skip
+    const again = await exportStorylinePackages(store, onEvent, { exportOne, fetchZip: vi.fn(), refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } });
+    expect(again).toMatchObject({ skipped: 1, packaged: 0 });
   });
 
   it('keeps packages staged by an earlier export when the course is blocked now', async () => {
@@ -482,6 +595,7 @@ describe('exportStorylinePackages', () => {
       readStorylineManifest: async () => manifest,
       writeStorylineManifest: async (_id: string, json: string) => void (manifest = json),
       hasLegacyStorylineZip: async () => false,
+      hasStorylineZip: async () => true, // pre-policy manifest, zip on disk → staged
       writeLegacyStorylineZip: async (id: string, leaf: string, bytes: Uint8Array) =>
         void legacyZips.set(`${id}/${leaf}`, bytes),
       writeStorylineZip: vi.fn(),

@@ -9,12 +9,15 @@ owner granted rights, the course docs were re-fetched (now carrying `export`),
 and a plain re-run of D logged `✓ already exported, skipped` with no zips on
 disk — the blocked run's placeholder manifest satisfied the resume skip.
 
-- A previous manifest's `source-placeholder` entries (modern blocks with a leaf)
-  are now unstaged work: the resume skip requires none, and those blocks are
-  built on a plain run (`placeholderKeys`). Pre-policy entries (no
-  `compatibility`) still count as staged.
+- Resume now checks the modern store the way it already checked the legacy
+  one: a modern leaf with no zip under `storyline/<id>/` (a placeholder from a
+  blocked run, a block added or re-attached after the last export) is rebuilt
+  on a plain run, no Force needed; a manifest alone is never "already
+  exported". Pre-policy manifests whose zips are on disk still resume.
 - A successful (or no-op) write drops a stale `exportBlocked`, so the import
-  preflight no longer flags the now-staged packages for manual attach.
+  preflight no longer flags the now-staged packages for manual attach, and
+  drops `uploads[leaf]` for every leaf rebuilt in the run (Stage C resumes on
+  `reviewPrefix`; a stale record would attach the old Review item).
 - Recovery wording fixed: re-saving in Rise never refreshes the archive (the
   course fetch skips saved courses). Move `courses/<id>.json` out of the
   archive, re-run Fetch courses, then re-run D — no Force needed.
