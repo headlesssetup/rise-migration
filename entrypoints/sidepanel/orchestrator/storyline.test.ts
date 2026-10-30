@@ -315,6 +315,48 @@ describe('exportStorylinePackages', () => {
     expect(deps.exportOne).not.toHaveBeenCalled();
   });
 
+  it('builds a once-blocked course after export rights arrive (placeholder manifest is not "already exported")', async () => {
+    // live 2026-10-30: run 1 blocked → placeholder manifest; owner granted
+    // export, course re-fetched; a plain (non-Force) re-run logged a false ✓.
+    const doc = {
+      ...courseWithVersions([{ blockId: 'new', leaf: 'NEW', version: '3.90.32893.0' }]),
+      authorPermissions: ['view', 'edit'],
+    };
+    const manifests = new Map<string, string>();
+    const writeStorylineZip = vi.fn();
+    const store = {
+      listSaved: async () => ['C1'],
+      readCourse: async () => JSON.stringify({ payload: doc }),
+      readStorylineManifest: async (id: string) => manifests.get(id) ?? null,
+      writeStorylineManifest: async (id: string, json: string) => void manifests.set(id, json),
+      hasLegacyStorylineZip: async () => false,
+      writeStorylineZip,
+    } as any;
+    const { onEvent, logs } = sink();
+    const exportOne = vi.fn(async () => ({ ok: true as const, location: 'https://cdn/x.zip', jobId: '7' }));
+    const fetchZip = vi.fn(async () => webExportZip('NEW'));
+    const deps = { exportOne, fetchZip, refresh: vi.fn(), pinTab, pacing: { baseMs: 0, jitterMs: 0 } };
+
+    await exportStorylinePackages(store, onEvent, deps);
+    expect(exportOne).not.toHaveBeenCalled();
+    expect(logs.some((l) => l.includes('re-run Fetch courses'))).toBe(true);
+
+    doc.authorPermissions = ['view', 'edit', 'export', 'publish:web'];
+    const summary = await exportStorylinePackages(store, onEvent, deps);
+    expect(summary).toMatchObject({ packaged: 1, notExportable: 0, failed: 0 });
+    expect(exportOne).toHaveBeenCalledTimes(1);
+    expect(writeStorylineZip).toHaveBeenCalledWith('C1', 'NEW', expect.anything());
+    expect(logs.filter((l) => l.includes('already exported'))).toEqual([]);
+    const manifest = JSON.parse(manifests.get('C1')!);
+    expect(manifest.exportBlocked).toBeUndefined();
+    expect(manifest.blocks[0]).toMatchObject({ compatibility: 'automatic', zip: 'storyline/C1/NEW.zip' });
+
+    // now genuinely staged → the next plain run is a real resume skip
+    const third = await exportStorylinePackages(store, onEvent, deps);
+    expect(third).toMatchObject({ packaged: 0, skipped: 1 });
+    expect(exportOne).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps packages staged by an earlier export when the course is blocked now', async () => {
     const doc = {
       ...courseWithVersions([

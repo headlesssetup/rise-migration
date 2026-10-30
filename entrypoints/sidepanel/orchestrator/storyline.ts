@@ -164,6 +164,37 @@ function mergeStagedEntries(
   return { entries, kept };
 }
 
+/** Keys (lesson|block|locale) of MODERN blocks the previous manifest recorded
+ *  as an explicit `source-placeholder` — never staged, typically because the
+ *  course was not exportable on that run. Once the course is exportable they
+ *  must be built: the manifest's mere presence is not "already exported".
+ *  (Pre-policy entries carry no `compatibility` and stay treated as staged.) */
+function placeholderKeys(
+  previous: Record<string, unknown> | undefined,
+  blocks: StorylineBlockRef[],
+): Set<string> {
+  const prevBlocks = Array.isArray(previous?.blocks) ? (previous!.blocks as StorylineManifestEntry[]) : [];
+  const placeholders = new Set<string>();
+  for (const e of prevBlocks) {
+    if (e && typeof e === 'object' && e.compatibility === 'source-placeholder' && e.leaf) {
+      placeholders.add(`${e.lessonId}|${e.blockId}|${e.locale ?? ''}`);
+    }
+  }
+  const out = new Set<string>();
+  for (const block of blocks) {
+    const key = `${block.lessonId}|${block.blockId}|${block.locale ?? ''}`;
+    if (block.leaf && !isKnownLegacyStorylineMeta(block.meta) && placeholders.has(key)) out.add(key);
+  }
+  return out;
+}
+
+/** The previous manifest minus a stale `exportBlocked` (the course is exportable
+ *  now — left in place, import preflight would still flag every block manual). */
+function withoutExportBlocked(previous: Record<string, unknown> | undefined): Record<string, unknown> {
+  const { exportBlocked: _stale, ...rest } = previous ?? {};
+  return rest;
+}
+
 function notExportableNote(summary: StorylineExportSummary): string {
   return summary.notExportable ? ` (${summary.notExportable} not exportable from this account)` : '';
 }
@@ -281,12 +312,17 @@ export async function exportStorylinePackages(
           `⚠ ${courseRef(target.title, target.courseId)}: not exported — ${target.exportBlocked}; ` +
           `${unstaged} Storyline package(s) need manual review` +
           (kept ? ` (${kept} kept from an earlier export)` : '') +
-          `. Once this account may export the course (the owner grants export rights or sends a copy), re-save it in Rise and re-run with Force.`,
+          `. Once this account may export the course (the owner grants export rights or sends a copy), ` +
+          `move courses/${target.courseId}.json out of the archive, re-run Fetch courses (it re-saves the current permissions), then re-run this step.`,
       });
       continue;
     }
 
-    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
+    // Placeholders from an earlier blocked run: exportable now, so build them —
+    // without this the leftover manifest passed as a green "already exported".
+    const unstaged = placeholderKeys(previousManifest, target.blocks);
+
+    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0 && unstaged.size === 0) {
       summary.skipped += 1;
       // ✓: a resume skip is a success — the packages are already staged.
       onEvent({
@@ -301,9 +337,14 @@ export async function exportStorylinePackages(
       if (isKnownLegacyStorylineMeta(block.meta)) {
         return deps.force || missingLegacyLeaves.has(block.leaf);
       }
-      // A prior manifest means the automatic package was already handled; this
-      // run exists only to backfill missing legacy preservation.
-      return deps.force || !rawManifest;
+      // A prior manifest means the automatic package was already handled, unless
+      // it recorded this block as a never-staged placeholder; otherwise this run
+      // exists only to backfill missing legacy preservation.
+      return (
+        deps.force ||
+        !rawManifest ||
+        unstaged.has(`${block.lessonId}|${block.blockId}|${block.locale ?? ''}`)
+      );
     });
     if (!blocksToSave.length) {
       const entries = target.blocks.map((block) => manifestEntryWithoutZip(block));
@@ -311,7 +352,7 @@ export async function exportStorylinePackages(
         target.courseId,
         JSON.stringify(
           {
-            ...(previousManifest ?? {}),
+            ...withoutExportBlocked(previousManifest),
             courseId: target.courseId,
             title: target.title,
             blocks: entries,
@@ -474,7 +515,7 @@ export async function exportStorylinePackages(
         courseId,
         JSON.stringify(
           {
-            ...(previousManifest ?? {}),
+            ...withoutExportBlocked(previousManifest),
             courseId,
             title,
             jobId: res.jobId,

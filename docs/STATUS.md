@@ -1,6 +1,23 @@
 # Project Status
 
-_Last updated: 2026-10-27 (v0.9.16b: review fixes on the export-permission preflight). Keep this current at each phase boundary._
+_Last updated: 2026-10-30 (v0.9.16d: a once-blocked Storyline course is built once it becomes exportable). Keep this current at each phase boundary._
+
+## v0.9.16d (2026-10-30) — Once-blocked Storyline course resumes for real
+
+Live (migrate30oct, 2026-10-30): two courses were blocked (no `export`); the
+owner granted rights, the course docs were re-fetched (now carrying `export`),
+and a plain re-run of D logged `✓ already exported, skipped` with no zips on
+disk — the blocked run's placeholder manifest satisfied the resume skip.
+
+- A previous manifest's `source-placeholder` entries (modern blocks with a leaf)
+  are now unstaged work: the resume skip requires none, and those blocks are
+  built on a plain run (`placeholderKeys`). Pre-policy entries (no
+  `compatibility`) still count as staged.
+- A successful (or no-op) write drops a stale `exportBlocked`, so the import
+  preflight no longer flags the now-staged packages for manual attach.
+- Recovery wording fixed: re-saving in Rise never refreshes the archive (the
+  course fetch skips saved courses). Move `courses/<id>.json` out of the
+  archive, re-run Fetch courses, then re-run D — no Force needed.
 
 ## v0.9.16b (2026-10-27) — Review fixes on v0.9.16/16a (PR #13)
 
@@ -41,8 +58,8 @@ the web-export build with 404. All 5 packages are legacy, so the missing
   and logged ⚠. Summaries add "(N not exportable from this account)".
 - Stage C upload skips `source-placeholder` entries (never staged); import
   already flags un-uploaded Storyline blocks for manual attach.
-- To recover after the owner grants export rights: re-save the course, then
-  re-run D with Force.
+- To recover after the owner grants export rights: see v0.9.16d (re-fetch the
+  course doc; re-saving in Rise does not refresh the archive).
 
 ## v0.9.16 (2026-10-26) — Log window QOL + import-ordering preflight
 
