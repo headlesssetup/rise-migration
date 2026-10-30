@@ -144,3 +144,23 @@ describe('applyTypefaceIds', () => {
     expect(out.theme.uiTypefaceId).toBe('tgt-lato');
   });
 });
+
+describe('name fallback helpers (mig30oct)', () => {
+  it('matches a course-named font on the target ignoring spacing', async () => {
+    const { resolveTypefaces: resolve, lookupTargetByName, similarTargetNames, authoritativeTypefaceIds } =
+      await import('./typefaces');
+    const names = new Map([['db neo screen sans', 'T1']]);
+    expect(lookupTargetByName(names, 'DBNeoScreenSans')).toBe('T1');
+    const res = resolve(['X'], new Map(), names, { courseNames: new Map([['X', 'DBNeoScreenSans']]) });
+    expect(res.idMap.get('X')).toBe('T1');
+    expect(res.unresolved).toEqual([]);
+    const target = new Map([
+      ['a', { id: 'a', name: 'DB Neo Screen Head', isDefault: false, fonts: [] }],
+      ['b', { id: 'b', name: 'Lato', isDefault: true, fonts: [] }],
+    ]);
+    expect(similarTargetNames('DB Head', target)).toEqual(['DB Neo Screen Head']);
+    expect(similarTargetNames('DBNeoScreenSans', target)).toEqual(['DB Neo Screen Head']);
+    expect([...authoritativeTypefaceIds({ headingTypefaceId: 'h', theme: { headingTypefaceId: 's' } })]).toEqual(['h']);
+    expect([...authoritativeTypefaceIds({ theme: { headingTypefaceId: 's' } })]).toEqual(['s']);
+  });
+});

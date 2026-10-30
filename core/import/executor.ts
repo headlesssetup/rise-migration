@@ -50,6 +50,7 @@ import {
   handleSetAiTutorConfig,
   handleSetCourseSettings,
   handleSetExportSettings,
+  handleSetCourseLabelset,
 } from './executor-steps-settings';
 import { collectBlockumentRefs } from '@/core/mondrian';
 import {
@@ -187,6 +188,10 @@ export async function executePlan(
         }
         case 'set-export-settings': {
           await handleSetExportSettings(ctx, step);
+          break;
+        }
+        case 'set-course-labelset': {
+          await handleSetCourseLabelset(ctx, step);
           break;
         }
         case 'create-blockument': {

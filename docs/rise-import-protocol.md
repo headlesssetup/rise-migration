@@ -338,9 +338,10 @@ Three read-backs per course, all against real `GET_COURSE` responses:
      (navigationMode, markComplete, sidebarMode, color, …) are written by NO
      current control — their behavior rides the THEME (strictly compared), so
      their diffs demote to EXPECTED divergences. `allowCopy` remains blocking
-     (no captured write anywhere). `UPDATE_COURSE {id, labelSetId}` is now
-     capture-proven (monolingual label-set binding) but not yet written —
-     the label-set gap stands.
+     (no captured write anywhere). `UPDATE_COURSE {id, labelSetId}` is
+     capture-proven and WRITTEN since v0.9.17 (`set-course-labelset`: a named
+     built-in binds the target's built-in, a custom set is recreated; an
+     unnamed set binds the operator's "Interface language" choice, if any).
      `labelSetId` is deliberately NOT compared (documented label-set gap; noise).
    - lessons/blocks, media keys, l10n cells — as before.
    - **typeface IDENTITY** (v0.6.5): parity tokenizes ids, so it proves a font is

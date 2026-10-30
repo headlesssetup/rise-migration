@@ -79,3 +79,58 @@ describe('executePlan — set-theme without an account typeface map', () => {
     expect(payload).toEqual({ id: 'NEWCOURSE', theme: { themeId: 'classic' } });
   });
 });
+
+// mig30oct 2026-10-30: DB Head / DB Sans were shared into the source course but
+// absent from the source account's own font list, and Führungssparring's theme
+// carried two stale ids beside its authoritative top-level slots.
+describe('executePlan — set-theme font matching by the course\'s own names', () => {
+  const DBHEAD = 'G4P8w5vW5at04tJ9Wbuq6LES';
+  const DBSANS = 'vNfDKDgxcTQprdc5xBMiXsNZ';
+  const STALE = '0ds_0MwU_ZWwlmdmFMlx1YkP';
+  const tf = (id: string, name: string, isDefault = false) => ({ id, name, isDefault, fonts: [] });
+
+  async function run(target: ReturnType<typeof tf>[]) {
+    const input = themedCourse({
+      headingTypefaceId: DBHEAD,
+      bodyTypefaceId: DBSANS,
+      uiTypefaceId: LATO,
+      theme: { themeId: 'classic', headingTypefaceId: STALE, bodyTypefaceId: DBSANS, uiTypefaceId: LATO },
+      typefaces: { [DBHEAD]: 'DB Head', [DBSANS]: 'DB Sans', [LATO]: 'Lato' },
+    });
+    const sent: Record<string, unknown>[] = [];
+    const { relay } = mockRelay(happyHandlers);
+    const res = await executePlan(buildPlan(input), {
+      input,
+      relay: async (spec) => {
+        if (spec.body && spec.url.endsWith('/UPDATE_COURSE')) sent.push(JSON.parse(spec.body).payload);
+        return relay(spec);
+      },
+      readAsset: async () => null,
+      ids: new IdMap(counterMint()),
+      mintId: counterMint(),
+      sourceTypefaces: new Map([[LATO, tf(LATO, 'Lato', true)]]),
+      targetTypefaces: new Map(target.map((t) => [t.id, t])),
+    });
+    return { res, payload: sent.find((p) => 'theme' in p) };
+  }
+
+  it('binds a font the target already has under the same name', async () => {
+    const { res, payload } = await run([tf('T-LATO', 'Lato', true), tf('T-HEAD', 'DB Head'), tf('T-SANS', 'DB Sans')]);
+    expect(payload!.headingTypefaceId).toBe('T-HEAD');
+    expect(payload!.bodyTypefaceId).toBe('T-SANS');
+    expect(res.flags.filter((f) => f.kind === 'typeface')).toHaveLength(0);
+  });
+
+  it('flags missing fonts BY NAME with similar target fonts, and never the stale theme id', async () => {
+    const { res } = await run([
+      tf('T-LATO', 'Lato', true),
+      tf('T-NEOH', 'DB Neo Screen Head'),
+      tf('T-NEO', 'DB Neo Screen'),
+    ]);
+    const details = res.flags.filter((f) => f.kind === 'typeface').map((f) => f.detail);
+    expect(details).toHaveLength(2);
+    expect(details[0]).toContain('"DB Head"');
+    expect(details[0]).toContain('"DB Neo Screen Head"');
+    expect(details.join(' ')).not.toContain(STALE);
+  });
+});

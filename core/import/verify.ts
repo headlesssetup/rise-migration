@@ -114,6 +114,9 @@ export interface ParityIssue {
   detail?: string;
   /** Whether this divergence was expected (a flagged/unsupported case). */
   expected?: boolean;
+  /** Expected AND needs no operator action (residue in an unused/legacy slot,
+   *  a stale archive id) — reported as information, never as work. */
+  info?: boolean;
 }
 
 export interface ParityReport {
@@ -237,6 +240,11 @@ function compareCourseFields(
     // a top-level residue diff is expected and unwritable, never blocking.
     const isLegacyMirror = LEGACY_MIRROR_FIELDS.has(f);
     const isDefaultImage = IMAGE_FIELDS.has(f) && isDeepEmpty(sv) && !isDeepEmpty(tv);
+    // `course.media` is NOT the visible cover (that is `coverImage`, migrated
+    // like any media): the shell's random stock picture in this legacy slot
+    // read like a cover difference and sent the operator after a non-issue
+    // (mig30oct 2026-10-30). Legacy mirrors are likewise residue, never work.
+    const isInfo = (isDefaultImage && f === 'media') || isLegacyMirror;
     // A field the source document never CARRIED (key absent, not `{}`/null):
     // an exported course always has every course key explicitly, so this is a
     // Creator-built course that asserted nothing there (e.g. an unstyled build
@@ -259,12 +267,15 @@ function compareCourseFields(
         ? `${detail} (legacy top-level mirror — the current editor writes only the theme twin; behavior migrates via the theme)`
         : isSettingsGap
           ? `${detail} (course setting is not migrated yet; parity cannot be confirmed)`
+          : isDefaultImage && f === 'media'
+            ? `${detail} (unused legacy image slot: the source leaves it empty, a new course gets Rise's random default there — NOT the visible cover, which is coverImage)`
           : isDefaultImage
             ? `${detail} (source has no ${f}; the target keeps Rise's random default — no captured write clears an image slot)`
             : isUnasserted
               ? `${detail} (the source never carried course.${f} — a Creator-built course asserts nothing there; the target keeps Rise's default)`
               : detail,
       ...(isExpected ? { expected: true } : {}),
+      ...(isInfo ? { info: true } : {}),
     });
   }
 }
@@ -453,12 +464,21 @@ function compareExportSettings(
   const quizFlagged = flags.some(
     (f) => f.kind === 'export-settings' && (f.detail ?? '').includes('quizId'),
   );
+  // A source quizId that names no SOURCE lesson is stale in the archive itself
+  // (mig30oct: 4 of 11 courses) — the executor drops it unflagged when
+  // completion does not use the quiz, so its absence is information only.
+  const sourceStale =
+    sq && !orderedLessons(source).some((l) => l.id === se.quizId);
   if (sq && !tq) {
-    (quizFlagged ? expected : issues).push({
+    const isExpected = quizFlagged || sourceStale;
+    (isExpected ? expected : issues).push({
       kind: 'course-field-changed',
       path: 'course.exportSettings.quizId',
-      detail: 'completion-quiz binding missing on target',
-      ...(quizFlagged ? { expected: true } : {}),
+      detail: sourceStale
+        ? 'source quizId names no source lesson (stale archive id) — not carried over'
+        : 'completion-quiz binding missing on target',
+      ...(isExpected ? { expected: true } : {}),
+      ...(sourceStale && !quizFlagged ? { info: true } : {}),
     });
   } else if (tq) {
     const lessonIds = new Set(orderedLessons(target).map((l) => l.id));
@@ -652,9 +672,10 @@ export function parityReportToMarkdown(
   } else {
     lines.push('- Blocking divergences: 0 ✓');
   }
-  if (r.expectedDivergences.length) {
-    lines.push(`- Expected divergences (flagged/random): ${r.expectedDivergences.length}`);
-  }
+  const info = r.expectedDivergences.filter((x) => x.info).length;
+  const flagged = r.expectedDivergences.length - info;
+  if (flagged) lines.push(`- Expected divergences (flagged/random): ${flagged}`);
+  if (info) lines.push(`- Informational (no action): ${info}`);
   return lines.join('\n');
 }
 

@@ -17,6 +17,9 @@ import { findBankRef, type PlanStep } from './plan';
 import {
   targetByName,
   usedTypefaceIds,
+  authoritativeTypefaceIds,
+  courseTypefaceNames,
+  similarTargetNames,
   resolveTypefaces,
   buildCreateTypefaceFonts,
   applyTypefaceIds,
@@ -89,12 +92,19 @@ import type { ExecCtx } from './executor-run-state';
     const seed = deps.typefaceIdMap ?? new Map<string, string>();
     const used = usedTypefaceIds(course);
     const unseeded = used.filter((id) => !seed.has(id));
+    const courseNames = courseTypefaceNames(course);
     const { idMap, toRecreate, unresolved, foreignHeld } = resolveTypefaces(
       unseeded,
       source,
       targetByName(target),
-      { rehostForeign: deps.rehostForeignTypefaces === true },
+      { rehostForeign: deps.rehostForeignTypefaces === true, courseNames },
     );
+    for (const id of unseeded) {
+      const name = courseNames.get(id);
+      if (idMap.has(id) && name && !source.has(id)) {
+        log(`${pfx()} OK   font "${name}" matched on the target by name (not in the source account's font list)`);
+      }
+    }
     for (const [k, v] of seed) idMap.set(k, v);
     for (const tf of foreignHeld) {
       result.flags.push({
@@ -153,8 +163,24 @@ import type { ExecCtx } from './executor-run-state';
       if (newId) idMap.set(tf.id, newId);
       else result.flags.push({ kind: 'typeface', detail: `CREATE_TYPEFACE returned no id for "${tf.name}"` });
     }
+    // Only the AUTHORITATIVE slots are work: a theme-only id beside top-level
+    // ids is a stale leftover the course does not display (mig30oct: two such
+    // ids in Führungssparring were flagged as missing fonts).
+    const authoritative = authoritativeTypefaceIds(course);
     for (const u of unresolved) {
-      result.flags.push({ kind: 'typeface', detail: `Typeface ${u} not found on the target — set the font manually` });
+      const name = courseNames.get(u) ?? source.get(u)?.name;
+      const label = name ? `"${name}"` : `typeface ${u}`;
+      if (!authoritative.has(u)) {
+        log(`${pfx()} NOTE stale theme font id ${u}${name ? ` (${name})` : ''} — the course's own font slots override it; not flagged`);
+        continue;
+      }
+      const similar = name ? similarTargetNames(name, target) : [];
+      result.flags.push({
+        kind: 'typeface',
+        detail:
+          `Font ${label} is not on the target — upload it or pick a replacement in Theme → Fonts` +
+          (similar.length ? ` (the target has similar: ${similar.map((n) => `"${n}"`).join(', ')})` : ''),
+      });
     }
     return idMap;
   }
@@ -224,6 +250,11 @@ export async function handleCreateCourse(
                 // must carry THIS, never the source's (foreign ref).
                 const share = (rb.course as Record<string, unknown>).shareId;
                 if (typeof share === 'string' && share) ctx.targetShareId = share;
+                if (Array.isArray(rb.labelSets)) {
+                  ctx.targetLabelSets = (rb.labelSets as unknown[]).filter(
+                    (x): x is Record<string, unknown> => !!x && typeof x === 'object',
+                  );
+                }
                 // F2: record any PRE-CREATED shell lessons (onePage ships one:
                 // title "", type "blocks", no items) for adoption below. Only
                 // genuinely EMPTY lessons qualify — anything else is unexpected

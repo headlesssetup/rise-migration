@@ -54,6 +54,7 @@ import {
   type SourceBank,
 } from './plan-types';
 import { makeLessonPlanners } from './plan-lesson-body';
+import { planCourseLabelSet } from './plan-labelset';
 import {
   coverCardImageKey,
   courseMediaImageKey,
@@ -550,6 +551,8 @@ export function buildPlan(input: PlanInput): PlanStep[] {
       summary: 'Apply course theme + typefaces (verbatim round-trip)',
     });
   }
+  const labelSet = stack ? null : planCourseLabelSet(input.course, input.defaultLabelLanguage);
+  if (labelSet) steps.push(labelSet);
 
   // Monolingual course cover/card/logo images — the stack path already emitted
   // its set-course-images (from the MATERIALIZED course) pre-conversion.

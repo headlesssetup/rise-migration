@@ -118,7 +118,11 @@ export function prettyFilename(key: string): string {
   return name;
 }
 
-function describe(kind: ManualFlag['kind'], file: string): { itemType: string; action: string } {
+function describe(
+  kind: ManualFlag['kind'],
+  file: string,
+  detail?: string,
+): { itemType: string; action: string } {
   switch (kind) {
     case 'storyline':
       return {
@@ -154,7 +158,12 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
     case 'title':
       return { itemType: 'Course title', action: 'Set the course title manually in the Rise editor.' };
     case 'typeface':
-      return { itemType: 'Missing font', action: 'Provision or select this font manually on the target account.' };
+      // The flag names the font (and similar target fonts) — say THAT, not a
+      // generic line the operator has to decode from ids (mig30oct).
+      return {
+        itemType: 'Missing font',
+        action: detail || 'Provision or select this font manually on the target account.',
+      };
     case 'lesson-link':
       return {
         itemType: 'Broken lesson link',
@@ -197,10 +206,16 @@ function describe(kind: ManualFlag['kind'], file: string): { itemType: string; a
         action:
           'This Custom block’s document could not be recreated on the target — rebuild the block manually in the Rise editor (Add block → Custom).',
       };
+    case 'label-set':
+      return {
+        itemType: 'Interface language (labels)',
+        action: detail || 'Open Settings → Labels and select the label set the source course uses.',
+      };
     case 'export-settings':
       return {
         itemType: 'Publish settings',
         action:
+          detail ||
           'A publish-settings reference (completion quiz / Storyline) could not be mapped to the new course — open Publish settings on the target and select it manually.',
       };
     default:
@@ -221,6 +236,7 @@ function categoryLocation(kind: ManualFlag['kind']): string {
     return 'Languages';
   }
   if (kind === 'builtin-asset') return 'Built-in assets';
+  if (kind === 'label-set') return 'Settings / labels';
   return 'Course-level';
 }
 
@@ -231,7 +247,7 @@ export function resolveManualWork(
 ): ManualWorkItem[] {
   return flags.map((f) => {
     const file = f.sourceKey ? prettyFilename(f.sourceKey) : '';
-    const { itemType, action } = describe(f.kind, file);
+    const { itemType, action } = describe(f.kind, file, f.detail);
     // Prefer the unambiguous lessonId+blockId key (F9); fall back to the
     // blockId-only key (set only when the id is unique across the course).
     const loc = f.sourceBlockId
@@ -264,7 +280,7 @@ export function resolveManualWork(
 function parityLine(parity?: ParityReport): string {
   if (!parity) return 'not verified';
   if (parity.ok) {
-    const exp = parity.expectedDivergences.length;
+    const exp = parity.expectedDivergences.filter((x) => !x.info).length;
     return `OK ${parity.blocks.compared}/${parity.blocks.source}${exp ? ` (${exp} expected)` : ''}`;
   }
   return `DIVERGENCES — ${parity.issues.length} blocking`;

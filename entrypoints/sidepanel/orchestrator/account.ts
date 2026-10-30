@@ -14,8 +14,10 @@ import {
 import {
   buildTypefaceInventory,
   collectFontKeys,
+  courseTypefaceNameMap,
   extractTypefaces,
   mergeForeignTypefaces,
+  typefacesFromFontFaces,
   typefacesToCsv,
   typefacesToJson,
   unknownTypefaceIdsOf,
@@ -139,6 +141,37 @@ export async function fetchAccountExtras(
           perCourse.push({ courseId: cid, doc: r.doc });
           for (const t of extractTypefaces(r.doc)) if (typeof t.id === 'string') known.add(t.id);
         }
+        // Route B (mig30oct 2026-10-30): ids the API never listed are read
+        // from the course editor's own @font-face rules (temporary inactive
+        // tab, one per course, paced like any authoring read).
+        const scraped = new Set<string>();
+        const stillUnknown = [...pending].filter(([id]) => !known.has(id));
+        for (const [i, [tfId, courses]] of stillUnknown.entries()) {
+          if (known.has(tfId)) continue;
+          const cid = [...courses].find((c) => !scraped.has(c));
+          if (!cid) continue;
+          scraped.add(cid);
+          await pacedDelay(DEFAULT_PACING);
+          onEvent({
+            kind: 'log',
+            message: `  [${i + 1}/${stillUnknown.length} fonts] reading @font-face rules from course ${cid}'s editor (temporary tab)…`,
+          });
+          const resp = await rpc({ type: 'SCRAPE_COURSE_FONTS', courseId: cid });
+          if (resp.type !== 'COURSE_FONTS_RESULT' || !resp.result.ok) {
+            const err = resp.type === 'COURSE_FONTS_RESULT' && !resp.result.ok ? resp.result.error : 'unexpected response';
+            onEvent({ kind: 'log', message: `  ⚠ @font-face read failed for course ${cid}: ${err}` });
+            continue;
+          }
+          let names = new Map<string, string>();
+          try {
+            names = courseTypefaceNameMap(JSON.parse((await storage.readCourse(cid)) ?? 'null'));
+          } catch {
+            /* unreadable course doc — no names, nothing recoverable */
+          }
+          const recovered = typefacesFromFontFaces(resp.result.data.faces, names);
+          if (recovered.length) perCourse.push({ courseId: cid, doc: { typefaces: recovered } });
+          for (const t of recovered) known.add(String(t.id));
+        }
         const { merged, added } = mergeForeignTypefaces(tf.doc, perCourse);
         doc = merged;
         raw = JSON.stringify(merged, null, 2);
@@ -151,7 +184,7 @@ export async function fetchAccountExtras(
           summary.foreign.unresolved += 1;
           onEvent({
             kind: 'log',
-            message: `  ⚠ shared-in typeface ${tfId} used by ${courses.size} course(s) could NOT be resolved via FETCH_TYPEFACES(course) — the import will flag it; recover its files from the editor page's @font-face rules (issue #12, route B)`,
+            message: `  ⚠ shared-in typeface ${tfId} used by ${courses.size} course(s) could NOT be resolved (FETCH_TYPEFACES per course, then the editor's @font-face rules) — the import will flag it by name`,
           });
         }
       }

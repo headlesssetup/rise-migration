@@ -31,7 +31,10 @@ const SRC_EXPORT_SETTINGS = {
   resetLearnerData: false,
 };
 
-function quizCourse(exportSettings: Record<string, unknown> | undefined): PlanInput {
+function quizCourse(
+  exportSettings: Record<string, unknown> | undefined,
+  extraQuizLessons = 0,
+): PlanInput {
   return {
     author: 'auth0|t',
     targetFolderId: 'all',
@@ -48,6 +51,14 @@ function quizCourse(exportSettings: Record<string, unknown> | undefined): PlanIn
           icon: 'Quiz',
           items: [],
         },
+        ...Array.from({ length: extraQuizLessons }, (_, i) => ({
+          id: `QUIZ${i + 2}`,
+          position: i + 1,
+          type: 'quiz',
+          title: `Quiz ${i + 2}`,
+          icon: 'Quiz',
+          items: [],
+        })),
       ],
     },
   };
@@ -76,8 +87,8 @@ describe('plan — set-export-settings', () => {
 });
 
 describe('executePlan — set-export-settings', () => {
-  async function run(exportSettings: Record<string, unknown>) {
-    const input = quizCourse(exportSettings);
+  async function run(exportSettings: Record<string, unknown>, extraQuizLessons = 0) {
+    const input = quizCourse(exportSettings, extraQuizLessons);
     const steps = buildPlan(input);
     const sent: { url: string; body: unknown }[] = [];
     const { relay } = mockRelay(handlers);
@@ -118,11 +129,28 @@ describe('executePlan — set-export-settings', () => {
     expect(res.flags.filter((f) => f.kind === 'export-settings')).toHaveLength(0);
   });
 
-  it('drops + flags a stale quizId that maps to nothing', async () => {
+  it('repairs a stale quizId to the course\'s ONLY quiz lesson (no flag)', async () => {
     const { res, payload } = await run({ ...SRC_EXPORT_SETTINGS, quizId: 'STALE_DUPLICATED_FROM' });
+    expect(res.ok).toBe(true);
+    expect(payload!.exportSettings.quizId).toBe(res.idMap['QUIZLESSON']);
+    expect(res.flags.filter((f) => f.kind === 'export-settings')).toHaveLength(0);
+  });
+
+  it('drops + flags a stale quizId when several quizzes exist and completion rides the quiz', async () => {
+    const { res, payload } = await run({ ...SRC_EXPORT_SETTINGS, quizId: 'STALE_DUPLICATED_FROM' }, 1);
     expect(res.ok).toBe(true);
     expect(payload!.exportSettings.quizId).toBeNull();
     expect(res.flags.some((f) => f.kind === 'export-settings' && /quizId/.test(f.detail))).toBe(true);
+  });
+
+  it('drops a stale quizId WITHOUT a flag when completion does not use the quiz', async () => {
+    const { res, payload } = await run(
+      { ...SRC_EXPORT_SETTINGS, quizId: 'STALE_DUPLICATED_FROM', completeWith: 'reporting' },
+      1,
+    );
+    expect(res.ok).toBe(true);
+    expect(payload!.exportSettings.quizId).toBeNull();
+    expect(res.flags.filter((f) => f.kind === 'export-settings')).toHaveLength(0);
   });
 });
 
@@ -227,6 +255,16 @@ describe('verifyParity — exportSettings', () => {
     expect(
       p.expectedDivergences.some((i) => i.path === 'course.exportSettings.quizId'),
     ).toBe(true);
+  });
+
+  it('reports a source quizId that names no SOURCE lesson as info, not blocking', () => {
+    const p = verifyParity(
+      sourceDoc({ completeWith: 'reporting', quizId: 'STALE_IN_ARCHIVE' }),
+      targetDoc({ completeWith: 'reporting', quizId: null }),
+    );
+    expect(p.issues.some((i) => i.path === 'course.exportSettings.quizId')).toBe(false);
+    const e = p.expectedDivergences.find((i) => i.path === 'course.exportSettings.quizId');
+    expect(e?.info).toBe(true);
   });
 
   it('normalizes number↔string completionPercentage', () => {
