@@ -217,7 +217,11 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "chart/bar": [
     "data",
@@ -525,7 +529,12 @@
     "metadata",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "settings.mightyMods",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.circleColor",
+    "settings.mightyMods[].data.circleTextColor",
+    "settings.mightyMods[].tagName"
   ],
   "divider/spacing divider": [
     "background",
@@ -1086,7 +1095,12 @@
     "type",
     "updatedAt",
     "variant",
-    "items[].media.image.alt"
+    "items[].media.image.alt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "settings.cornerRadius"
   ],
   "gallery/two column": [
     "background",
@@ -1289,7 +1303,18 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "settings.mightyMods",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.blendAmount",
+    "settings.mightyMods[].data.firstColor",
+    "settings.mightyMods[].data.gradientStyle",
+    "settings.mightyMods[].data.inheritColor",
+    "settings.mightyMods[].data.location",
+    "settings.mightyMods[].data.radialDistance",
+    "settings.mightyMods[].data.radialPosition",
+    "settings.mightyMods[].data.secondColor",
+    "settings.mightyMods[].tagName"
   ],
   "image/full": [
     "background",
@@ -1962,7 +1987,13 @@
     "background.media.image.originalImage.key",
     "background.media.image.originalImage.originalUrl",
     "background.media.image.originalImage.type",
-    "background.media.image.originalImage.useCrushedKey"
+    "background.media.image.originalImage.useCrushedKey",
+    "metadata",
+    "metadata.createdVia",
+    "settings.columns",
+    "settings.divider",
+    "settings.dividerPadding",
+    "settings.images"
   ],
   "impact/d": [
     "background",
@@ -2016,7 +2047,14 @@
     "variant",
     "settings.divider",
     "settings.dividerPadding",
-    "settings.dividerSize"
+    "settings.dividerSize",
+    "background.media.image.dimensions",
+    "background.media.image.dimensions.originalHeight",
+    "background.media.image.dimensions.originalWidth",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "impact/note": [
     "background",
@@ -2118,7 +2156,14 @@
     "metadata",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "background.media.image.crushedKey",
+    "background.media.image.dimensions",
+    "background.media.image.dimensions.originalHeight",
+    "background.media.image.dimensions.originalWidth",
+    "background.media.image.isSkipCrush",
+    "background.media.image.originalUrl",
+    "metadata.createdVia"
   ],
   "interactive-fullscreen/labeledgraphic": [
     "background",
@@ -2336,7 +2381,8 @@
     "metadata",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "settings.markerColorToken"
   ],
   "interactive-fullscreen/process": [
     "background",
@@ -3313,7 +3359,13 @@
     "items[].media.tmp.image.dimensions.originalWidth",
     "items[].media.tmp.image.sourcedFrom",
     "items[].media.tmp.image.trackingContext",
-    "items[].media.tmp.image.trackingId"
+    "items[].media.tmp.image.trackingId",
+    "background.media.image.crushedKey",
+    "background.media.image.dimensions",
+    "background.media.image.dimensions.originalHeight",
+    "background.media.image.dimensions.originalWidth",
+    "background.media.image.isSkipCrush",
+    "background.media.image.originalUrl"
   ],
   "interactive/accordion": [
     "background",
@@ -3459,7 +3511,22 @@
     "items[].media.embed.title",
     "items[].media.embed.type",
     "items[].settings",
-    "items[].settings.showMetaData"
+    "items[].settings.showMetaData",
+    "background.media.image.alpha",
+    "background.media.image.crushedKey",
+    "background.media.image.dimensions",
+    "background.media.image.dimensions.originalHeight",
+    "background.media.image.dimensions.originalWidth",
+    "background.media.image.isSkipCrush",
+    "background.media.image.originalUrl",
+    "createdAt",
+    "settings.mightyMods",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.fontSize",
+    "settings.mightyMods[].data.letterSpacing",
+    "settings.mightyMods[].data.textCasing",
+    "settings.mightyMods[].tagName",
+    "updatedAt"
   ],
   "interactive/tabs": [
     "background",
@@ -4618,7 +4685,18 @@
     "type",
     "updatedAt",
     "variant",
-    "blocumentId"
+    "blocumentId",
+    "settings.mightyMods",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.blendAmount",
+    "settings.mightyMods[].data.firstColor",
+    "settings.mightyMods[].data.gradientStyle",
+    "settings.mightyMods[].data.inheritColor",
+    "settings.mightyMods[].data.location",
+    "settings.mightyMods[].data.radialDistance",
+    "settings.mightyMods[].data.radialPosition",
+    "settings.mightyMods[].data.secondColor",
+    "settings.mightyMods[].tagName"
   ],
   "multimedia/attachment": [
     "background",
@@ -4685,7 +4763,11 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ],
   "multimedia/audio": [
     "background",
@@ -5499,7 +5581,20 @@
     "metadata",
     "metadata.contentValidation",
     "metadata.contentValidation.pass",
-    "metadata.contentValidation.version"
+    "metadata.contentValidation.version",
+    "background.media.image.alpha",
+    "background.media.image.crushedKey",
+    "background.media.image.dimensions",
+    "background.media.image.dimensions.originalHeight",
+    "background.media.image.dimensions.originalWidth",
+    "background.media.image.isSkipCrush",
+    "background.media.image.originalUrl",
+    "createdAt",
+    "settings.mightyMods",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.hideCarouselNavigation",
+    "settings.mightyMods[].tagName",
+    "updatedAt"
   ],
   "quote/d": [
     "background",
@@ -5596,7 +5691,14 @@
     "items[].avatar.media.image.originalImage.sourcedFrom",
     "items[].avatar.media.image.originalImage.type",
     "items[].avatar.media.image.originalImage.useCrushedKey",
-    "settings.audioPosition"
+    "settings.audioPosition",
+    "createdAt",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "settings.attachedToNextBlock",
+    "updatedAt"
   ],
   "text/four column": [
     "background",
@@ -5918,7 +6020,18 @@
     "background.type",
     "background.useCrushedKey",
     "settings.noteIcon",
-    "settings.noteSize"
+    "settings.noteSize",
+    "metadata.createdVia",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.blendAmount",
+    "settings.mightyMods[].data.firstColor",
+    "settings.mightyMods[].data.gradientStyle",
+    "settings.mightyMods[].data.inheritColor",
+    "settings.mightyMods[].data.location",
+    "settings.mightyMods[].data.radialDistance",
+    "settings.mightyMods[].data.radialPosition",
+    "settings.mightyMods[].data.secondColor",
+    "settings.mightyMods[].tagName"
   ],
   "text/subheading": [
     "background",
@@ -6098,7 +6211,21 @@
     "settings.v",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.blendAmount",
+    "settings.mightyMods[].data.firstColor",
+    "settings.mightyMods[].data.gradientStyle",
+    "settings.mightyMods[].data.inheritColor",
+    "settings.mightyMods[].data.location",
+    "settings.mightyMods[].data.radialDistance",
+    "settings.mightyMods[].data.radialPosition",
+    "settings.mightyMods[].data.secondColor",
+    "settings.mightyMods[].tagName"
   ],
   "text/three column": [
     "background",
@@ -6155,7 +6282,15 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version",
+    "settings.mightyMods",
+    "settings.mightyMods[].data",
+    "settings.mightyMods[].data.columnSpacing",
+    "settings.mightyMods[].tagName"
   ],
   "text/two column": [
     "background",
@@ -6233,6 +6368,10 @@
     "settings.zoomOnClick",
     "type",
     "updatedAt",
-    "variant"
+    "variant",
+    "metadata",
+    "metadata.contentValidation",
+    "metadata.contentValidation.pass",
+    "metadata.contentValidation.version"
   ]
 }
