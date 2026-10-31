@@ -164,6 +164,25 @@ function mergeStagedEntries(
   return { entries, kept };
 }
 
+/** The previous manifest minus what this run makes stale: `exportBlocked`
+ *  (the course is exportable now — left in place, import preflight would still
+ *  flag every block manual) and the `uploads[leaf]` records of leaves rebuilt
+ *  in this run (Stage C resumes on `reviewPrefix`, so a stale record would
+ *  attach the OLD Review item instead of re-uploading the fresh zip). */
+function withoutStaleRecords(
+  previous: Record<string, unknown> | undefined,
+  rebuiltLeaves: Iterable<string>,
+): Record<string, unknown> {
+  const { exportBlocked: _stale, ...rest } = previous ?? {};
+  const uploads = rest.uploads;
+  if (uploads && typeof uploads === 'object' && !Array.isArray(uploads)) {
+    const kept = { ...(uploads as Record<string, unknown>) };
+    for (const leaf of rebuiltLeaves) delete kept[leaf];
+    rest.uploads = kept;
+  }
+  return rest;
+}
+
 function notExportableNote(summary: StorylineExportSummary): string {
   return summary.notExportable ? ` (${summary.notExportable} not exportable from this account)` : '';
 }
@@ -249,6 +268,22 @@ export async function exportStorylinePackages(
       if (!exists) missingLegacyLeaves.add(block.leaf);
     }
 
+    // The modern store is checked the same way: a manifest alone is not "already
+    // exported" (live 2026-10-30: a blocked run's placeholder manifest passed as
+    // a green skip). A modern leaf with no zip under storyline/<id>/ — a
+    // placeholder from a blocked run, a block added or re-attached after the
+    // last export — is rebuilt on a plain run; pre-policy manifests whose zips
+    // are on disk still resume.
+    const missingModernLeaves = new Set<string>();
+    for (const block of target.blocks) {
+      if (!block.leaf || isKnownLegacyStorylineMeta(block.meta) || missingModernLeaves.has(block.leaf)) continue;
+      const exists =
+        !deps.force &&
+        typeof storage.hasStorylineZip === 'function' &&
+        (await storage.hasStorylineZip(target.courseId, block.leaf));
+      if (!exists) missingModernLeaves.add(block.leaf);
+    }
+
     // No export permission: the build would 404 on every run, so never attempt
     // it (not even with Force). Checked BEFORE the resume skip so the course is
     // ⚠ + counted `notExportable` on EVERY run — a manual-review manifest from
@@ -274,19 +309,20 @@ export async function exportStorylinePackages(
       );
       summary.skipped += 1;
       summary.notExportable += 1;
-      const unstaged = target.blocks.length - kept;
+      const unstagedCount = target.blocks.length - kept;
       onEvent({
         kind: 'log',
         message:
           `⚠ ${courseRef(target.title, target.courseId)}: not exported — ${target.exportBlocked}; ` +
-          `${unstaged} Storyline package(s) need manual review` +
+          `${unstagedCount} Storyline package(s) need manual review` +
           (kept ? ` (${kept} kept from an earlier export)` : '') +
-          `. Once this account may export the course (the owner grants export rights or sends a copy), re-save it in Rise and re-run with Force.`,
+          `. Once this account may export the course (the owner grants export rights or sends a copy), ` +
+          `move courses/${target.courseId}.json out of the archive, re-run Fetch courses (it re-downloads that course document and its Custom-block documents with the current permissions), then re-run this step.`,
       });
       continue;
     }
 
-    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0) {
+    if (!deps.force && rawManifest && missingLegacyLeaves.size === 0 && missingModernLeaves.size === 0) {
       summary.skipped += 1;
       // ✓: a resume skip is a success — the packages are already staged.
       onEvent({
@@ -301,9 +337,10 @@ export async function exportStorylinePackages(
       if (isKnownLegacyStorylineMeta(block.meta)) {
         return deps.force || missingLegacyLeaves.has(block.leaf);
       }
-      // A prior manifest means the automatic package was already handled; this
-      // run exists only to backfill missing legacy preservation.
-      return deps.force || !rawManifest;
+      // A prior manifest means the automatic package was already handled unless
+      // its zip is not on disk; otherwise this run exists only to backfill
+      // missing legacy preservation.
+      return deps.force || !rawManifest || missingModernLeaves.has(block.leaf);
     });
     if (!blocksToSave.length) {
       const entries = target.blocks.map((block) => manifestEntryWithoutZip(block));
@@ -311,7 +348,7 @@ export async function exportStorylinePackages(
         target.courseId,
         JSON.stringify(
           {
-            ...(previousManifest ?? {}),
+            ...withoutStaleRecords(previousManifest, []),
             courseId: target.courseId,
             title: target.title,
             blocks: entries,
@@ -474,7 +511,7 @@ export async function exportStorylinePackages(
         courseId,
         JSON.stringify(
           {
-            ...(previousManifest ?? {}),
+            ...withoutStaleRecords(previousManifest, automaticDone),
             courseId,
             title,
             jobId: res.jobId,
