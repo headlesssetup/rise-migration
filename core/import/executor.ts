@@ -78,6 +78,7 @@ export {
   type ExecutorDeps,
   type ManualFlag,
   type ExecResult,
+  type ImportDecision,
 } from './executor-types';
 
 

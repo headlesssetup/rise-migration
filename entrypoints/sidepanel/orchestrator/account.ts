@@ -18,6 +18,7 @@ import {
   extractTypefaces,
   mergeForeignTypefaces,
   typefacesFromFontFaces,
+  displayedTypefaceIdsOf,
   typefacesToCsv,
   typefacesToJson,
   unknownTypefaceIdsOf,
@@ -111,13 +112,20 @@ export async function fetchAccountExtras(
       let raw = tf.raw;
       const known = new Set(extractTypefaces(tf.doc).map((t) => String(t.id ?? '')));
       const pending = new Map<string, Set<string>>(); // unknown id → course ids
+      const displayed = new Map<string, Set<string>>(); // … → courses that DISPLAY it
       for (const id of await storage.listSaved()) {
         const c = await storage.readCourse(id);
         if (!c) continue;
         try {
-          for (const tfId of unknownTypefaceIdsOf(JSON.parse(c), known)) {
+          const parsed = JSON.parse(c);
+          const shown = displayedTypefaceIdsOf(parsed);
+          for (const tfId of unknownTypefaceIdsOf(parsed, known)) {
             if (!pending.has(tfId)) pending.set(tfId, new Set());
             pending.get(tfId)!.add(id);
+            if (shown.has(tfId)) {
+              if (!displayed.has(tfId)) displayed.set(tfId, new Set());
+              displayed.get(tfId)!.add(id);
+            }
           }
         } catch {
           /* unreadable course doc — the course export already reported it */
@@ -143,34 +151,53 @@ export async function fetchAccountExtras(
         }
         // Route B (mig30oct 2026-10-30): ids the API never listed are read
         // from the course editor's own @font-face rules (temporary inactive
-        // tab, one per course, paced like any authoring read).
+        // tab, one per course, paced like any authoring read). Only ids a
+        // course actually DISPLAYS — a stale theme leftover is not rendered,
+        // so its editor has no rules for it. A failed read tries the next
+        // course that displays the same font.
         const scraped = new Set<string>();
         const stillUnknown = [...pending].filter(([id]) => !known.has(id));
-        for (const [i, [tfId, courses]] of stillUnknown.entries()) {
+        for (const [i, [tfId]] of stillUnknown.entries()) {
           if (known.has(tfId)) continue;
-          const cid = [...courses].find((c) => !scraped.has(c));
-          if (!cid) continue;
-          scraped.add(cid);
-          await pacedDelay(DEFAULT_PACING);
-          onEvent({
-            kind: 'log',
-            message: `  [${i + 1}/${stillUnknown.length} fonts] reading @font-face rules from course ${cid}'s editor (temporary tab)…`,
-          });
-          const resp = await rpc({ type: 'SCRAPE_COURSE_FONTS', courseId: cid });
-          if (resp.type !== 'COURSE_FONTS_RESULT' || !resp.result.ok) {
-            const err = resp.type === 'COURSE_FONTS_RESULT' && !resp.result.ok ? resp.result.error : 'unexpected response';
-            onEvent({ kind: 'log', message: `  ⚠ @font-face read failed for course ${cid}: ${err}` });
+          const shownBy = [...(displayed.get(tfId) ?? [])];
+          if (!shownBy.length) {
+            onEvent({
+              kind: 'log',
+              message: `  [${i + 1}/${stillUnknown.length} fonts] ${tfId} is only a stale theme leftover (no course displays it) — not read; the import replaces it with the course's own font and reports that`,
+            });
             continue;
           }
-          let names = new Map<string, string>();
-          try {
-            names = courseTypefaceNameMap(JSON.parse((await storage.readCourse(cid)) ?? 'null'));
-          } catch {
-            /* unreadable course doc — no names, nothing recoverable */
+          for (const cid of shownBy) {
+            if (known.has(tfId)) break;
+            if (scraped.has(cid)) continue; // already read; it did not yield this id
+            scraped.add(cid);
+            await pacedDelay(DEFAULT_PACING);
+            onEvent({
+              kind: 'log',
+              message: `  [${i + 1}/${stillUnknown.length} fonts] reading @font-face rules from course ${cid}'s editor (temporary tab)…`,
+            });
+            const resp = await rpc({ type: 'SCRAPE_COURSE_FONTS', courseId: cid });
+            if (resp.type !== 'COURSE_FONTS_RESULT' || !resp.result.ok) {
+              const err = resp.type === 'COURSE_FONTS_RESULT' && !resp.result.ok ? resp.result.error : 'unexpected response';
+              onEvent({ kind: 'log', message: `  ⚠ @font-face read failed for course ${cid}: ${err}` });
+              continue;
+            }
+            let names = new Map<string, string>();
+            try {
+              names = courseTypefaceNameMap(JSON.parse((await storage.readCourse(cid)) ?? 'null'));
+            } catch {
+              /* unreadable course doc — no names, nothing recoverable */
+            }
+            const { typefaces: recovered, rejected } = typefacesFromFontFaces(resp.result.data.faces, names);
+            for (const r of rejected) {
+              onEvent({
+                kind: 'log',
+                message: `  ⚠ font face NOT archived — typeface ${r.name ? `"${r.name}" ` : ''}(${r.typefaceId}) ${r.style}${r.url ? ` ${r.url.split('/').pop()}` : ''}: ${r.reason}`,
+              });
+            }
+            if (recovered.length) perCourse.push({ courseId: cid, doc: { typefaces: recovered } });
+            for (const t of recovered) known.add(String(t.id));
           }
-          const recovered = typefacesFromFontFaces(resp.result.data.faces, names);
-          if (recovered.length) perCourse.push({ courseId: cid, doc: { typefaces: recovered } });
-          for (const t of recovered) known.add(String(t.id));
         }
         const { merged, added } = mergeForeignTypefaces(tf.doc, perCourse);
         doc = merged;

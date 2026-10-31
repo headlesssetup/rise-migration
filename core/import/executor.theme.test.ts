@@ -133,4 +133,11 @@ describe('executePlan — set-theme font matching by the course\'s own names', (
     expect(details[0]).toContain('"DB Neo Screen Head"');
     expect(details.join(' ')).not.toContain(STALE);
   });
+
+  it('replaces a stale theme id with the font the course displays in that slot, and reports it', async () => {
+    const { res, payload } = await run([tf('T-LATO', 'Lato', true), tf('T-HEAD', 'DB Head'), tf('T-SANS', 'DB Sans')]);
+    expect((payload!.theme as Record<string, unknown>).headingTypefaceId).toBe('T-HEAD');
+    expect(JSON.stringify(payload)).not.toContain(STALE);
+    expect(res.decisions?.some((d) => d.area === 'Fonts' && d.detail.includes(STALE))).toBe(true);
+  });
 });

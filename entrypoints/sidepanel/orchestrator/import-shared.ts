@@ -334,6 +334,41 @@ export async function fetchTargetTypefaces(
   return target;
 }
 
+/** The TARGET account's label sets, read from an existing course's GET_COURSE
+ *  (`labelSets` rides every course document). Dry run only — a live run reads
+ *  them off the new course's create handshake. Empty on any failure (logged). */
+export async function fetchTargetLabelSets(
+  onEvent: (e: ProgressEvent) => void,
+  pin: TabPin | undefined,
+  pacing: PacingConfig,
+): Promise<Record<string, unknown>[]> {
+  const send = pinnedRpc(pin);
+  let courseId: string | undefined;
+  try {
+    const resp = await send({ type: 'SEARCH_COURSES', page: 0, pageSize: 1 });
+    if (resp.type === 'SEARCH_RESULT' && resp.result.ok) courseId = extractItems(resp.result.data)[0]?.id;
+  } catch {
+    /* fall through */
+  }
+  if (courseId) {
+    await pacedDelay(pacing);
+    const resp = await send({ type: 'GET_COURSE', courseId });
+    if (resp.type === 'COURSE_RESULT' && resp.result.ok) {
+      const doc = safeJson(resp.result.data.raw) as Record<string, unknown> | null;
+      const root = doc && typeof doc.payload === 'object' && doc.payload ? (doc.payload as Record<string, unknown>) : doc;
+      const sets = Array.isArray(root?.labelSets) ? (root!.labelSets as unknown[]) : [];
+      const out = sets.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object');
+      onEvent({ kind: 'log', message: `Target account has ${out.length} label set(s) (dry-run language check)` });
+      return out;
+    }
+  }
+  onEvent({
+    kind: 'log',
+    message: '⚠ Could not read the target label sets — the dry run cannot predict missing interface languages',
+  });
+  return [];
+}
+
 export function safeJson(raw: string): unknown {
   try {
     return JSON.parse(raw);

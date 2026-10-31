@@ -98,8 +98,10 @@ export async function handleSetExportSettings(
       es.quizId = mapped;
     } else if (repaired) {
       es.quizId = repaired;
-      log(
-        `${pfx()} NOTE stale exportSettings.quizId ${srcQuizId} → bound to the course's only quiz "${String(quizLessons[0]!.title ?? '')}"`,
+      const t = quizLessons[0]!.title;
+      ctx.decide(
+        'Completion quiz',
+        `The archived completion-quiz id (${srcQuizId}) names no lesson; bound completion to the course's only quiz${typeof t === 'string' && t ? ` "${t}"` : ''}`,
       );
     } else {
       es.quizId = null;
@@ -113,8 +115,9 @@ export async function handleSetExportSettings(
         });
         log(`${pfx()} ⚠ FLAG exportSettings.quizId not mappable — completion quiz must be selected manually`);
       } else {
-        log(
-          `${pfx()} NOTE stale exportSettings.quizId ${srcQuizId} dropped — completion does not use the quiz (completeWith: ${String(es.completeWith ?? 'unset')})`,
+        ctx.decide(
+          'Completion quiz',
+          `The archived completion-quiz id (${srcQuizId}) names no lesson and completion does not use a quiz (completeWith: ${String(es.completeWith ?? 'unset')}); cleared it`,
         );
       }
     }
@@ -155,7 +158,10 @@ export async function handleSetCourseLabelset(
     const match = ctx.targetLabelSets.find(
       (s) => s.defaultSet === true && s.deleted !== true && s.iso639Code === step.iso639Code,
     );
-    targetSetId = typeof match?.id === 'string' ? match.id : dryRun ? mint() : undefined;
+    // A dry run predicts from the sets pre-read at run start; only when those
+    // could not be read (logged) does it assume the language exists.
+    targetSetId =
+      typeof match?.id === 'string' ? match.id : dryRun && ctx.targetLabelSets.length === 0 ? mint() : undefined;
   } else {
     const cache = deps.labelSetCache;
     targetSetId = step.sourceLabelSetId ? cache?.get(step.sourceLabelSetId) : undefined;
@@ -182,4 +188,12 @@ export async function handleSetCourseLabelset(
   }
   await send(env.updateCourseLabelSet(ctx.newCourseId, targetSetId), step.kind);
   log(`${pfx()} ${dryRun ? 'DRY  would bind' : 'OK   bound'} label set "${step.name}" (${step.iso639Code})`);
+  ctx.decide(
+    'Interface language',
+    step.sourceLabelSetId === null
+      ? `The source course names no label set (it used its account's default, which the export cannot see); set "${step.name}" (${step.iso639Code}) as chosen for this run`
+      : step.builtin
+        ? `Bound the target account's own built-in "${step.name}" (${step.iso639Code}) label set`
+        : `Recreated the custom label set "${step.name}" (${step.iso639Code}) on the target and bound it`,
+  );
 }

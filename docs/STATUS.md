@@ -37,13 +37,42 @@ the completion quiz by hand — and the reports sent them after two non-issues.
   name, not a generic "Missing font").
 - **Manual-actions checklist per run.** `_import/manual-actions-<stamp>.md`:
   one checkbox per thing to do, grouped by action (fonts, labels, quiz,
-  Storyline…), required before verify, each course linked to its editor (or
-  `/export` for publish settings) on the target plane.
+  Storyline…), required before verify, each course linked to its editor on
+  the target plane (bare editor route only — sub-routes are not
+  capture-confirmed).
 - **Dry-run wording.** Settings writes say `DRY  would write` in a dry run
   (they said `OK … written`); a step sending several envelopes numbers them
   `[87/90 ·2]` instead of repeating `[87/90]`.
 - `plan.ts` stays at ~709 lines (it was 706 on main); the label-set planner is
   its own module (`plan-labelset.ts`).
+
+**Review fixes (2026-10-31, Fable review of PR #16 + operator rulings):**
+
+- **Every automatic choice is reported, never log-only** (operator rule: "we do
+  not do anything quietly"). `ExecResult.decisions` (`ctx.decide(area, detail)`)
+  carries stale-quiz rebinding/clearing, fonts matched by name, stale theme
+  font ids replaced, the label set bound, custom-block schema adoption. They
+  land in `<id>.report.md` ("Decisions made automatically"), `.report.json`,
+  one run-CSV row each, and their own checklist section.
+- **Exact font slots.** Route B maps `@font-face` weight/style by Rise's own
+  table (editor CSS: light 300, regular 400, italic 400 italic, bold 700, black
+  900); a custom typeface has only regular/bold/italic (Add New Font form). A
+  face outside the table, a second file for one slot, a nameless typeface or one
+  without a regular face is NOT archived and is logged loudly — never squeezed.
+- **Stale theme font ids no longer ship.** A `theme.*TypefaceId` the course
+  does not display is pointed at the course's own font for that slot (a
+  decision); with no course font to use, it is flagged.
+- **Multi-language courses and labels.** The stack's default-language label set
+  is a documented gap; each stack is now flagged (`label-set`) and the
+  preflight says the Interface-language choice does not apply to it.
+- **Dry run predicts missing interface languages.** It reads the target's label
+  sets once from an existing course (`fetchTargetLabelSets`) instead of
+  assuming success.
+- **Export scrapes only displayed fonts, and retries.** A typeface id that is
+  only a theme leftover is not scraped (logged); a failed editor read tries the
+  next course that displays the same font.
+- `resolveAndRecreateTypefaces` moved to `executor-steps-typefaces.ts`
+  (lifecycle was 746 lines on main; re-exported from the original path).
 
 
 ## v0.9.16b (2026-10-27) — Review fixes on v0.9.16/16a (PR #13)

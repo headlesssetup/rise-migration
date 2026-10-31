@@ -62,7 +62,7 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   let targetShareId = '';
   // The TARGET account's label sets, read at the same handshake (GET_COURSE
   // carries `labelSets`) — the course label-set binding picks from these.
-  let targetLabelSets: Record<string, unknown>[] = [];
+  let targetLabelSets: Record<string, unknown>[] = deps.targetLabelSets ?? [];
   // Pre-created SHELL lessons observed on the create-course handshake GET_COURSE
   // (F2, capture-proven: a `onePage` shell ships WITH one empty-titled `blocks`
   // lesson the editor writes straight into; regular/aiOutline shells are
@@ -222,6 +222,11 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
   const total = steps.length;
   let stepIdx = 0;
   const pfx = (): string => `[${stepIdx}/${total}]`;
+  // Record + log an automatic choice — reported, never log-only.
+  const decide = (area: string, detail: string): void => {
+    (result.decisions ??= []).push({ area, detail });
+    log(`${pfx()} DECISION [${area}] ${detail}`);
+  };
   // A step that sends several envelopes (course images: GET_YURL ×N +
   // UPDATE_COURSE) numbers them `[87/90 ·2]` so the log never shows the same
   // `[87/90]` repeated as if the counter stalled (mig30oct dry run).
@@ -355,6 +360,7 @@ export function makeExecCtx(steps: PlanStep[], deps: ExecutorDeps) {
     unmatchedCourseRefs,
     total,
     pfx,
+    decide,
     send,
     reportOrphanShell,
     uploadOne,

@@ -103,8 +103,9 @@ export async function handleCreateBlockument(
     const gap = adopted.unbridged.length
       ? `; WARN no known migration from v${adopted.unbridged.join(', v')} — fields verbatim, the server validator decides`
       : '';
-    log(
-      `${pfx()} NOTE blockument schema _v ${String(adopted.archivedV)} (archived) → ${String(targetV)} (target createFromBlank) adopted${mig}${gap}`,
+    ctx.decide(
+      'Custom block',
+      `Custom-block document schema v${String(adopted.archivedV)} (archive) adopted as v${String(targetV)} (target)${mig}${gap}`,
     );
   }
 

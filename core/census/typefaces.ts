@@ -162,6 +162,21 @@ export function mergeForeignTypefaces(
 // course-fonts.ts) and rebuilds the typeface record from them. The NAME comes
 // from the course document's own `course.typefaces` {id: name} map.
 
+/** The typeface ids a saved course actually DISPLAYS: its top-level
+ *  heading/body/ui slots (theme copies only when the course has none). A
+ *  theme-only id beside them is a stale leftover — never worth a scrape. */
+export function displayedTypefaceIdsOf(courseDoc: unknown): Set<string> {
+  const root = isObj(courseDoc) ? (isObj(courseDoc.payload) ? courseDoc.payload : courseDoc) : null;
+  const course = root && isObj(root.course) ? root.course : null;
+  if (!course) return new Set();
+  const pick = (src: Record<string, unknown>): string[] =>
+    ['headingTypefaceId', 'bodyTypefaceId', 'uiTypefaceId']
+      .map((k) => src[k])
+      .filter((v): v is string => typeof v === 'string' && v !== '');
+  const top = pick(course);
+  return new Set(top.length ? top : pick(isObj(course.theme) ? course.theme : {}));
+}
+
 /** `course.typefaces` of a saved course doc (`{course}` or ducks-wrapped). */
 export function courseTypefaceNameMap(courseDoc: unknown): Map<string, string> {
   const root = isObj(courseDoc) ? (isObj(courseDoc.payload) ? courseDoc.payload : courseDoc) : null;
@@ -172,25 +187,49 @@ export function courseTypefaceNameMap(courseDoc: unknown): Map<string, string> {
   return out;
 }
 
-/** CSS weight/style → the typeface font `style` slot Rise uses (regular, bold,
- *  italic — the three captured slots). Other faces are not representable. */
-function slotOf(weight: string, style: string): string | null {
-  const italic = /italic|oblique/i.test(style);
-  const w = parseInt(weight, 10) || 400;
-  if (!italic && w < 600) return 'regular';
-  if (!italic) return 'bold';
-  if (w < 600) return 'italic';
-  return null;
+/** Rise's own slot ↔ @font-face table, read off the editor CSS (mig30oct
+ *  2026-10-30 paste: built-ins emit light 300, regular 400, italic 400 italic,
+ *  bold 700, black 900 — e.g. Raleway's five). Exact, never inferred: a face
+ *  outside the table is rejected and reported, not squeezed into a slot. */
+const SLOT_BY_FACE: Record<string, string> = {
+  '300|normal': 'light',
+  '400|normal': 'regular',
+  '400|italic': 'italic',
+  '700|normal': 'bold',
+  '900|normal': 'black',
+};
+/** Custom (uploaded) typefaces have only these — the Add New Font form offers
+ *  Regular (required), Bold, Italic. Light/black are built-in-only. */
+const CUSTOM_SLOTS = new Set(['regular', 'bold', 'italic']);
+
+function faceKey(weight: string, style: string): string {
+  const w = weight.trim().toLowerCase();
+  const st = style.trim().toLowerCase();
+  return `${w === 'normal' ? '400' : w === 'bold' ? '700' : w}|${st || 'normal'}`;
+}
+
+/** A scraped face that could not be archived, with the reason — the caller
+ *  reports every one (never a silent drop). */
+export interface RejectedFontFace {
+  typefaceId: string;
+  name?: string;
+  weight: string;
+  style: string;
+  url: string;
+  reason: string;
 }
 
 /** Rebuild typeface records from scraped @font-face rows. Only files under the
  *  account font store (`rise/fonts/…` on articulateusercontent) count — Rise's
- *  built-ins live on the CDN and are never recreated. */
+ *  built-ins live on the CDN and are never recreated (not rejections). Each
+ *  account-font face maps to its slot by Rise's exact table; anything else is
+ *  returned in `rejected`. */
 export function typefacesFromFontFaces(
   faces: { typefaceId: string; weight: string; style: string; url: string }[],
   names: Map<string, string>,
-): Record<string, unknown>[] {
+): { typefaces: Record<string, unknown>[]; rejected: RejectedFontFace[] } {
   const byId = new Map<string, { key: string; style: string; original: string }[]>();
+  const rejected: RejectedFontFace[] = [];
   for (const f of faces) {
     let key: string;
     try {
@@ -201,18 +240,54 @@ export function typefacesFromFontFaces(
       continue;
     }
     if (!key.startsWith('rise/fonts/')) continue;
-    const slot = slotOf(f.weight, f.style);
-    if (!slot) continue;
+    const reject = (reason: string): void => {
+      rejected.push({ ...f, name: names.get(f.typefaceId), reason });
+    };
+    const slot = SLOT_BY_FACE[faceKey(f.weight, f.style)];
+    if (!slot) {
+      reject(`weight ${f.weight} / style ${f.style} is not one of Rise's typeface slots`);
+      continue;
+    }
+    if (!CUSTOM_SLOTS.has(slot)) {
+      reject(`"${slot}" is a built-in-only slot — a custom typeface has only regular, bold, italic`);
+      continue;
+    }
     const list = byId.get(f.typefaceId) ?? [];
-    if (list.some((x) => x.style === slot)) continue;
+    const same = list.find((x) => x.style === slot);
+    if (same) {
+      if (same.key !== key) reject(`second file for the "${slot}" slot (kept ${same.key})`);
+      continue;
+    }
     list.push({ key, style: slot, original: (key.split('/').pop() ?? '').replace(/^[A-Za-z0-9_-]{16}-/, '') });
     byId.set(f.typefaceId, list);
   }
-  const out: Record<string, unknown>[] = [];
+  const typefaces: Record<string, unknown>[] = [];
   for (const [id, fonts] of byId) {
     const name = names.get(id);
-    if (!name) continue; // no name → cannot be matched or recreated sensibly
-    out.push({ id, name, default: false, deleted: false, recoveredFrom: 'font-face', fonts });
+    if (!name) {
+      for (const font of fonts) {
+        rejected.push({
+          typefaceId: id,
+          weight: '',
+          style: font.style,
+          url: font.key,
+          reason: 'the course document gives this typeface no name — it cannot be matched or recreated',
+        });
+      }
+      continue;
+    }
+    if (!fonts.some((x) => x.style === 'regular')) {
+      rejected.push({
+        typefaceId: id,
+        name,
+        weight: '400',
+        style: 'normal',
+        url: '',
+        reason: 'no regular face found — Rise requires one, so the typeface is not archived',
+      });
+      continue;
+    }
+    typefaces.push({ id, name, default: false, deleted: false, recoveredFrom: 'font-face', fonts });
   }
-  return out;
+  return { typefaces, rejected };
 }

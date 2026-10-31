@@ -42,7 +42,7 @@ function course(labelSetId: string, defaultLabelLanguage?: string): PlanInput {
   };
 }
 
-async function run(input: PlanInput, targetSets: unknown[] = TARGET_SETS) {
+async function run(input: PlanInput, targetSets: unknown[] = TARGET_SETS, dryRun = false) {
   const sent: { url: string; payload: Record<string, unknown> }[] = [];
   const { relay } = mockRelay({
     ...happyHandlers,
@@ -60,6 +60,9 @@ async function run(input: PlanInput, targetSets: unknown[] = TARGET_SETS) {
     ids: new IdMap(counterMint()),
     mintId: counterMint(),
     labelSetCache: new Map(),
+    dryRun,
+    // A dry run has no handshake: the orchestrator pre-reads the target sets.
+    targetLabelSets: dryRun ? (targetSets as Record<string, unknown>[]) : undefined,
   });
   const bind = sent.find((s) => s.url.endsWith('/UPDATE_COURSE') && 'labelSetId' in s.payload);
   return { res, sent, bind: bind?.payload };
@@ -84,6 +87,14 @@ describe('executePlan — set-course-labelset', () => {
     const { res, bind } = await run(course('', 'de'));
     expect(res.ok).toBe(true);
     expect(bind).toEqual({ id: 'NEWCOURSE', labelSetId: 'TGT-DE' });
+    expect(res.decisions).toEqual([
+      expect.objectContaining({ area: 'Interface language', detail: expect.stringContaining('names no label set') }),
+    ]);
+  });
+
+  it('dry run predicts a missing target language from the pre-read sets', async () => {
+    const { res } = await run(course('', 'de'), [{ id: 'TGT-EN', iso639Code: 'en', defaultSet: true }], true);
+    expect(res.flags.some((f) => f.kind === 'label-set')).toBe(true);
   });
 
   it('binds the target built-in matching a named built-in source set', async () => {

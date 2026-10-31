@@ -30,7 +30,7 @@ describe('buildManualActionsMarkdown', () => {
     expect(md).toContain('## Required');
     expect(md).toContain('### Missing font (1) — in Theme → Fonts');
     expect(md).toContain('[Freigabe](https://rise.eu.articulate.com/authoring/T1)');
-    expect(md).toContain('[Hauptlichtsignale](https://rise.eu.articulate.com/authoring/T2/export)');
+    expect(md).toContain('[Hauptlichtsignale](https://rise.eu.articulate.com/authoring/T2)');
     expect(md.indexOf('## Required')).toBeLessThan(md.indexOf('## Verify'));
     expect(md).not.toContain('Clean');
   });
@@ -55,5 +55,23 @@ describe('buildManualActionsMarkdown', () => {
     expect(md).toContain('Read-back differences');
     expect(md).toContain('status **partial**');
     expect(buildManualActionsMarkdown([{ courseId: 'S', status: 'imported', manual: [] }])).toBe('');
+  });
+
+  it('lists every automatic decision, even for a course with no manual work', () => {
+    const md = buildManualActionsMarkdown(
+      [
+        {
+          title: 'Q',
+          courseId: 'S',
+          targetCourseId: 'T',
+          status: 'imported',
+          manual: [],
+          decisions: [{ area: 'Completion quiz', detail: 'bound completion to the only quiz "Test"' }],
+        },
+      ],
+      { plane: 'us' },
+    );
+    expect(md).toContain('## Decisions made automatically (1)');
+    expect(md).toContain('[Q](https://rise.articulate.com/authoring/T) — **Completion quiz**: bound completion');
   });
 });

@@ -95,7 +95,7 @@ describe('typefacesFromFontFaces (route B, mig30oct)', () => {
     const base = 'https://articulateusercontent.com/rise/fonts/auth0|58f743c48964673c677fbd1f';
     const id = 'G4P8w5vW5at04tJ9Wbuq6LES';
     const names = courseTypefaceNameMap({ payload: { course: { typefaces: { [id]: 'DB Head' } } } });
-    const out = typefacesFromFontFaces(
+    const { typefaces: out, rejected } = typefacesFromFontFaces(
       [
         { typefaceId: id, weight: '400', style: 'normal', url: `${base}/IChrnCrqvmRo3MiC-DBHead-Regular.woff` },
         { typefaceId: id, weight: '700', style: 'normal', url: `${base}/dcllq1SsivIr9l9C-DBHead-Black.woff` },
@@ -111,6 +111,41 @@ describe('typefacesFromFontFaces (route B, mig30oct)', () => {
     const fonts = out[0]!.fonts as { key: string; style: string; original: string }[];
     expect(fonts.map((f) => f.style)).toEqual(['regular', 'bold', 'italic']);
     expect(fonts[0]!.key).toBe('rise/fonts/auth0|58f743c48964673c677fbd1f/IChrnCrqvmRo3MiC-DBHead-Regular.woff');
+    // DB Head's uploader put the Black file in the Bold slot — Rise emits it
+    // at 700, so it IS the bold slot, faithfully.
     expect(fonts[1]!.original).toBe('DBHead-Black.woff');
+    expect(rejected.map((r) => r.typefaceId)).toEqual(['NONAME']);
+  });
+
+  it('rejects (reports) faces outside the exact slot table, never squeezes them', async () => {
+    const { typefacesFromFontFaces } = await import('./typefaces');
+    const base = 'https://articulateusercontent.com/rise/fonts/auth0|x';
+    const { typefaces, rejected } = typefacesFromFontFaces(
+      [
+        { typefaceId: 'T', weight: '400', style: 'normal', url: `${base}/aaaaaaaaaaaaaaaa-R.woff` },
+        { typefaceId: 'T', weight: '600', style: 'normal', url: `${base}/aaaaaaaaaaaaaaaa-Semi.woff` },
+        { typefaceId: 'T', weight: '900', style: 'normal', url: `${base}/aaaaaaaaaaaaaaaa-Black.woff` },
+        { typefaceId: 'T', weight: '400', style: 'normal', url: `${base}/aaaaaaaaaaaaaaaa-R2.woff` },
+        { typefaceId: 'U', weight: '700', style: 'normal', url: `${base}/aaaaaaaaaaaaaaaa-B.woff` },
+      ],
+      new Map([['T', 'Brand'], ['U', 'NoRegular']]),
+    );
+    expect(typefaces.map((t) => t.name)).toEqual(['Brand']);
+    expect((typefaces[0]!.fonts as { style: string }[]).map((f) => f.style)).toEqual(['regular']);
+    expect(rejected.map((r) => r.reason)).toEqual([
+      expect.stringContaining('not one of'),
+      expect.stringContaining('built-in-only'),
+      expect.stringContaining('second file'),
+      expect.stringContaining('no regular face'),
+    ]);
+  });
+});
+
+describe('displayedTypefaceIdsOf', () => {
+  it('prefers the top-level slots; theme leftovers are not displayed', async () => {
+    const { displayedTypefaceIdsOf } = await import('./typefaces');
+    const doc = { course: { headingTypefaceId: 'A', bodyTypefaceId: 'B', theme: { headingTypefaceId: 'STALE' } } };
+    expect([...displayedTypefaceIdsOf(doc)]).toEqual(['A', 'B']);
+    expect([...displayedTypefaceIdsOf({ course: { theme: { bodyTypefaceId: 'T' } } })]).toEqual(['T']);
   });
 });

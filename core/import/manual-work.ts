@@ -10,6 +10,7 @@
 //
 // Pure + deterministic — no network, no ids minted. Tested in manual-work.test.ts.
 
+import type { ImportDecision } from './executor-types';
 import type { Block, GetCourseDocument, Lesson } from '@/shared/types/rise';
 import { isLocalizedStack, materializeLocale } from '@/core/l10n';
 import { orderLessons } from './plan';
@@ -315,6 +316,8 @@ export function buildCourseReportMarkdown(args: {
    *  fallback; media lands in the source's exact state, text cannot). */
   aiTextCells?: string[];
   manual: ManualWorkItem[];
+  /** Automatic choices made during the import — always listed. */
+  decisions?: ImportDecision[];
 }): string {
   const { report: r, parity, l10nParity, l10nPending, l10nPendingSet, aiTextCells, manual } = args;
   const status = fidelityStatus(r);
@@ -350,6 +353,15 @@ export function buildCourseReportMarkdown(args: {
         ? '- no executor flags; the course is not confirmed faithful — resolve the parity divergences below'
         : '- none — nothing left to do',
     );
+  }
+
+  const decisions = args.decisions ?? [];
+  lines.push('');
+  lines.push(`## Decisions made automatically (${decisions.length})`);
+  if (decisions.length) {
+    for (const d of decisions) lines.push(`- **${d.area}** — ${d.detail}`);
+  } else {
+    lines.push('- none');
   }
 
   if (parity && !parity.ok && parity.issues.length) {
@@ -417,6 +429,7 @@ export function buildCourseReportJson(args: {
   l10nPendingSet?: PendingSetReport;
   aiTextCells?: string[];
   manual: ManualWorkItem[];
+  decisions?: ImportDecision[];
   idMap: Record<string, string>;
 }): string {
   return JSON.stringify(
@@ -429,6 +442,7 @@ export function buildCourseReportJson(args: {
       l10nPendingSet: args.l10nPendingSet ?? null,
       aiTextCells: args.aiTextCells ?? null,
       manualWork: args.manual,
+      decisions: args.decisions ?? [],
       idMap: args.idMap,
     },
     null,
@@ -445,6 +459,8 @@ export interface RunCsvCourse {
   targetCourseId?: string;
   status: string;
   manual: ManualWorkItem[];
+  /** Automatic choices made during the import — one CSV row each. */
+  decisions?: ImportDecision[];
   /** Blocking GET_COURSE read-back differences, written as first-class CSV
    *  rows even when the executor emitted no manual flag. */
   parity?: ParityReport;
@@ -483,7 +499,8 @@ export function buildRunCsv(courses: RunCsvCourse[]): string {
     const name = c.title ?? c.courseId;
     const tgt = c.targetCourseId ?? '';
     const parityIssues = c.parity?.issues ?? [];
-    if (c.manual.length === 0 && parityIssues.length === 0) {
+    const decisions = c.decisions ?? [];
+    if (c.manual.length === 0 && parityIssues.length === 0 && decisions.length === 0) {
       const g = statusGuidance(c.status);
       rows.push([name, c.status, tgt, '', g.issue, g.action, c.courseId]);
       continue;
@@ -504,6 +521,9 @@ export function buildRunCsv(courses: RunCsvCourse[]): string {
           : 'Source and target differ; inspect the per-course report.',
         c.courseId,
       ]);
+    }
+    for (const d of decisions) {
+      rows.push([name, c.status, tgt, d.area, 'Decision made automatically', `${d.detail} (check; change it if wrong)`, c.courseId]);
     }
   }
   return rows.map((r) => r.map(csvCell).join(',')).join('\n');

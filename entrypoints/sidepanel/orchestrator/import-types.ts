@@ -10,6 +10,7 @@ import {
   READ_BACK_POLICY_VERSION,
   type ExecResult,
   type FidelityReport,
+  type ImportDecision,
   type ManualWorkItem,
   type ParityReport,
 } from '@/core/import';
@@ -81,6 +82,7 @@ export interface PriorCourseReport {
   report: FidelityReport;
   parity?: ParityReport;
   manual: ManualWorkItem[];
+  decisions: ImportDecision[];
   idMap?: Record<string, string>;
   /** Whether this report proves completion under the current parity contract. */
   currentReadBackPolicy: boolean;
@@ -95,6 +97,7 @@ export function parsePriorReport(raw: string | null | undefined): PriorCourseRep
       readBackPolicyVersion?: number;
       parity?: ParityReport | null;
       manualWork?: ManualWorkItem[];
+      decisions?: ImportDecision[];
       idMap?: Record<string, string>;
     };
     const currentReadBackPolicy = p.readBackPolicyVersion === READ_BACK_POLICY_VERSION;
@@ -102,6 +105,7 @@ export function parsePriorReport(raw: string | null | undefined): PriorCourseRep
       report: p,
       parity: p.parity ?? undefined,
       manual: p.manualWork ?? [],
+      decisions: p.decisions ?? [],
       idMap: p.idMap,
       currentReadBackPolicy,
       completed:

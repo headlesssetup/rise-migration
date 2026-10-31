@@ -301,3 +301,21 @@ describe('buildRunCsv', () => {
     expect(rows[4]).toBe('C3,not-started,,,Not started,Re-run to import,C3');
   });
 });
+
+describe('buildRunCsv — decisions', () => {
+  it('writes one row per automatic decision', () => {
+    const csv = buildRunCsv([
+      {
+        title: 'C',
+        courseId: 'S',
+        targetCourseId: 'T',
+        status: 'imported',
+        manual: [],
+        decisions: [{ area: 'Fonts', detail: 'used the target font "DB Head"' }],
+      },
+    ]);
+    expect(csv.split('\n')).toHaveLength(2);
+    expect(csv).toContain('Decision made automatically');
+    expect(csv).toContain('used the target font ""DB Head""');
+  });
+});

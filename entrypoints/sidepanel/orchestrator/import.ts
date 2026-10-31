@@ -143,6 +143,7 @@ export async function runImport(
     sourceTypefaces,
     readFontBytes,
     targetTypefaces,
+    targetLabelSets,
     boundBanks,
     folderIdMap,
     typefaceSeed,
@@ -226,6 +227,7 @@ export async function runImport(
         targetCourseId: prior.report.newCourseId,
         status: 'imported',
         manual: prior.manual,
+        decisions: prior.decisions,
         parity: prior.parity,
       });
       continue;
@@ -392,6 +394,7 @@ export async function runImport(
       readAsset,
       sourceTypefaces,
       targetTypefaces,
+      targetLabelSets,
       typefaceIdMap: typefaceSeed.size > 0 ? typefaceSeed : undefined,
       rehostForeignTypefaces: opts.rehostForeignTypefaces === true,
       readFontBytes,
@@ -493,10 +496,30 @@ export async function runImport(
     //   .report.json — machine-readable (report + parity + manual work + id map)
     // (Replaces the old 4-file layout: report.md/json + joblog.json + parity.md.)
     const blockIndex = buildBlockIndex(course);
+    // A stack's DEFAULT-language label set (= course.labelSetId) is a
+    // documented gap (only non-default languages' custom sets migrate) — say
+    // so per course instead of letting the Interface-language choice no-op.
+    if (courseIsStack) {
+      res.flags.push({
+        kind: 'label-set',
+        detail:
+          "Multi-language course: the default language's interface labels (label set) are not migrated, " +
+          'and the run-wide Interface language choice does not apply here — check Settings → Labels for the default language',
+      });
+    }
     const manual = resolveManualWork(res.flags, blockIndex);
     await storage.writeImportArtifact(
       `${courseId}.report.md`,
-      buildCourseReportMarkdown({ report, parity, l10nParity, l10nPending, l10nPendingSet, aiTextCells, manual }),
+      buildCourseReportMarkdown({
+        report,
+        parity,
+        l10nParity,
+        l10nPending,
+        l10nPendingSet,
+        aiTextCells,
+        manual,
+        decisions: res.decisions,
+      }),
     );
     await storage.writeImportArtifact(
       `${courseId}.report.json`,
@@ -508,6 +531,7 @@ export async function runImport(
         l10nPendingSet,
         aiTextCells,
         manual,
+        decisions: res.decisions,
         idMap: res.idMap,
       }),
     );
@@ -552,6 +576,7 @@ export async function runImport(
       targetCourseId: res.newCourseId,
       status,
       manual,
+      decisions: res.decisions,
       parity,
     });
 

@@ -27,15 +27,17 @@ const WHERE: Partial<Record<ManualFlag['kind'], string>> = {
   'locale-selector': 'Settings → Languages',
 };
 
-function editorUrl(plane: 'us' | 'eu' | null | undefined, targetCourseId?: string, page = ''): string | null {
+// Only the bare editor route is capture-confirmed (shared/rise-editor.ts) —
+// never link a guessed sub-route; the group heading says where to go.
+function editorUrl(plane: 'us' | 'eu' | null | undefined, targetCourseId?: string): string | null {
   if (!targetCourseId || !plane) return null;
   const host = plane === 'eu' ? 'rise.eu.articulate.com' : 'rise.articulate.com';
-  return `https://${host}/authoring/${encodeURIComponent(targetCourseId)}${page}`;
+  return `https://${host}/authoring/${encodeURIComponent(targetCourseId)}`;
 }
 
-function courseLink(c: RunCsvCourse, plane: 'us' | 'eu' | null | undefined, kind?: ManualFlag['kind']): string {
+function courseLink(c: RunCsvCourse, plane: 'us' | 'eu' | null | undefined): string {
   const name = c.title ?? c.courseId;
-  const url = editorUrl(plane, c.targetCourseId, kind === 'export-settings' ? '/export' : '');
+  const url = editorUrl(plane, c.targetCourseId);
   return url ? `[${name}](${url})` : `${name}${c.targetCourseId ? ` (\`${c.targetCourseId}\`)` : ''}`;
 }
 
@@ -46,6 +48,7 @@ export function buildManualActionsMarkdown(
   opts: { plane?: 'us' | 'eu' | null; dryRun?: boolean; generatedAt?: string } = {},
 ): string {
   const groups = new Map<string, { tier: Tier; where?: string; lines: string[] }>();
+  const decisionLines: string[] = [];
   const add = (key: string, tier: Tier, line: string, where?: string): void => {
     const g = groups.get(key) ?? { tier, where, lines: [] };
     g.lines.push(line);
@@ -64,7 +67,7 @@ export function buildManualActionsMarkdown(
       const sig = `${m.itemType}|${what}`;
       if (seen.has(sig)) continue;
       seen.add(sig);
-      add(m.itemType, tier, `- [ ] ${courseLink(c, opts.plane, m.kind)} — ${what}`, WHERE[m.kind]);
+      add(m.itemType, tier, `- [ ] ${courseLink(c, opts.plane)} — ${what}`, WHERE[m.kind]);
     }
     for (const issue of c.parity?.issues ?? []) {
       add(
@@ -72,6 +75,9 @@ export function buildManualActionsMarkdown(
         'required',
         `- [ ] ${courseLink(c, opts.plane)} — \`${issue.path}\`${issue.detail ? `: ${issue.detail}` : ''}`,
       );
+    }
+    for (const d of c.decisions ?? []) {
+      decisionLines.push(`- [ ] ${courseLink(c, opts.plane)} — **${d.area}**: ${d.detail}`);
     }
     if (c.status === 'failed' || c.status === 'partial' || c.status === 'stopped') {
       add(
@@ -82,7 +88,7 @@ export function buildManualActionsMarkdown(
     }
   }
 
-  if (groups.size === 0) return '';
+  if (groups.size === 0 && decisionLines.length === 0) return '';
   const order = (t: Tier): number => (t === 'required' ? 0 : 1);
   const sorted = [...groups.entries()].sort(
     (a, b) => order(a[1].tier) - order(b[1].tier) || b[1].lines.length - a[1].lines.length,
@@ -100,6 +106,16 @@ export function buildManualActionsMarkdown(
       out.push('', tier === 'required' ? '## Required' : '## Verify (look, fix only if wrong)');
     }
     out.push('', `### ${title} (${g.lines.length})${g.where ? ` — in ${g.where}` : ''}`, '', ...g.lines);
+  }
+  if (decisionLines.length) {
+    out.push(
+      '',
+      `## Decisions made automatically (${decisionLines.length})`,
+      '',
+      'Choices the importer made on your behalf. Check each; change it in the course if it is wrong.',
+      '',
+      ...decisionLines,
+    );
   }
   return out.join('\n') + '\n';
 }

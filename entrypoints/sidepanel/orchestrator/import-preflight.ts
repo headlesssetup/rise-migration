@@ -11,6 +11,7 @@ import type { Storage } from '@/core/storage/storage';
 import { isKnownLegacyStorylineMeta } from '@/core/storyline/compatibility';
 import { findStorylineBlocks } from '@/core/storyline/detect';
 import { findBankRef } from '@/core/import';
+import { isLocalizedStack } from '@/core/l10n';
 import type { Block } from '@/shared/types/rise';
 import { readBankIdMap } from './import-shared';
 import { readCourseFolders, readStorylineAttach } from './import-run-inputs';
@@ -102,6 +103,7 @@ export async function checkImportPreconditions(
   const bankShort: string[] = [];
   const unboundBanks = new Set<string>();
   const noLabelSet: string[] = [];
+  const stackLabels: string[] = [];
 
   for (const [i, id] of courseIds.entries()) {
     onEvent({ kind: 'import-status', label: `Preflight [${i + 1}/${n}]`, etaSeconds: null, done: false });
@@ -120,7 +122,11 @@ export async function checkImportPreconditions(
     const labelSetId = (doc.course as Record<string, unknown> | undefined)?.labelSetId;
     // Only an EXPORTED course carries the key ("" = none named); a Creator
     // build asserts nothing there.
-    if (!opts.defaultLabelLanguage && labelSetId === '') {
+    // A stack's default-language label set is not migrated at all (documented
+    // gap) — the Interface-language choice does not reach it; say so instead.
+    if (isLocalizedStack(doc)) {
+      stackLabels.push(title);
+    } else if (!opts.defaultLabelLanguage && labelSetId === '') {
       noLabelSet.push(title);
     }
 
@@ -202,6 +208,16 @@ export async function checkImportPreconditions(
         `${noLabelSet.length} selected course(s) name no label set — learners will see the TARGET ` +
         `account's default interface language (quiz "Incorrect"/"TAKE AGAIN", navigation), which ` +
         `may differ from the source. Pick an "Interface language" to bind one: ${few(noLabelSet)}.`,
+    });
+  }
+
+  if (stackLabels.length) {
+    warnings.push({
+      kind: 'labels',
+      message:
+        `${stackLabels.length} selected multi-language course(s): the default language's interface labels ` +
+        `are NOT migrated and the Interface language choice does not apply to them — each is flagged ` +
+        `for a manual check in Settings → Labels: ${few(stackLabels)}.`,
     });
   }
 

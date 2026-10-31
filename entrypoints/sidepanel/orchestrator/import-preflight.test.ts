@@ -169,4 +169,16 @@ describe('checkImportPreconditions', () => {
       await checkImportPreconditions(s, ['c1'], { recreateFolders: false, defaultLabelLanguage: 'de' }),
     ).toEqual([]);
   });
+
+  it('tells the operator the interface language does not reach multi-language courses', async () => {
+    const stack = JSON.stringify({
+      course: { id: 'c2', title: 'Multi', labelSetId: '', defaultLocaleId: 'loc1', lessons: [] },
+      lessons: [],
+    });
+    const s = storage({ courses: { c2: stack } });
+    const w = await checkImportPreconditions(s, ['c2'], { recreateFolders: false, defaultLabelLanguage: 'de' });
+    expect(w.map((x) => x.kind)).toEqual(['labels']);
+    expect(w[0]!.message).toContain('does not apply');
+    expect(w[0]!.message).toContain('"Multi"');
+  });
 });

@@ -43,6 +43,9 @@ export interface ExecutorDeps {
    *  We can't FETCH_TYPEFACES on the brand-new course (404 until it settles),
    *  so this must be pre-fetched against an existing target course. */
   targetTypefaces?: Map<string, Typeface>;
+  /** TARGET account label sets read once at run start from an existing course
+   *  (dry run only — a live run reads them off the new course's handshake). */
+  targetLabelSets?: Record<string, unknown>[];
   /** source typeface id → target typeface id, pre-resolved by the account-settings
    *  step (A): all fonts already matched-by-name + custom ones recreated. When a
    *  course's typeface id is seeded here, set-theme reuses it (no per-course font
@@ -140,9 +143,21 @@ export function summarizeFlags(flags: ManualFlag[]): string {
     .join(', ');
 }
 
+/** An automatic choice the importer made on the operator's behalf (rebinding a
+ *  stale quiz id, matching a font by name, replacing a stale theme font id,
+ *  setting the interface language…). Never log-only: every one reaches the
+ *  course report, the run CSV and the manual-actions checklist. */
+export interface ImportDecision {
+  /** Short area label, e.g. "Fonts", "Completion quiz", "Interface language". */
+  area: string;
+  detail: string;
+}
+
 export interface ExecResult {
   ok: boolean;
   dryRun: boolean;
+  /** Automatic choices made during this course (see ImportDecision). */
+  decisions?: ImportDecision[];
   /** Every envelope that was (or would be) sent, in order — the dry-run plan. */
   envelopes: { step: PlanStep['kind']; label: string }[];
   flags: ManualFlag[];

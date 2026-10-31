@@ -18,6 +18,7 @@ import type { Storage } from '@/core/storage/storage';
 import { etaStatus, unwrap, type ProgressEvent } from './shared';
 import {
   fetchTargetTypefaces,
+  fetchTargetLabelSets,
   makeFontReader,
   makePinnedRelay,
   pinnedRpc,
@@ -115,6 +116,10 @@ export async function prepareImportRun(
   // FETCH_TYPEFACES 404s on a just-created course id, so we can't ask the
   // brand-new course; we match fonts by name + dedup recreation against this.
   const targetTypefaces = await fetchTargetTypefaces(onEvent, pin);
+  // A dry run creates no course, so it cannot read the target's label sets off
+  // the create handshake — read them once from an existing course instead, so
+  // the predicted manual work matches what the live run will do.
+  const targetLabelSets = opts.dryRun ? await fetchTargetLabelSets(onEvent, pin, pacing) : undefined;
 
   // Cross-step state from the account-settings (A) + banks (B) operations, if
   // they were run first: the typeface id map and the imported-bank map for
@@ -292,6 +297,7 @@ export async function prepareImportRun(
     sourceTypefaces,
     readFontBytes,
     targetTypefaces,
+    targetLabelSets,
     accountMap,
     boundBanks,
     folderIdMap,

@@ -134,6 +134,10 @@ describe('executePlan — set-export-settings', () => {
     expect(res.ok).toBe(true);
     expect(payload!.exportSettings.quizId).toBe(res.idMap['QUIZLESSON']);
     expect(res.flags.filter((f) => f.kind === 'export-settings')).toHaveLength(0);
+    // Reported, never log-only.
+    expect(res.decisions).toEqual([
+      expect.objectContaining({ area: 'Completion quiz', detail: expect.stringContaining('STALE_DUPLICATED_FROM') }),
+    ]);
   });
 
   it('drops + flags a stale quizId when several quizzes exist and completion rides the quiz', async () => {
@@ -151,6 +155,7 @@ describe('executePlan — set-export-settings', () => {
     expect(res.ok).toBe(true);
     expect(payload!.exportSettings.quizId).toBeNull();
     expect(res.flags.filter((f) => f.kind === 'export-settings')).toHaveLength(0);
+    expect(res.decisions?.[0]?.detail).toContain('cleared it');
   });
 });
 
